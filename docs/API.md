@@ -16,8 +16,8 @@
 ## config - 配置管理
 
 配置文件位置:
-- macOS: `~/.config/tanmi-dock/config.json`
-- Windows: `%APPDATA%\tanmi-dock\config.json`
+- macOS/Linux: `~/.tanmi-dock/config.json`
+- Windows: `%USERPROFILE%\.tanmi-dock\config.json`
 
 ### `load(): Promise<DockConfig | null>`
 
@@ -200,7 +200,7 @@ const backupPath = await linker.replaceWithLink('/project/lib', '/store/lib/abc1
 
 ## registry - 注册表管理
 
-注册表文件位置: `~/.config/tanmi-dock/registry.json`
+注册表文件位置: `~/.tanmi-dock/registry.json`
 
 ### `getRegistry(): RegistryManager`
 

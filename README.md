@@ -189,8 +189,8 @@ tanmi-dock migrate <newPath> [options]
 ### 全局配置
 
 配置文件位置:
-- macOS: `~/.config/tanmi-dock/config.json`
-- Windows: `%APPDATA%\tanmi-dock\config.json`
+- macOS/Linux: `~/.tanmi-dock/config.json`
+- Windows: `%USERPROFILE%\.tanmi-dock\config.json`
 
 配置项:
 - `storePath`: Store 存储路径
