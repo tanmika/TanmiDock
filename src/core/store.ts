@@ -5,6 +5,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import * as config from './config.js';
+import { withFileLock } from '../utils/lock.js';
 
 /**
  * 获取库在 Store 中的路径
@@ -54,6 +55,7 @@ export async function getPath(libName: string, commit: string): Promise<string |
 
 /**
  * 将本地库目录移入 Store (absorb)
+ * 使用原子重命名 + 错误处理，避免 TOCTOU 竞态条件
  * @param sourcePath 源目录路径
  * @param libName 库名
  * @param commit commit hash
@@ -67,24 +69,24 @@ export async function absorb(sourcePath: string, libName: string, commit: string
   const parentDir = path.dirname(targetPath);
   await fs.mkdir(parentDir, { recursive: true });
 
-  // 检查目标是否已存在
+  // 直接尝试重命名，让文件系统保证原子性
+  // 如果目标已存在，rename 会失败并返回 ENOTEMPTY 或 EEXIST
   try {
-    await fs.access(targetPath);
-    throw new Error(`库已存在于 Store 中: ${libName}@${commit.slice(0, 7)}`);
+    await fs.rename(sourcePath, targetPath);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw err;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOTEMPTY' || code === 'EEXIST') {
+      throw new Error(`库已存在于 Store 中: ${libName}@${commit.slice(0, 7)}`);
     }
+    throw err;
   }
-
-  // 移动目录
-  await fs.rename(sourcePath, targetPath);
 
   return targetPath;
 }
 
 /**
  * 复制库到 Store（不删除源目录）
+ * 使用文件锁保护检查-创建操作，避免 TOCTOU 竞态条件
  */
 export async function copy(sourcePath: string, libName: string, commit: string): Promise<string> {
   const storePath = await getStorePath();
@@ -94,18 +96,22 @@ export async function copy(sourcePath: string, libName: string, commit: string):
   const parentDir = path.dirname(targetPath);
   await fs.mkdir(parentDir, { recursive: true });
 
-  // 检查目标是否已存在
-  try {
-    await fs.access(targetPath);
-    throw new Error(`库已存在于 Store 中: ${libName}@${commit.slice(0, 7)}`);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw err;
+  // 使用文件锁保护检查和复制操作
+  // 锁定父目录，防止并发复制同一库
+  await withFileLock(parentDir, async () => {
+    // 检查目标是否已存在（在锁内检查，安全）
+    try {
+      await fs.access(targetPath);
+      throw new Error(`库已存在于 Store 中: ${libName}@${commit.slice(0, 7)}`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
     }
-  }
 
-  // 递归复制目录
-  await copyDir(sourcePath, targetPath);
+    // 递归复制目录（在锁内执行，安全）
+    await copyDir(sourcePath, targetPath);
+  });
 
   return targetPath;
 }

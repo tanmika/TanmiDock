@@ -20,6 +20,11 @@ vi.mock('../../src/core/config.js', () => ({
   getStorePath: vi.fn(),
 }))
 
+// Mock lock utility - execute function immediately without actual locking
+vi.mock('../../src/utils/lock.js', () => ({
+  withFileLock: vi.fn(async (_path: string, fn: () => Promise<unknown>) => fn()),
+}))
+
 describe('store', () => {
   let fsMock: {
     access: ReturnType<typeof vi.fn>
@@ -124,24 +129,49 @@ describe('store', () => {
     it('should move directory to store', async () => {
       configMock.getStorePath.mockResolvedValue('/store')
       fsMock.mkdir.mockResolvedValue(undefined)
-      fsMock.access.mockRejectedValue({ code: 'ENOENT' })
       fsMock.rename.mockResolvedValue(undefined)
 
       const { absorb } = await import('../../src/core/store.js')
       const result = await absorb('/source/lib', 'mylib', 'abc123')
 
       expect(result).toBe(path.join('/store', 'mylib', 'abc123'))
-      expect(fsMock.rename).toHaveBeenCalled()
+      expect(fsMock.rename).toHaveBeenCalledWith('/source/lib', path.join('/store', 'mylib', 'abc123'))
     })
 
-    it('should throw when library already exists', async () => {
+    it('should throw when library already exists (ENOTEMPTY)', async () => {
       configMock.getStorePath.mockResolvedValue('/store')
       fsMock.mkdir.mockResolvedValue(undefined)
-      fsMock.access.mockResolvedValue(undefined)
+      const err = new Error('ENOTEMPTY') as NodeJS.ErrnoException
+      err.code = 'ENOTEMPTY'
+      fsMock.rename.mockRejectedValue(err)
 
       const { absorb } = await import('../../src/core/store.js')
 
       await expect(absorb('/source/lib', 'mylib', 'abc123')).rejects.toThrow('库已存在于 Store 中')
+    })
+
+    it('should throw when library already exists (EEXIST)', async () => {
+      configMock.getStorePath.mockResolvedValue('/store')
+      fsMock.mkdir.mockResolvedValue(undefined)
+      const err = new Error('EEXIST') as NodeJS.ErrnoException
+      err.code = 'EEXIST'
+      fsMock.rename.mockRejectedValue(err)
+
+      const { absorb } = await import('../../src/core/store.js')
+
+      await expect(absorb('/source/lib', 'mylib', 'abc123')).rejects.toThrow('库已存在于 Store 中')
+    })
+
+    it('should rethrow other errors', async () => {
+      configMock.getStorePath.mockResolvedValue('/store')
+      fsMock.mkdir.mockResolvedValue(undefined)
+      const err = new Error('Permission denied') as NodeJS.ErrnoException
+      err.code = 'EPERM'
+      fsMock.rename.mockRejectedValue(err)
+
+      const { absorb } = await import('../../src/core/store.js')
+
+      await expect(absorb('/source/lib', 'mylib', 'abc123')).rejects.toThrow('Permission denied')
     })
   })
 
