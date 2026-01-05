@@ -116,7 +116,10 @@ export function isValidCleanStrategy(value: string): value is CleanStrategy {
 /**
  * 解析配置值
  */
-export function parseConfigValue(key: keyof DockConfig, value: string): DockConfig[keyof DockConfig] {
+export function parseConfigValue(
+  key: keyof DockConfig,
+  value: string
+): DockConfig[keyof DockConfig] {
   switch (key) {
     case 'autoDownload':
     case 'initialized':

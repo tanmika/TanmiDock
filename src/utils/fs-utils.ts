@@ -16,7 +16,11 @@ export interface CopyDirOptions {
  * @param dest 目标目录
  * @param options 复制选项
  */
-export async function copyDir(src: string, dest: string, options: CopyDirOptions = {}): Promise<void> {
+export async function copyDir(
+  src: string,
+  dest: string,
+  options: CopyDirOptions = {}
+): Promise<void> {
   const { preserveSymlinks = false } = options;
 
   await fs.mkdir(dest, { recursive: true });

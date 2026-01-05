@@ -159,7 +159,9 @@ export async function getTotalSize(): Promise<number> {
 /**
  * 列出 Store 中所有库
  */
-export async function listLibraries(): Promise<Array<{ libName: string; commit: string; path: string }>> {
+export async function listLibraries(): Promise<
+  Array<{ libName: string; commit: string; path: string }>
+> {
   const storePath = await getStorePath();
   const libraries: Array<{ libName: string; commit: string; path: string }> = [];
 

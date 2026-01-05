@@ -148,9 +148,7 @@ export function table(rows: string[][], padding = 2): void {
 
   // 输出
   for (const row of rows) {
-    const line = row
-      .map((cell, i) => cell.padEnd(colWidths[i] + padding))
-      .join('');
+    const line = row.map((cell, i) => cell.padEnd(colWidths[i] + padding)).join('');
     console.log(line);
   }
 }

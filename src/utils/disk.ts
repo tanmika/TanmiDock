@@ -8,7 +8,7 @@ import { promisify } from 'util';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { isWindows, isMacOS } from '../core/platform.js';
+import { isWindows } from '../core/platform.js';
 import type { DiskInfo } from '../types/index.js';
 
 const execAsync = promisify(exec);
@@ -159,7 +159,9 @@ async function getDiskUsage(targetPath: string): Promise<{ total: number; free: 
 /**
  * macOS: 使用 df 命令获取磁盘使用情况
  */
-async function getMacDiskUsage(targetPath: string): Promise<{ total: number; free: number } | null> {
+async function getMacDiskUsage(
+  targetPath: string
+): Promise<{ total: number; free: number } | null> {
   try {
     const { stdout } = await execAsync(`df -k "${targetPath}"`, { encoding: 'utf8' });
     const lines = stdout.trim().split('\n');
@@ -184,7 +186,9 @@ async function getMacDiskUsage(targetPath: string): Promise<{ total: number; fre
 /**
  * Windows: 获取磁盘使用情况
  */
-async function getWindowsDiskUsage(targetPath: string): Promise<{ total: number; free: number } | null> {
+async function getWindowsDiskUsage(
+  targetPath: string
+): Promise<{ total: number; free: number } | null> {
   try {
     // 提取盘符
     const drive = targetPath.match(/^([A-Za-z]:)/)?.[1];
@@ -268,10 +272,13 @@ export async function getFreeSpace(targetPath: string): Promise<number> {
 /**
  * 获取默认 Store 路径建议
  */
-export async function getDefaultStorePaths(): Promise<Array<{ path: string; label: string; free: number; recommended: boolean }>> {
+export async function getDefaultStorePaths(): Promise<
+  Array<{ path: string; label: string; free: number; recommended: boolean }>
+> {
   const disks = await getDiskInfo();
   const home = os.homedir();
-  const suggestions: Array<{ path: string; label: string; free: number; recommended: boolean }> = [];
+  const suggestions: Array<{ path: string; label: string; free: number; recommended: boolean }> =
+    [];
 
   // 默认路径: ~/.tanmi-dock/store
   const defaultPath = path.join(home, '.tanmi-dock', 'store');

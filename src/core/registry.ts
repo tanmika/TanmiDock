@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { getRegistryPath } from './platform.js';
 import { ensureConfigDir } from './config.js';
 import { withFileLock } from '../utils/lock.js';
-import type { Registry, ProjectInfo, LibraryInfo, DependencyRef } from '../types/index.js';
+import type { Registry, ProjectInfo, LibraryInfo } from '../types/index.js';
 import { EMPTY_REGISTRY } from '../types/index.js';
 
 /**
@@ -181,7 +181,7 @@ class RegistryManager {
    */
   getUnreferencedLibraries(): LibraryInfo[] {
     this.ensureLoaded();
-    return this.listLibraries().filter(lib => lib.referencedBy.length === 0);
+    return this.listLibraries().filter((lib) => lib.referencedBy.length === 0);
   }
 
   // ========== 引用关系管理 ==========
@@ -204,7 +204,7 @@ class RegistryManager {
     this.ensureLoaded();
     const lib = this.registry.libraries[libKey];
     if (lib) {
-      lib.referencedBy = lib.referencedBy.filter(h => h !== projectHash);
+      lib.referencedBy = lib.referencedBy.filter((h) => h !== projectHash);
     }
   }
 

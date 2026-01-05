@@ -11,8 +11,7 @@ import { info, error, success, title, blank } from '../utils/logger.js';
  * 创建 config 命令
  */
 export function createConfigCommand(): Command {
-  const cmd = new Command('config')
-    .description('查看或修改配置');
+  const cmd = new Command('config').description('查看或修改配置');
 
   // 默认显示所有配置
   cmd.action(async () => {
@@ -113,10 +112,7 @@ async function setConfigValue(key: string, value: string): Promise<void> {
       key as keyof import('../types/index.js').DockConfig,
       value
     );
-    await config.set(
-      key as keyof import('../types/index.js').DockConfig,
-      parsedValue as never
-    );
+    await config.set(key as keyof import('../types/index.js').DockConfig, parsedValue as never);
     success(`配置已更新: ${key} = ${value}`);
   } catch (err) {
     error((err as Error).message);

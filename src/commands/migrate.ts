@@ -12,7 +12,16 @@ import { expandHome, shrinkHome } from '../core/platform.js';
 import { formatSize, getFreeSpace } from '../utils/disk.js';
 import { copyDirWithProgress } from '../utils/fs-utils.js';
 import * as store from '../core/store.js';
-import { info, success, warn, error, hint, title, blank, separator, progressBar } from '../utils/logger.js';
+import {
+  info,
+  success,
+  warn,
+  error,
+  title,
+  blank,
+  separator,
+  progressBar,
+} from '../utils/logger.js';
 
 /**
  * 创建 migrate 命令

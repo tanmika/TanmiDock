@@ -44,7 +44,7 @@ export async function parseCodepacDep(configPath: string): Promise<CodepacDep> {
 
   try {
     content = await fs.readFile(configPath, 'utf-8');
-  } catch (err) {
+  } catch (_err) {
     throw new Error(`无法读取配置文件: ${configPath}`);
   }
 
@@ -96,7 +96,9 @@ function validateCodepacDep(config: unknown, configPath: string): asserts config
     const required = ['url', 'commit', 'branch', 'dir'];
     for (const field of required) {
       if (typeof repo[field] !== 'string') {
-        throw new Error(`配置文件格式错误: repos.common[${i}].${field} 必须是字符串 (${configPath})`);
+        throw new Error(
+          `配置文件格式错误: repos.common[${i}].${field} 必须是字符串 (${configPath})`
+        );
       }
     }
   }

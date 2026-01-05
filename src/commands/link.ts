@@ -131,146 +131,157 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
   await tx.begin();
 
   try {
-  for (const item of classified) {
-    const { dependency, status, localPath } = item;
-    const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
-    const storeLibPath = store.getLibraryPath(storePath, dependency.libName, dependency.commit);
+    for (const item of classified) {
+      const { dependency, status, localPath } = item;
+      const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+      const storeLibPath = store.getLibraryPath(storePath, dependency.libName, dependency.commit);
 
-    switch (status) {
-      case DependencyStatus.LINKED:
-        // 已链接，跳过
-        break;
+      switch (status) {
+        case DependencyStatus.LINKED:
+          // 已链接，跳过
+          break;
 
-      case DependencyStatus.RELINK:
-        // 重建链接
-        tx.recordOp('unlink', localPath);
-        await linker.unlink(localPath);
-        tx.recordOp('link', localPath, storeLibPath);
-        await linker.link(storeLibPath, localPath);
-        success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接`);
-        break;
-
-      case DependencyStatus.REPLACE:
-        // 删除目录，创建链接
-        const replaceSize = await getDirSize(localPath);
-        tx.recordOp('replace', localPath, storeLibPath);
-        await linker.replaceWithLink(localPath, storeLibPath);
-        savedBytes += replaceSize;
-        success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接`);
-        break;
-
-      case DependencyStatus.ABSORB:
-        // 移入 Store
-        const absorbSize = await getDirSize(localPath);
-        tx.recordOp('absorb', localPath, storeLibPath);
-        await store.absorb(localPath, dependency.libName, dependency.commit);
-        tx.recordOp('link', localPath, storeLibPath);
-        await linker.link(storeLibPath, localPath);
-        // 添加库到注册表
-        registry.addLibrary({
-          libName: dependency.libName,
-          commit: dependency.commit,
-          branch: dependency.branch,
-          url: dependency.url,
-          platforms: await store.getPlatforms(dependency.libName, dependency.commit),
-          size: absorbSize,
-          referencedBy: [],
-          createdAt: new Date().toISOString(),
-          lastAccess: new Date().toISOString(),
-        });
-        hint(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 本地已有，移入 Store`);
-        break;
-
-      case DependencyStatus.MISSING:
-        // 需要下载
-        if (!options.download) {
-          warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 缺失 (跳过下载)`);
-          continue;
-        }
-
-        if (!options.yes) {
-          // TODO: 交互式确认
-          warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 缺失，需要下载`);
-          continue;
-        }
-
-        try {
-          info(`下载 ${dependency.libName}...`);
-          tx.recordOp('download', storeLibPath);
-          await codepac.installSingle({
-            url: dependency.url,
-            commit: dependency.commit,
-            branch: dependency.branch,
-            targetDir: storeLibPath,
-            sparse: dependency.sparse,
-          });
+        case DependencyStatus.RELINK:
+          // 重建链接
+          tx.recordOp('unlink', localPath);
+          await linker.unlink(localPath);
           tx.recordOp('link', localPath, storeLibPath);
           await linker.link(storeLibPath, localPath);
-          const downloadSize = await store.getSize(dependency.libName, dependency.commit);
+          success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接`);
+          break;
+
+        case DependencyStatus.REPLACE: {
+          // 删除目录，创建链接
+          const replaceSize = await getDirSize(localPath);
+          tx.recordOp('replace', localPath, storeLibPath);
+          await linker.replaceWithLink(localPath, storeLibPath);
+          savedBytes += replaceSize;
+          success(
+            `${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接`
+          );
+          break;
+        }
+
+        case DependencyStatus.ABSORB: {
+          // 移入 Store
+          const absorbSize = await getDirSize(localPath);
+          tx.recordOp('absorb', localPath, storeLibPath);
+          await store.absorb(localPath, dependency.libName, dependency.commit);
+          tx.recordOp('link', localPath, storeLibPath);
+          await linker.link(storeLibPath, localPath);
+          // 添加库到注册表
           registry.addLibrary({
             libName: dependency.libName,
             commit: dependency.commit,
             branch: dependency.branch,
             url: dependency.url,
             platforms: await store.getPlatforms(dependency.libName, dependency.commit),
-            size: downloadSize,
+            size: absorbSize,
             referencedBy: [],
             createdAt: new Date().toISOString(),
             lastAccess: new Date().toISOString(),
           });
-          success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 下载完成，创建链接`);
-        } catch (err) {
-          error(`${dependency.libName} 下载失败: ${(err as Error).message}`);
+          hint(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 本地已有，移入 Store`);
+          break;
         }
-        break;
 
-      case DependencyStatus.LINK_NEW:
-        // Store 有，项目没有，创建链接
-        tx.recordOp('link', localPath, storeLibPath);
-        await linker.link(storeLibPath, localPath);
-        success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 创建链接`);
-        break;
+        case DependencyStatus.MISSING:
+          // 需要下载
+          if (!options.download) {
+            warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 缺失 (跳过下载)`);
+            continue;
+          }
+
+          if (!options.yes) {
+            // TODO: 交互式确认
+            warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 缺失，需要下载`);
+            continue;
+          }
+
+          try {
+            info(`下载 ${dependency.libName}...`);
+            tx.recordOp('download', storeLibPath);
+            await codepac.installSingle({
+              url: dependency.url,
+              commit: dependency.commit,
+              branch: dependency.branch,
+              targetDir: storeLibPath,
+              sparse: dependency.sparse,
+            });
+            tx.recordOp('link', localPath, storeLibPath);
+            await linker.link(storeLibPath, localPath);
+            const downloadSize = await store.getSize(dependency.libName, dependency.commit);
+            registry.addLibrary({
+              libName: dependency.libName,
+              commit: dependency.commit,
+              branch: dependency.branch,
+              url: dependency.url,
+              platforms: await store.getPlatforms(dependency.libName, dependency.commit),
+              size: downloadSize,
+              referencedBy: [],
+              createdAt: new Date().toISOString(),
+              lastAccess: new Date().toISOString(),
+            });
+            success(
+              `${dependency.libName} (${dependency.commit.slice(0, 7)}) - 下载完成，创建链接`
+            );
+          } catch (err) {
+            error(`${dependency.libName} 下载失败: ${(err as Error).message}`);
+          }
+          break;
+
+        case DependencyStatus.LINK_NEW:
+          // Store 有，项目没有，创建链接
+          tx.recordOp('link', localPath, storeLibPath);
+          await linker.link(storeLibPath, localPath);
+          success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 创建链接`);
+          break;
+      }
+      // 保存事务进度
+      await tx.save();
+
+      // 添加引用关系
+      if (status !== DependencyStatus.MISSING || options.download) {
+        registry.addReference(libKey, projectHash);
+      }
     }
-    // 保存事务进度
-    await tx.save();
 
-    // 添加引用关系
-    if (status !== DependencyStatus.MISSING || options.download) {
-      registry.addReference(libKey, projectHash);
+    // 更新项目信息
+    const relConfigPath = getRelativeConfigPath(absolutePath, configPath);
+    registry.addProject({
+      path: absolutePath,
+      configPath: relConfigPath,
+      lastLinked: new Date().toISOString(),
+      platform,
+      dependencies: classified
+        .filter((c) => c.status !== DependencyStatus.MISSING || options.download)
+        .map((c) => ({
+          libName: c.dependency.libName,
+          commit: c.dependency.commit,
+          linkedPath: path.relative(absolutePath, c.localPath),
+        })),
+    });
+
+    await registry.save();
+
+    // 事务提交成功
+    await tx.commit();
+
+    // 显示统计
+    blank();
+    separator();
+    const totalLinked =
+      stats.relink +
+      stats.replace +
+      stats.absorb +
+      stats.linkNew +
+      (options.download ? stats.missing : 0);
+    info(`完成: 链接 ${totalLinked} 个库`);
+    if (savedBytes > 0) {
+      info(`本次节省: ${formatSize(savedBytes)}`);
     }
-  }
-
-  // 更新项目信息
-  const relConfigPath = getRelativeConfigPath(absolutePath, configPath);
-  registry.addProject({
-    path: absolutePath,
-    configPath: relConfigPath,
-    lastLinked: new Date().toISOString(),
-    platform,
-    dependencies: classified
-      .filter((c) => c.status !== DependencyStatus.MISSING || options.download)
-      .map((c) => ({
-        libName: c.dependency.libName,
-        commit: c.dependency.commit,
-        linkedPath: path.relative(absolutePath, c.localPath),
-      })),
-  });
-
-  await registry.save();
-
-  // 事务提交成功
-  await tx.commit();
-
-  // 显示统计
-  blank();
-  separator();
-  const totalLinked = stats.relink + stats.replace + stats.absorb + stats.linkNew + (options.download ? stats.missing : 0);
-  info(`完成: 链接 ${totalLinked} 个库`);
-  if (savedBytes > 0) {
-    info(`本次节省: ${formatSize(savedBytes)}`);
-  }
-  const totalSize = await store.getTotalSize();
-  info(`Store 总计: ${formatSize(totalSize)}`);
+    const totalSize = await store.getTotalSize();
+    info(`Store 总计: ${formatSize(totalSize)}`);
   } catch (err) {
     // 链接过程出错，回滚事务
     error(`链接失败: ${(err as Error).message}`);
@@ -348,10 +359,7 @@ async function classifyDependencies(
 /**
  * 显示 dry-run 信息
  */
-function showDryRunInfo(
-  classified: ClassifiedDependency[],
-  stats: Record<string, number>
-): void {
+function showDryRunInfo(classified: ClassifiedDependency[], stats: Record<string, number>): void {
   info('[dry-run] 以下操作将被执行:');
   blank();
 
@@ -383,15 +391,19 @@ function showDryRunInfo(
 
   blank();
   separator();
-  info(`统计: 跳过 ${stats.linked}, 重建 ${stats.relink}, 替换 ${stats.replace}, 吸收 ${stats.absorb}, 缺失 ${stats.missing}, 新建 ${stats.linkNew}`);
+  info(
+    `统计: 跳过 ${stats.linked}, 重建 ${stats.relink}, 替换 ${stats.replace}, 吸收 ${stats.absorb}, 缺失 ${stats.missing}, 新建 ${stats.linkNew}`
+  );
   hint('移除 --dry-run 选项以执行实际操作');
 }
 
 /**
  * 获取状态键
  */
-function getStatusKey(status: DependencyStatus): keyof typeof defaultStats {
-  const map: Record<DependencyStatus, keyof typeof defaultStats> = {
+type StatsKey = 'linked' | 'relink' | 'replace' | 'absorb' | 'missing' | 'linkNew';
+
+function getStatusKey(status: DependencyStatus): StatsKey {
+  const map: Record<DependencyStatus, StatsKey> = {
     [DependencyStatus.LINKED]: 'linked',
     [DependencyStatus.RELINK]: 'relink',
     [DependencyStatus.REPLACE]: 'replace',
@@ -401,14 +413,5 @@ function getStatusKey(status: DependencyStatus): keyof typeof defaultStats {
   };
   return map[status];
 }
-
-const defaultStats = {
-  linked: 0,
-  relink: 0,
-  replace: 0,
-  absorb: 0,
-  missing: 0,
-  linkNew: 0,
-};
 
 export default createLinkCommand;
