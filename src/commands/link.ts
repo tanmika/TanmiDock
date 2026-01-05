@@ -11,6 +11,7 @@ import * as store from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { getPlatform, resolvePath } from '../core/platform.js';
+import { Transaction } from '../core/transaction.js';
 import { formatSize } from '../utils/disk.js';
 import { success, warn, error, info, hint, blank, separator } from '../utils/logger.js';
 import { DependencyStatus } from '../types/index.js';
@@ -102,6 +103,20 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
     return;
   }
 
+  // 检查是否有未完成的事务需要恢复
+  const pendingTx = await Transaction.findPending();
+  if (pendingTx) {
+    warn(`发现未完成的事务 (${pendingTx.id.slice(0, 8)})`);
+    info('正在尝试回滚...');
+    try {
+      await pendingTx.rollback();
+      success('事务回滚完成');
+    } catch (err) {
+      error(`回滚失败: ${(err as Error).message}`);
+      hint('请手动检查 Store 和项目目录状态');
+    }
+  }
+
   // 执行链接
   const registry = getRegistry();
   await registry.load();
@@ -110,6 +125,11 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
   const storePath = await store.getStorePath();
   const projectHash = registry.hashPath(absolutePath);
 
+  // 创建事务
+  const tx = new Transaction(`link:${absolutePath}`);
+  await tx.begin();
+
+  try {
   for (const item of classified) {
     const { dependency, status, localPath } = item;
     const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
@@ -122,7 +142,9 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
 
       case DependencyStatus.RELINK:
         // 重建链接
+        tx.recordOp('unlink', localPath);
         await linker.unlink(localPath);
+        tx.recordOp('link', localPath, storeLibPath);
         await linker.link(storeLibPath, localPath);
         success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接`);
         break;
@@ -130,6 +152,7 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
       case DependencyStatus.REPLACE:
         // 删除目录，创建链接
         const replaceSize = await getDirSize(localPath);
+        tx.recordOp('replace', localPath, storeLibPath);
         await linker.replaceWithLink(localPath, storeLibPath);
         savedBytes += replaceSize;
         success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接`);
@@ -138,7 +161,9 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
       case DependencyStatus.ABSORB:
         // 移入 Store
         const absorbSize = await getDirSize(localPath);
+        tx.recordOp('absorb', localPath, storeLibPath);
         await store.absorb(localPath, dependency.libName, dependency.commit);
+        tx.recordOp('link', localPath, storeLibPath);
         await linker.link(storeLibPath, localPath);
         // 添加库到注册表
         registry.addLibrary({
@@ -170,6 +195,7 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
 
         try {
           info(`下载 ${dependency.libName}...`);
+          tx.recordOp('download', storeLibPath);
           await codepac.installSingle({
             url: dependency.url,
             commit: dependency.commit,
@@ -177,6 +203,7 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
             targetDir: storeLibPath,
             sparse: dependency.sparse,
           });
+          tx.recordOp('link', localPath, storeLibPath);
           await linker.link(storeLibPath, localPath);
           const downloadSize = await store.getSize(dependency.libName, dependency.commit);
           registry.addLibrary({
@@ -198,10 +225,13 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
 
       case DependencyStatus.LINK_NEW:
         // Store 有，项目没有，创建链接
+        tx.recordOp('link', localPath, storeLibPath);
         await linker.link(storeLibPath, localPath);
         success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 创建链接`);
         break;
     }
+    // 保存事务进度
+    await tx.save();
 
     // 添加引用关系
     if (status !== DependencyStatus.MISSING || options.download) {
@@ -227,6 +257,9 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
 
   await registry.save();
 
+  // 事务提交成功
+  await tx.commit();
+
   // 显示统计
   blank();
   separator();
@@ -237,6 +270,19 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
   }
   const totalSize = await store.getTotalSize();
   info(`Store 总计: ${formatSize(totalSize)}`);
+  } catch (err) {
+    // 链接过程出错，回滚事务
+    error(`链接失败: ${(err as Error).message}`);
+    warn('正在回滚事务...');
+    try {
+      await tx.rollback();
+      success('事务已回滚');
+    } catch (rollbackErr) {
+      error(`回滚失败: ${(rollbackErr as Error).message}`);
+      hint('请手动检查 Store 和项目目录状态');
+    }
+    process.exit(1);
+  }
 }
 
 /**
