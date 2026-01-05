@@ -3,10 +3,11 @@
  * 配置文件位置: ~/.tanmi-dock/config.json
  */
 import fs from 'fs/promises';
+import semver from 'semver';
 import { getConfigPath, getConfigDir, expandHome } from './platform.js';
 import { withFileLock } from '../utils/lock.js';
 import type { DockConfig, CleanStrategy } from '../types/index.js';
-import { DEFAULT_CONFIG } from '../types/index.js';
+import { DEFAULT_CONFIG, CURRENT_CONFIG_VERSION, MIN_SUPPORTED_VERSION } from '../types/index.js';
 
 /**
  * 获取默认配置
@@ -28,16 +29,108 @@ export async function ensureConfigDir(): Promise<void> {
 }
 
 /**
+ * 配置版本状态
+ */
+export type ConfigVersionStatus = 'current' | 'migrate' | 'unsupported';
+
+/**
+ * 检查配置版本
+ */
+export function checkConfigVersion(config: DockConfig): ConfigVersionStatus {
+  const version = config.version || '1.0.0';
+
+  if (semver.eq(version, CURRENT_CONFIG_VERSION)) {
+    return 'current'; // 版本一致
+  }
+  if (semver.lt(version, CURRENT_CONFIG_VERSION) && semver.gte(version, MIN_SUPPORTED_VERSION)) {
+    return 'migrate'; // 需要迁移
+  }
+  if (semver.gt(version, CURRENT_CONFIG_VERSION)) {
+    return 'unsupported'; // 配置版本高于程序，需升级程序
+  }
+  return 'unsupported';
+}
+
+/**
  * 加载配置
  * 文件不存在时返回 null
+ * 版本不兼容时抛出错误
  */
 export async function load(): Promise<DockConfig | null> {
   try {
     const configPath = getConfigPath();
     const content = await fs.readFile(configPath, 'utf-8');
-    return JSON.parse(content) as DockConfig;
-  } catch {
+    const config = JSON.parse(content) as DockConfig;
+
+    const versionStatus = checkConfigVersion(config);
+    if (versionStatus === 'unsupported') {
+      throw new Error(
+        `配置版本 ${config.version} 高于程序支持版本 ${CURRENT_CONFIG_VERSION}，请升级 tanmi-dock`
+      );
+    }
+    if (versionStatus === 'migrate') {
+      return await migrateConfig(config);
+    }
+    return config;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('配置版本')) {
+      throw err; // 重新抛出版本错误
+    }
     return null;
+  }
+}
+
+/**
+ * 迁移函数类型
+ */
+type MigrationFn = (config: Record<string, unknown>) => Record<string, unknown>;
+
+/**
+ * 迁移函数映射: 从哪个版本迁移
+ */
+const migrations: Record<string, MigrationFn> = {
+  '1.0.0': (config) => {
+    // v1.0.0 → v1.1.0 的迁移逻辑
+    return {
+      ...config,
+      version: '1.1.0',
+      // 未来可在此添加新字段的默认值
+    };
+  },
+};
+
+/**
+ * 迁移配置到最新版本
+ * 逐版本迁移，出错时保留原配置
+ */
+async function migrateConfig(config: DockConfig): Promise<DockConfig> {
+  const originalVersion = config.version || '1.0.0';
+  let current = { ...config } as Record<string, unknown>;
+  let version = originalVersion;
+
+  try {
+    // 逐版本迁移
+    while (version !== CURRENT_CONFIG_VERSION) {
+      const migrateFn = migrations[version];
+      if (!migrateFn) {
+        throw new Error(`无法从版本 ${version} 迁移，缺少迁移函数`);
+      }
+
+      console.log(`[info] 迁移配置: ${version} → ...`);
+      current = migrateFn(current);
+      version = current.version as string;
+    }
+
+    // 保存迁移后的配置
+    const migrated = current as unknown as DockConfig;
+    await save(migrated);
+    console.log(`[ok] 配置已从 ${originalVersion} 迁移到 ${CURRENT_CONFIG_VERSION}`);
+
+    return migrated;
+  } catch (err) {
+    console.error(`[err] 配置迁移失败: ${(err as Error).message}`);
+    console.log('[info] 保留原配置不覆盖');
+    return config;
   }
 }
 

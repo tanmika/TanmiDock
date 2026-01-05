@@ -8,7 +8,7 @@ import { ensureInitialized } from '../core/guard.js';
 import * as config from '../core/config.js';
 import { getRegistry } from '../core/registry.js';
 import * as linker from '../core/linker.js';
-import { expandHome, shrinkHome } from '../core/platform.js';
+import { expandHome, shrinkHome, isPathSafe } from '../core/platform.js';
 import { formatSize, getFreeSpace } from '../utils/disk.js';
 import { copyDirWithProgress } from '../utils/fs-utils.js';
 import * as store from '../core/store.js';
@@ -22,6 +22,7 @@ import {
   separator,
   progressBar,
 } from '../utils/logger.js';
+import { withGlobalLock } from '../utils/global-lock.js';
 
 /**
  * 创建 migrate 命令
@@ -34,7 +35,12 @@ export function createMigrateCommand(): Command {
     .option('--keep-old', '保留旧目录（默认删除）')
     .action(async (newPath: string, options) => {
       await ensureInitialized();
-      await migrateStore(newPath, options);
+      try {
+        await withGlobalLock(() => migrateStore(newPath, options));
+      } catch (err) {
+        error((err as Error).message);
+        process.exit(1);
+      }
     });
 }
 
@@ -48,6 +54,14 @@ interface MigrateOptions {
  */
 async function migrateStore(newPath: string, options: MigrateOptions): Promise<void> {
   const absoluteNewPath = expandHome(newPath);
+
+  // 安全检查
+  const safetyResult = isPathSafe(absoluteNewPath);
+  if (!safetyResult.safe) {
+    error(`目标路径不安全: ${safetyResult.reason}`);
+    process.exit(1);
+  }
+
   const oldPath = await store.getStorePath();
 
   if (absoluteNewPath === oldPath) {

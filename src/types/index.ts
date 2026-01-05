@@ -2,6 +2,13 @@
  * TanmiDock 核心类型定义
  */
 
+// ============ 版本常量 ============
+
+/** 当前配置版本 */
+export const CURRENT_CONFIG_VERSION = '1.1.0';
+/** 最低支持版本 */
+export const MIN_SUPPORTED_VERSION = '1.0.0';
+
 // ============ 配置相关 ============
 
 /**

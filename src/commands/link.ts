@@ -12,11 +12,12 @@ import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { getPlatform, resolvePath } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
-import { formatSize } from '../utils/disk.js';
+import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize } from '../utils/fs-utils.js';
 import { success, warn, error, info, hint, blank, separator } from '../utils/logger.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency, Platform } from '../types/index.js';
+import { withGlobalLock } from '../utils/global-lock.js';
 
 /**
  * 创建 link 命令
@@ -31,7 +32,12 @@ export function createLinkCommand(): Command {
     .option('--dry-run', '只显示将要执行的操作')
     .action(async (projectPath: string, options) => {
       await ensureInitialized();
-      await linkProject(projectPath, options);
+      try {
+        await withGlobalLock(() => linkProject(projectPath, options));
+      } catch (err) {
+        error((err as Error).message);
+        process.exit(1);
+      }
     });
 }
 
@@ -102,6 +108,25 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
   if (options.dryRun) {
     showDryRunInfo(classified, stats);
     return;
+  }
+
+  // 磁盘空间预检（针对需要下载的库）
+  if (stats.missing > 0 && options.download) {
+    // 估算下载所需空间（每个库估算 500MB）
+    const estimatedSize = stats.missing * 500 * 1024 * 1024;
+    const storePath = await store.getStorePath();
+    const spaceCheck = await checkDiskSpace(storePath, estimatedSize);
+
+    if (!spaceCheck.sufficient) {
+      error(
+        `磁盘空间不足: 预计需要 ${formatSize(spaceCheck.required)}，可用 ${formatSize(spaceCheck.available)}（含 1GB 安全余量）`
+      );
+      process.exit(74); // EX_IOERR
+    }
+
+    if (spaceCheck.available === 0) {
+      warn('无法获取磁盘空间信息，继续执行');
+    }
   }
 
   // 检查是否有未完成的事务需要恢复

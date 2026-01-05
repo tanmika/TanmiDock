@@ -7,7 +7,7 @@ import { isInitialized, getInitStatus } from '../core/guard.js';
 import * as config from '../core/config.js';
 import { ensureConfigDir } from '../core/config.js';
 import { getDiskInfo, formatSize, getDefaultStorePaths } from '../utils/disk.js';
-import { expandHome, getConfigPath, shrinkHome } from '../core/platform.js';
+import { expandHome, getConfigPath, shrinkHome, isPathSafe } from '../core/platform.js';
 import { info, success, warn, error, hint, title, blank, separator } from '../utils/logger.js';
 import { EMPTY_REGISTRY } from '../types/index.js';
 import { getRegistryPath } from '../core/platform.js';
@@ -132,6 +132,13 @@ async function selectStorePath(): Promise<string> {
  * 验证存储路径
  */
 async function validateStorePath(storePath: string): Promise<void> {
+  // 安全检查
+  const safetyResult = isPathSafe(storePath);
+  if (!safetyResult.safe) {
+    error(`路径不安全: ${safetyResult.reason}`);
+    process.exit(1);
+  }
+
   try {
     const stat = await fs.stat(storePath);
 

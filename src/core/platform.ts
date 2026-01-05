@@ -97,3 +97,83 @@ export function isAbsolutePath(p: string): boolean {
 export function joinPath(...parts: string[]): string {
   return path.join(...parts);
 }
+
+// ============ 路径安全验证 ============
+
+/**
+ * 安全敏感目录（禁止作为 Store）
+ */
+const FORBIDDEN_PATHS_UNIX = ['/etc', '/usr', '/bin', '/sbin', '/var', '/tmp', '/root', '/System'];
+const FORBIDDEN_PATHS_WIN = [
+  'C:\\Windows',
+  'C:\\Program Files',
+  'C:\\Program Files (x86)',
+  'C:\\ProgramData',
+];
+
+/**
+ * 路径安全检查结果
+ */
+export interface PathSafetyResult {
+  safe: boolean;
+  reason?: string;
+}
+
+/**
+ * 检查路径是否安全
+ */
+export function isPathSafe(p: string): PathSafetyResult {
+  const resolved = path.resolve(expandHome(p));
+  const normalized = path.normalize(resolved);
+
+  // 获取当前平台的禁止路径列表
+  const forbiddenPaths = isWindows() ? FORBIDDEN_PATHS_WIN : FORBIDDEN_PATHS_UNIX;
+
+  // 检查是否包含路径遍历且指向敏感目录
+  if (p.includes('..')) {
+    for (const forbidden of forbiddenPaths) {
+      const forbiddenNorm = path.normalize(forbidden);
+      if (
+        normalized === forbiddenNorm ||
+        normalized.startsWith(forbiddenNorm + path.sep) ||
+        normalized.toLowerCase() === forbiddenNorm.toLowerCase() ||
+        normalized.toLowerCase().startsWith(forbiddenNorm.toLowerCase() + path.sep)
+      ) {
+        return { safe: false, reason: `路径遍历指向系统敏感目录: ${forbidden}` };
+      }
+    }
+  }
+
+  // 检查是否直接指向敏感目录
+  for (const forbidden of forbiddenPaths) {
+    const forbiddenNorm = path.normalize(forbidden);
+    // 大小写不敏感比较（主要针对 Windows）
+    const normalizedLower = normalized.toLowerCase();
+    const forbiddenLower = forbiddenNorm.toLowerCase();
+
+    if (
+      normalizedLower === forbiddenLower ||
+      normalizedLower.startsWith(forbiddenLower + path.sep.toLowerCase())
+    ) {
+      return { safe: false, reason: `不能使用系统目录: ${forbidden}` };
+    }
+  }
+
+  // 检查 /tmp（Unix 临时目录）
+  if (!isWindows() && (normalized === '/tmp' || normalized.startsWith('/tmp/'))) {
+    return { safe: false, reason: '不能使用系统临时目录: /tmp' };
+  }
+
+  return { safe: true };
+}
+
+/**
+ * 确保路径安全，不安全时抛出错误
+ */
+export function ensurePathSafe(p: string): string {
+  const result = isPathSafe(p);
+  if (!result.safe) {
+    throw new Error(`[安全] ${result.reason}`);
+  }
+  return path.resolve(expandHome(p));
+}

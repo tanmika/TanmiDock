@@ -6,7 +6,8 @@ import { ensureInitialized } from '../core/guard.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
 import { formatSize } from '../utils/disk.js';
-import { info, warn, success, hint, blank, separator, title } from '../utils/logger.js';
+import { info, warn, success, hint, blank, separator, title, error } from '../utils/logger.js';
+import { withGlobalLock } from '../utils/global-lock.js';
 
 /**
  * 创建 clean 命令
@@ -18,7 +19,12 @@ export function createCleanCommand(): Command {
     .option('--force', '跳过确认')
     .action(async (options) => {
       await ensureInitialized();
-      await cleanLibraries(options);
+      try {
+        await withGlobalLock(() => cleanLibraries(options));
+      } catch (err) {
+        error((err as Error).message);
+        process.exit(1);
+      }
     });
 }
 

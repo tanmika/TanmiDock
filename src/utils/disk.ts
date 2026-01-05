@@ -270,6 +270,50 @@ export async function getFreeSpace(targetPath: string): Promise<number> {
 }
 
 /**
+ * 磁盘空间检查结果
+ */
+export interface DiskSpaceCheckResult {
+  sufficient: boolean;
+  available: number;
+  required: number;
+  safetyMargin: number;
+}
+
+/**
+ * 检查磁盘空间是否充足
+ * @param targetPath 目标路径
+ * @param requiredBytes 需要的字节数
+ * @param safetyMarginGB 安全余量（GB），默认 1GB
+ */
+export async function checkDiskSpace(
+  targetPath: string,
+  requiredBytes: number,
+  safetyMarginGB = 1
+): Promise<DiskSpaceCheckResult> {
+  const safetyMargin = safetyMarginGB * 1024 * 1024 * 1024;
+  const available = await getFreeSpace(targetPath);
+
+  // 如果无法获取磁盘信息（available 为 0），放行操作
+  if (available === 0) {
+    return {
+      sufficient: true,
+      available: 0,
+      required: requiredBytes,
+      safetyMargin,
+    };
+  }
+
+  const sufficient = available > requiredBytes + safetyMargin;
+
+  return {
+    sufficient,
+    available,
+    required: requiredBytes,
+    safetyMargin,
+  };
+}
+
+/**
  * 获取默认 Store 路径建议
  */
 export async function getDefaultStorePaths(): Promise<
@@ -321,5 +365,6 @@ export default {
   parseSize,
   hasEnoughSpace,
   getFreeSpace,
+  checkDiskSpace,
   getDefaultStorePaths,
 };
