@@ -10,6 +10,7 @@ import { getRegistry } from '../core/registry.js';
 import * as linker from '../core/linker.js';
 import { expandHome, shrinkHome } from '../core/platform.js';
 import { formatSize, getFreeSpace } from '../utils/disk.js';
+import { copyDirWithProgress } from '../utils/fs-utils.js';
 import * as store from '../core/store.js';
 import { info, success, warn, error, hint, title, blank, separator, progressBar } from '../utils/logger.js';
 
@@ -94,7 +95,13 @@ async function migrateStore(newPath: string, options: MigrateOptions): Promise<v
 
   // 1. 复制文件
   info('[1/3] 复制文件...');
-  await copyDirWithProgress(oldPath, absoluteNewPath, totalSize);
+  await copyDirWithProgress(oldPath, absoluteNewPath, totalSize, (copied, total) => {
+    progressBar(copied, total);
+  });
+  // 确保进度条完成
+  if (totalSize > 0) {
+    progressBar(totalSize, totalSize);
+  }
 
   // 2. 更新符号链接
   info('[2/3] 更新符号链接...');
@@ -133,46 +140,6 @@ async function migrateStore(newPath: string, options: MigrateOptions): Promise<v
 
   blank();
   success('迁移完成');
-}
-
-/**
- * 带进度的目录复制
- */
-async function copyDirWithProgress(src: string, dest: string, totalSize: number): Promise<void> {
-  let copiedSize = 0;
-
-  async function copyRecursive(srcPath: string, destPath: string): Promise<void> {
-    await fs.mkdir(destPath, { recursive: true });
-    const entries = await fs.readdir(srcPath, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const srcEntry = path.join(srcPath, entry.name);
-      const destEntry = path.join(destPath, entry.name);
-
-      if (entry.isDirectory()) {
-        await copyRecursive(srcEntry, destEntry);
-      } else if (entry.isFile()) {
-        await fs.copyFile(srcEntry, destEntry);
-        const stat = await fs.stat(destEntry);
-        copiedSize += stat.size;
-
-        // 更新进度
-        if (totalSize > 0) {
-          progressBar(copiedSize, totalSize);
-        }
-      } else if (entry.isSymbolicLink()) {
-        const linkTarget = await fs.readlink(srcEntry);
-        await fs.symlink(linkTarget, destEntry);
-      }
-    }
-  }
-
-  await copyRecursive(src, dest);
-
-  // 确保进度条完成
-  if (totalSize > 0) {
-    progressBar(totalSize, totalSize);
-  }
 }
 
 export default createMigrateCommand;

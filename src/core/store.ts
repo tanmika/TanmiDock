@@ -6,6 +6,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import * as config from './config.js';
 import { withFileLock } from '../utils/lock.js';
+import { copyDir, getDirSize } from '../utils/fs-utils.js';
 
 /**
  * 获取库在 Store 中的路径
@@ -117,25 +118,6 @@ export async function copy(sourcePath: string, libName: string, commit: string):
 }
 
 /**
- * 递归复制目录
- */
-async function copyDir(src: string, dest: string): Promise<void> {
-  await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-
-    if (entry.isDirectory()) {
-      await copyDir(srcPath, destPath);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
-  }
-}
-
-/**
  * 从 Store 中删除库
  */
 export async function remove(libName: string, commit: string): Promise<void> {
@@ -164,32 +146,6 @@ export async function getSize(libName: string, commit: string): Promise<number> 
   const libPath = getLibraryPath(storePath, libName, commit);
 
   return getDirSize(libPath);
-}
-
-/**
- * 递归计算目录大小
- */
-async function getDirSize(dirPath: string): Promise<number> {
-  let size = 0;
-
-  try {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-
-      if (entry.isDirectory()) {
-        size += await getDirSize(fullPath);
-      } else if (entry.isFile()) {
-        const stat = await fs.stat(fullPath);
-        size += stat.size;
-      }
-    }
-  } catch {
-    // 目录不存在或无法访问
-  }
-
-  return size;
 }
 
 /**

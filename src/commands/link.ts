@@ -13,6 +13,7 @@ import * as codepac from '../core/codepac.js';
 import { getPlatform, resolvePath } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize } from '../utils/disk.js';
+import { getDirSize } from '../utils/fs-utils.js';
 import { success, warn, error, info, hint, blank, separator } from '../utils/logger.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency, Platform } from '../types/index.js';
@@ -409,27 +410,5 @@ const defaultStats = {
   missing: 0,
   linkNew: 0,
 };
-
-/**
- * 获取目录大小
- */
-async function getDirSize(dirPath: string): Promise<number> {
-  let size = 0;
-  try {
-    const entries = await fs.readdir(dirPath, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-      if (entry.isDirectory()) {
-        size += await getDirSize(fullPath);
-      } else if (entry.isFile()) {
-        const stat = await fs.stat(fullPath);
-        size += stat.size;
-      }
-    }
-  } catch {
-    // 忽略错误
-  }
-  return size;
-}
 
 export default createLinkCommand;

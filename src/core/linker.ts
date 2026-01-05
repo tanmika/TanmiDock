@@ -6,6 +6,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { isWindows } from './platform.js';
+import { copyDir } from '../utils/fs-utils.js';
 
 /**
  * 创建符号链接
@@ -167,31 +168,8 @@ export async function restoreFromLink(linkPath: string): Promise<void> {
   // 删除链接
   await unlink(linkPath);
 
-  // 复制目标内容
-  await copyDir(absoluteTarget, linkPath);
-}
-
-/**
- * 递归复制目录
- */
-async function copyDir(src: string, dest: string): Promise<void> {
-  await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-
-    if (entry.isDirectory()) {
-      await copyDir(srcPath, destPath);
-    } else if (entry.isSymbolicLink()) {
-      // 保持符号链接
-      const linkTarget = await fs.readlink(srcPath);
-      await fs.symlink(linkTarget, destPath);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
-  }
+  // 复制目标内容（保留符号链接）
+  await copyDir(absoluteTarget, linkPath, { preserveSymlinks: true });
 }
 
 /**
