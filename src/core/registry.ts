@@ -6,6 +6,7 @@ import fs from 'fs/promises';
 import crypto from 'crypto';
 import { getRegistryPath } from './platform.js';
 import { ensureConfigDir } from './config.js';
+import { withFileLock } from '../utils/lock.js';
 import type { Registry, ProjectInfo, LibraryInfo, DependencyRef } from '../types/index.js';
 import { EMPTY_REGISTRY } from '../types/index.js';
 
@@ -41,12 +42,14 @@ class RegistryManager {
   }
 
   /**
-   * 保存注册表
+   * 保存注册表（带文件锁保护）
    */
   async save(): Promise<void> {
     await ensureConfigDir();
     const registryPath = getRegistryPath();
-    await fs.writeFile(registryPath, JSON.stringify(this.registry, null, 2), 'utf-8');
+    await withFileLock(registryPath, async () => {
+      await fs.writeFile(registryPath, JSON.stringify(this.registry, null, 2), 'utf-8');
+    });
   }
 
   /**

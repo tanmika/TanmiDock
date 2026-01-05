@@ -4,6 +4,7 @@
  */
 import fs from 'fs/promises';
 import { getConfigPath, getConfigDir, expandHome } from './platform.js';
+import { withFileLock } from '../utils/lock.js';
 import type { DockConfig, CleanStrategy } from '../types/index.js';
 import { DEFAULT_CONFIG } from '../types/index.js';
 
@@ -41,12 +42,14 @@ export async function load(): Promise<DockConfig | null> {
 }
 
 /**
- * 保存配置
+ * 保存配置（带文件锁保护）
  */
 export async function save(config: DockConfig): Promise<void> {
   await ensureConfigDir();
   const configPath = getConfigPath();
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  await withFileLock(configPath, async () => {
+    await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  });
 }
 
 /**
@@ -58,15 +61,20 @@ export async function get<K extends keyof DockConfig>(key: K): Promise<DockConfi
 }
 
 /**
- * 设置单个配置项并保存
+ * 设置单个配置项并保存（带文件锁保护读-改-写操作）
  */
 export async function set<K extends keyof DockConfig>(key: K, value: DockConfig[K]): Promise<void> {
-  const config = await load();
-  if (!config) {
-    throw new Error('配置文件不存在，请先运行 tanmi-dock init');
-  }
-  config[key] = value;
-  await save(config);
+  await ensureConfigDir();
+  const configPath = getConfigPath();
+  await withFileLock(configPath, async () => {
+    const content = await fs.readFile(configPath, 'utf-8').catch(() => null);
+    if (!content) {
+      throw new Error('配置文件不存在，请先运行 tanmi-dock init');
+    }
+    const config = JSON.parse(content) as DockConfig;
+    config[key] = value;
+    await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  });
 }
 
 /**
