@@ -6,7 +6,8 @@
 
 - **集中存储**: 所有第三方库统一存储在一个 Store 目录，避免重复下载
 - **符号链接**: 通过 symlink 将 Store 中的库链接到项目目录，节省磁盘空间
-- **跨平台**: 支持 macOS 和 Windows
+- **多平台支持**: 支持 macOS/iOS/Android/Windows/Linux/WASM/OHOS 等平台，可同时选择多个平台
+- **按平台下载**: 仅下载所需平台的内容，节省带宽和存储空间
 - **智能识别**: 自动识别已有库，支持吸收本地库到 Store
 - **事务安全**: link 操作支持事务回滚，中断后可恢复
 - **文件锁**: 防止并发操作导致数据损坏
@@ -64,13 +65,19 @@ tanmi-dock init [options]
 tanmi-dock link [path] [options]
 
 参数:
-  path                 项目路径（默认当前目录）
+  path                       项目路径（默认当前目录）
 
 选项:
-  -p, --platform <platform>  指定平台 (mac/win)
-  -y, --yes                  跳过确认提示
-  --no-download              不自动下载缺失库
-  --dry-run                  只显示将要执行的操作
+  -p, --platform <platforms...>  指定平台，可多选 (mac/ios/android/win/linux/wasm/ohos)
+  -y, --yes                      跳过确认提示
+  --no-download                  不自动下载缺失库
+  --dry-run                      只显示将要执行的操作
+
+示例:
+  tanmi-dock link                    # 交互式选择平台
+  tanmi-dock link -p mac             # 仅 macOS
+  tanmi-dock link -p mac ios         # macOS + iOS
+  tanmi-dock link -p mac ios android # 多平台
 ```
 
 依赖状态处理:
@@ -158,8 +165,58 @@ tanmi-dock migrate <newPath> [options]
   newPath       新的 Store 路径
 
 选项:
-  -y, --yes     跳过确认提示
+  --force       跳过确认提示
+  --keep-old    保留旧目录（默认删除）
 ```
+
+### `doctor` - 环境诊断
+
+检测运行环境问题。
+
+```bash
+tanmi-dock doctor [options]
+
+选项:
+  --json        输出 JSON 格式
+```
+
+检测内容:
+- codepac 是否已安装
+- 配置文件是否存在
+- Store 目录是否可访问
+- 磁盘空间是否充足
+
+### `verify` - 完整性验证
+
+验证 Store 和 Registry 的完整性。
+
+```bash
+tanmi-dock verify
+```
+
+检测内容:
+- **悬挂链接**: 符号链接指向的目标不存在
+- **孤立库**: Store 中存在但 Registry 未记录的库
+- **缺失库**: Registry 记录但 Store 中不存在的库
+- **无效项目**: 已注册但路径不存在的项目
+
+### `repair` - 修复问题
+
+修复 verify 检测到的问题。
+
+```bash
+tanmi-dock repair [options]
+
+选项:
+  --dry-run     只显示将执行的操作
+  --prune       删除孤立库（默认登记到 Registry）
+  --force       跳过确认提示
+```
+
+修复操作:
+- 清理过期项目记录
+- 移除悬挂的符号链接
+- 登记或删除孤立库
 
 ## 配置文件
 
@@ -202,12 +259,17 @@ tanmi-dock migrate <newPath> [options]
 ```
 Store/
 ├── lib-name-1/
-│   ├── abc1234/    # commit hash
-│   │   └── ...     # 库内容
-│   └── def5678/
+│   └── abc1234/           # commit hash
+│       ├── macOS/         # macOS 平台内容
+│       ├── iOS/           # iOS 平台内容
+│       └── android/       # Android 平台内容
 └── lib-name-2/
-    └── 1a2b3c4/
+    └── def5678/
+        ├── macOS/
+        └── Win/
 ```
+
+> **说明**: 每个库按 `库名/commit/平台` 的结构存储，支持同一库多平台共存。
 
 ## 开发
 

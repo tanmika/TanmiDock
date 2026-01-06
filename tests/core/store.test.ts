@@ -54,11 +54,22 @@ describe('store', () => {
   });
 
   describe('getLibraryPath', () => {
-    it('should return correct path', async () => {
+    it('should return correct path with platform', async () => {
       const { getLibraryPath } = await import('../../src/core/store.js');
-      const result = getLibraryPath('/store', 'mylib', 'abc123');
+      const result = getLibraryPath('/store', 'mylib', 'abc123', 'macOS');
 
-      expect(result).toBe(path.join('/store', 'mylib', 'abc123'));
+      expect(result).toBe(path.join('/store', 'mylib', 'abc123', 'macOS'));
+    });
+
+    it('should return correct path for different platforms', async () => {
+      const { getLibraryPath } = await import('../../src/core/store.js');
+
+      expect(getLibraryPath('/store', 'mylib', 'abc123', 'iOS')).toBe(
+        path.join('/store', 'mylib', 'abc123', 'iOS')
+      );
+      expect(getLibraryPath('/store', 'mylib', 'abc123', 'android')).toBe(
+        path.join('/store', 'mylib', 'abc123', 'android')
+      );
     });
   });
 
@@ -87,9 +98,10 @@ describe('store', () => {
       fsMock.access.mockResolvedValue(undefined);
 
       const { exists } = await import('../../src/core/store.js');
-      const result = await exists('mylib', 'abc123');
+      const result = await exists('mylib', 'abc123', 'macOS');
 
       expect(result).toBe(true);
+      expect(fsMock.access).toHaveBeenCalledWith(path.join('/store', 'mylib', 'abc123', 'macOS'));
     });
 
     it('should return false when library does not exist', async () => {
@@ -97,7 +109,7 @@ describe('store', () => {
       fsMock.access.mockRejectedValue(new Error('ENOENT'));
 
       const { exists } = await import('../../src/core/store.js');
-      const result = await exists('mylib', 'abc123');
+      const result = await exists('mylib', 'abc123', 'macOS');
 
       expect(result).toBe(false);
     });
@@ -109,9 +121,9 @@ describe('store', () => {
       fsMock.access.mockResolvedValue(undefined);
 
       const { getPath } = await import('../../src/core/store.js');
-      const result = await getPath('mylib', 'abc123');
+      const result = await getPath('mylib', 'abc123', 'macOS');
 
-      expect(result).toBe(path.join('/store', 'mylib', 'abc123'));
+      expect(result).toBe(path.join('/store', 'mylib', 'abc123', 'macOS'));
     });
 
     it('should return null when library does not exist', async () => {
@@ -119,25 +131,25 @@ describe('store', () => {
       fsMock.access.mockRejectedValue(new Error('ENOENT'));
 
       const { getPath } = await import('../../src/core/store.js');
-      const result = await getPath('mylib', 'abc123');
+      const result = await getPath('mylib', 'abc123', 'macOS');
 
       expect(result).toBeNull();
     });
   });
 
   describe('absorb', () => {
-    it('should move directory to store', async () => {
+    it('should move directory to store with platform', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.rename.mockResolvedValue(undefined);
 
       const { absorb } = await import('../../src/core/store.js');
-      const result = await absorb('/source/lib', 'mylib', 'abc123');
+      const result = await absorb('/source/lib', 'mylib', 'abc123', 'macOS');
 
-      expect(result).toBe(path.join('/store', 'mylib', 'abc123'));
+      expect(result).toBe(path.join('/store', 'mylib', 'abc123', 'macOS'));
       expect(fsMock.rename).toHaveBeenCalledWith(
         '/source/lib',
-        path.join('/store', 'mylib', 'abc123')
+        path.join('/store', 'mylib', 'abc123', 'macOS')
       );
     });
 
@@ -150,7 +162,7 @@ describe('store', () => {
 
       const { absorb } = await import('../../src/core/store.js');
 
-      await expect(absorb('/source/lib', 'mylib', 'abc123')).rejects.toThrow('库已存在于 Store 中');
+      await expect(absorb('/source/lib', 'mylib', 'abc123', 'macOS')).rejects.toThrow('库已存在于 Store 中');
     });
 
     it('should throw when library already exists (EEXIST)', async () => {
@@ -162,7 +174,7 @@ describe('store', () => {
 
       const { absorb } = await import('../../src/core/store.js');
 
-      await expect(absorb('/source/lib', 'mylib', 'abc123')).rejects.toThrow('库已存在于 Store 中');
+      await expect(absorb('/source/lib', 'mylib', 'abc123', 'macOS')).rejects.toThrow('库已存在于 Store 中');
     });
 
     it('should rethrow other errors', async () => {
@@ -174,37 +186,40 @@ describe('store', () => {
 
       const { absorb } = await import('../../src/core/store.js');
 
-      await expect(absorb('/source/lib', 'mylib', 'abc123')).rejects.toThrow('Permission denied');
+      await expect(absorb('/source/lib', 'mylib', 'abc123', 'macOS')).rejects.toThrow('Permission denied');
     });
   });
 
   describe('remove', () => {
-    it('should remove library directory', async () => {
+    it('should remove library directory with platform', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.rm.mockResolvedValue(undefined);
       fsMock.readdir.mockResolvedValue([]);
       fsMock.rmdir.mockResolvedValue(undefined);
 
       const { remove } = await import('../../src/core/store.js');
-      await remove('mylib', 'abc123');
+      await remove('mylib', 'abc123', 'macOS');
 
-      expect(fsMock.rm).toHaveBeenCalled();
+      expect(fsMock.rm).toHaveBeenCalledWith(
+        path.join('/store', 'mylib', 'abc123', 'macOS'),
+        { recursive: true, force: true }
+      );
     });
 
     it('should not remove parent dir if not empty', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.rm.mockResolvedValue(undefined);
-      fsMock.readdir.mockResolvedValue(['other-commit']);
+      fsMock.readdir.mockResolvedValue(['other-platform']);
 
       const { remove } = await import('../../src/core/store.js');
-      await remove('mylib', 'abc123');
+      await remove('mylib', 'abc123', 'macOS');
 
       expect(fsMock.rmdir).not.toHaveBeenCalled();
     });
   });
 
   describe('listLibraries', () => {
-    it('should list all libraries in store', async () => {
+    it('should list all libraries in store with platform', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.readdir
         .mockResolvedValueOnce([
@@ -213,14 +228,20 @@ describe('store', () => {
           { name: 'file.txt', isDirectory: () => false },
         ])
         .mockResolvedValueOnce([{ name: 'abc123', isDirectory: () => true }])
-        .mockResolvedValueOnce([{ name: 'def456', isDirectory: () => true }]);
+        .mockResolvedValueOnce([{ name: 'macOS', isDirectory: () => true }])
+        .mockResolvedValueOnce([{ name: 'def456', isDirectory: () => true }])
+        .mockResolvedValueOnce([{ name: 'iOS', isDirectory: () => true }]);
 
       const { listLibraries } = await import('../../src/core/store.js');
       const result = await listLibraries();
 
       expect(result).toHaveLength(2);
       expect(result[0].libName).toBe('lib1');
+      expect(result[0].commit).toBe('abc123');
+      expect(result[0].platform).toBe('macOS');
       expect(result[1].libName).toBe('lib2');
+      expect(result[1].commit).toBe('def456');
+      expect(result[1].platform).toBe('iOS');
     });
 
     it('should return empty array when store is empty', async () => {
@@ -232,32 +253,78 @@ describe('store', () => {
 
       expect(result).toEqual([]);
     });
+
+    it('should list same lib:commit with different platforms', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.readdir
+        .mockResolvedValueOnce([{ name: 'lib1', isDirectory: () => true }])
+        .mockResolvedValueOnce([{ name: 'abc123', isDirectory: () => true }])
+        .mockResolvedValueOnce([
+          { name: 'macOS', isDirectory: () => true },
+          { name: 'iOS', isDirectory: () => true },
+        ]);
+
+      const { listLibraries } = await import('../../src/core/store.js');
+      const result = await listLibraries();
+
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({
+        libName: 'lib1',
+        commit: 'abc123',
+        platform: 'macOS',
+        path: path.join('/store', 'lib1', 'abc123', 'macOS'),
+      });
+      expect(result[1]).toEqual({
+        libName: 'lib1',
+        commit: 'abc123',
+        platform: 'iOS',
+        path: path.join('/store', 'lib1', 'abc123', 'iOS'),
+      });
+    });
   });
 
-  describe('getPlatforms', () => {
-    it('should list platform directories', async () => {
+  describe('validatePlatform', () => {
+    it('should return true when platform has content', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
-      fsMock.readdir.mockResolvedValue([
-        { name: 'macOS', isDirectory: () => true },
-        { name: 'android', isDirectory: () => true },
-        { name: '.git', isDirectory: () => true },
-        { name: 'README.md', isDirectory: () => false },
-      ]);
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue(['macOS', 'dependencies', 'CMakeLists.txt']);
 
-      const { getPlatforms } = await import('../../src/core/store.js');
-      const result = await getPlatforms('mylib', 'abc123');
+      const { validatePlatform } = await import('../../src/core/store.js');
+      const result = await validatePlatform('mylib', 'abc123', 'macOS');
 
-      expect(result).toEqual(['macOS', 'android']);
+      expect(result).toBe(true);
     });
 
-    it('should return empty array when library does not exist', async () => {
+    it('should return false when platform is empty', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
-      fsMock.readdir.mockRejectedValue(new Error('ENOENT'));
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue([]);
 
-      const { getPlatforms } = await import('../../src/core/store.js');
-      const result = await getPlatforms('mylib', 'abc123');
+      const { validatePlatform } = await import('../../src/core/store.js');
+      const result = await validatePlatform('mylib', 'abc123', 'macOS');
 
-      expect(result).toEqual([]);
+      expect(result).toBe(false);
+    });
+
+    it('should return false when platform only has hidden files', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue(['.git', '.DS_Store']);
+
+      const { validatePlatform } = await import('../../src/core/store.js');
+      const result = await validatePlatform('mylib', 'abc123', 'macOS');
+
+      expect(result).toBe(false);
+    });
+
+    it('should return false when platform does not exist', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+
+      const { validatePlatform } = await import('../../src/core/store.js');
+      const result = await validatePlatform('mylib', 'abc123', 'macOS');
+
+      expect(result).toBe(false);
     });
   });
 

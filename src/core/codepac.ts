@@ -45,6 +45,8 @@ export interface InstallOptions {
   configPath: string;
   /** 目标目录（3rdparty 目录） */
   targetDir: string;
+  /** 平台目录名 (macOS, iOS, android...) - 传给 codepac -p */
+  platform?: string;
   /** 进度回调 */
   onProgress?: (message: string) => void;
   /** 是否静默模式 */
@@ -55,7 +57,7 @@ export interface InstallOptions {
  * 使用 codepac 安装依赖
  */
 export async function install(options: InstallOptions): Promise<void> {
-  const { configPath, targetDir, onProgress, silent } = options;
+  const { configPath, targetDir, platform, onProgress, silent } = options;
 
   // 检查 codepac 是否安装
   if (!(await isCodepacInstalled())) {
@@ -64,6 +66,11 @@ export async function install(options: InstallOptions): Promise<void> {
 
   // 构建命令参数
   const args = ['install', '-c', configPath, '-d', targetDir];
+
+  // 添加平台参数
+  if (platform) {
+    args.push('-p', platform);
+  }
 
   return new Promise((resolve, reject) => {
     const proc = spawn(CODEPAC_CMD, args, {
@@ -115,6 +122,8 @@ export interface InstallSingleOptions {
   branch: string;
   /** 目标目录 */
   targetDir: string;
+  /** 平台目录名 (macOS, iOS, android...) - 传给 codepac -p */
+  platform?: string;
   /** sparse checkout 配置 */
   sparse?: object | string;
   /** 进度回调 */
@@ -128,7 +137,7 @@ export interface InstallSingleOptions {
  * 注意：这需要 codepac 支持单库安装，如果不支持则需要创建临时配置文件
  */
 export async function installSingle(options: InstallSingleOptions): Promise<void> {
-  const { url, commit, branch, targetDir, sparse, onProgress, silent } = options;
+  const { url, commit, branch, targetDir, platform, sparse, onProgress, silent } = options;
 
   // 检查 codepac 是否安装
   if (!(await isCodepacInstalled())) {
@@ -163,6 +172,7 @@ export async function installSingle(options: InstallSingleOptions): Promise<void
     await install({
       configPath: tempConfigPath,
       targetDir: path.dirname(targetDir),
+      platform,
       onProgress,
       silent,
     });

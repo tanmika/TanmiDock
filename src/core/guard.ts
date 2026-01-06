@@ -5,6 +5,7 @@
 import fs from 'fs/promises';
 import { getConfigPath, getConfigDir } from './platform.js';
 import { error, hint } from '../utils/logger.js';
+import { EXIT_CODES } from '../utils/exit-codes.js';
 import type { DockConfig, InitStatus } from '../types/index.js';
 
 /**
@@ -29,7 +30,7 @@ export async function ensureInitialized(): Promise<void> {
   if (!initialized) {
     error('TanmiDock 尚未初始化');
     hint('请先运行: tanmi-dock init');
-    process.exit(1);
+    process.exit(EXIT_CODES.NOT_INITIALIZED);
   }
 }
 

@@ -122,7 +122,7 @@ describe('config with fs mock', () => {
   describe('load', () => {
     it('should return config when file exists', async () => {
       const mockConfig = {
-        version: '1.0.0',
+        version: '1.1.0',
         initialized: true,
         storePath: '/test/store',
         cleanStrategy: 'unreferenced',

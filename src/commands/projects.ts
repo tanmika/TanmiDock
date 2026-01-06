@@ -67,6 +67,7 @@ async function showProjects(options: ProjectsOptions): Promise<void> {
 
     info(`  ${index}. ${displayPath}`);
     info(`     最后链接: ${formatDate(project.lastLinked)}`);
+    info(`     平台: ${project.platforms?.join(', ') || '未指定'}`);
     info(`     依赖: ${project.dependencies.length} 个`);
 
     if (!pathExists) {

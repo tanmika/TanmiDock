@@ -74,6 +74,32 @@ export function debug(message: string): void {
 }
 
 /**
+ * 详细信息 - 灰色，仅在 VERBOSE 或 DEBUG 环境变量时输出
+ */
+export function verbose(message: string): void {
+  if (process.env.VERBOSE === '1' || process.env.DEBUG === '1') {
+    console.log(`${colorize('[verbose]', 'gray')} ${message}`);
+  }
+}
+
+/**
+ * 详细 JSON 输出
+ */
+export function verboseJson(label: string, data: unknown): void {
+  if (process.env.VERBOSE === '1' || process.env.DEBUG === '1') {
+    console.log(`${colorize('[verbose]', 'gray')} ${label}:`);
+    console.log(JSON.stringify(data, null, 2));
+  }
+}
+
+/**
+ * 检查是否启用 verbose 模式
+ */
+export function isVerbose(): boolean {
+  return process.env.VERBOSE === '1' || process.env.DEBUG === '1';
+}
+
+/**
  * 提示信息 - 蓝色 [info]
  */
 export function hint(message: string): void {
@@ -180,6 +206,9 @@ export default {
   warn,
   error,
   debug,
+  verbose,
+  verboseJson,
+  isVerbose,
   hint,
   progress,
   progressBar,

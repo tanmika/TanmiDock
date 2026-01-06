@@ -5,7 +5,7 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
-import { isWindows } from './platform.js';
+import { isWindows, KNOWN_PLATFORM_VALUES } from './platform.js';
 import { copyDir } from '../utils/fs-utils.js';
 
 /**
@@ -198,6 +198,98 @@ export async function getPathStatus(
   }
 }
 
+/**
+ * 链接库到项目（自动选择单平台/多平台策略）
+ * @param localPath 本地路径 (3rdparty/libXxx)
+ * @param storePath Store 根路径
+ * @param libName 库名
+ * @param commit commit hash
+ * @param platforms 选择的平台列表
+ */
+export async function linkLibrary(
+  localPath: string,
+  storePath: string,
+  libName: string,
+  commit: string,
+  platforms: string[]
+): Promise<void> {
+  if (platforms.length === 0) {
+    throw new Error('至少需要一个平台');
+  }
+
+  if (platforms.length === 1) {
+    // 单平台：直接链接到平台目录
+    const target = path.join(storePath, libName, commit, platforms[0]);
+    await replaceWithLink(localPath, target);
+  } else {
+    // 多平台：调用组合链接（3-2 实现）
+    await linkMultiPlatform(localPath, storePath, libName, commit, platforms);
+  }
+}
+
+/**
+ * 多平台组合链接
+ * 创建真实目录，内部分别链接各平台内容和共享内容
+ * @param localPath 本地路径
+ * @param storePath Store 根路径
+ * @param libName 库名
+ * @param commit commit hash
+ * @param platforms 平台列表
+ */
+export async function linkMultiPlatform(
+  localPath: string,
+  storePath: string,
+  libName: string,
+  commit: string,
+  platforms: string[]
+): Promise<void> {
+  // 1. 删除旧链接/目录，创建真实目录
+  await fs.rm(localPath, { recursive: true, force: true });
+  await fs.mkdir(localPath, { recursive: true });
+
+  // 2. 取第一个平台作为共享内容来源
+  const primaryPlatform = platforms[0];
+  const primaryPath = path.join(storePath, libName, commit, primaryPlatform);
+
+  // 3. 遍历主平台目录内容
+  const entries = await fs.readdir(primaryPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const linkPath = path.join(localPath, entry.name);
+
+    if (KNOWN_PLATFORM_VALUES.includes(entry.name)) {
+      // 平台目录：检查是否在选择列表中
+      if (platforms.includes(entry.name)) {
+        // 链接到对应 store 平台目录下的平台子目录
+        const target = path.join(storePath, libName, commit, entry.name, entry.name);
+        await link(target, linkPath);
+      }
+    } else {
+      // 共享内容：链接到主平台
+      const target = path.join(primaryPath, entry.name);
+      await link(target, linkPath);
+    }
+  }
+
+  // 4. 链接其他平台的平台目录（如果主平台没有）
+  for (const platform of platforms.slice(1)) {
+    if (!KNOWN_PLATFORM_VALUES.includes(platform)) continue;
+
+    const linkPath = path.join(localPath, platform);
+    // 如果还没链接（主平台可能已处理）
+    if (!(await isSymlink(linkPath))) {
+      const platformPath = path.join(storePath, libName, commit, platform, platform);
+      // 检查目标是否存在
+      try {
+        await fs.access(platformPath);
+        await link(platformPath, linkPath);
+      } catch {
+        // 目标不存在，跳过
+      }
+    }
+  }
+}
+
 export default {
   link,
   isSymlink,
@@ -208,4 +300,6 @@ export default {
   replaceWithLink,
   restoreFromLink,
   getPathStatus,
+  linkLibrary,
+  linkMultiPlatform,
 };

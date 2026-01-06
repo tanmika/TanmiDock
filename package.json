@@ -1,6 +1,6 @@
 {
   "name": "tanmi-dock",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "集中型第三方库链接管理工具",
   "type": "module",
   "bin": {
@@ -27,7 +27,9 @@
   "author": "tanmika",
   "license": "MIT",
   "dependencies": {
+    "@inquirer/prompts": "^8.1.0",
     "commander": "^12.1.0",
+    "p-limit": "^7.2.0",
     "proper-lockfile": "^4.1.2",
     "semver": "^7.7.3"
   },

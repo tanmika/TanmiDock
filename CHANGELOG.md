@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-01-06
+
+### Added
+- **Multi-platform support**: Support for macOS/iOS/Android/Windows/Linux/WASM/OHOS platforms
+- **Per-platform download**: Download only required platforms, saving bandwidth and storage
+- **Interactive platform selection**: Checkbox UI for selecting multiple platforms
+- **Platform CLI options**: `-p mac ios android` for specifying multiple platforms
+- `doctor` command - Environment diagnostics
+- `verify` command - Store and registry integrity verification
+- `repair` command - Auto-fix detected issues
+- Interactive prompts using @inquirer/prompts
+- `--verbose` option for detailed output
+- `--json` option for machine-readable output
+- Standardized exit codes (BSD sysexits.h compatible)
+- Parallel download with concurrency limit (3)
+- Registry lazy loading for better performance
+
+### Changed
+- `link -p` now accepts multiple platforms (`-p mac ios` instead of `-p mac`)
+- Store structure changed to `lib/commit/platform/` for per-platform storage
+- `clean` command supports platform-aware cleanup strategies
+- Improved status display with platform information
+
+### Fixed
+- Hardcoded 'default' platform replaced with actual platform selection
+- Multi-platform linking now uses `linkLibrary()` for proper symlink handling
+
+## [0.3.0] - 2026-01-05
+
 ### Added
 - SIGINT/SIGTERM signal handling with graceful shutdown
 - Global exception handler with DEBUG mode support
@@ -52,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform support (macOS and Windows)
 - codepac integration for dependency download
 
-[Unreleased]: https://github.com/user/tanmi-dock/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/user/tanmi-dock/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/user/tanmi-dock/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/user/tanmi-dock/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/user/tanmi-dock/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/user/tanmi-dock/releases/tag/v0.1.0

@@ -133,7 +133,9 @@ async function migrateStore(newPath: string, options: MigrateOptions): Promise<v
 
     for (const dep of project.dependencies) {
       const localPath = path.join(project.path, dep.linkedPath);
-      const newStorePath = store.getLibraryPath(absoluteNewPath, dep.libName, dep.commit);
+      // 使用依赖记录的平台，或项目的第一个平台
+      const migratePlatform = dep.platform ?? project.platforms?.[0] ?? 'macOS';
+      const newStorePath = store.getLibraryPath(absoluteNewPath, dep.libName, dep.commit, migratePlatform);
 
       if (await linker.isSymlink(localPath)) {
         await linker.unlink(localPath);

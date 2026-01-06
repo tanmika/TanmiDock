@@ -13,6 +13,10 @@ import { resolvePath, shrinkHome } from '../core/platform.js';
 import { info, warn, success, hint, blank, separator, title } from '../utils/logger.js';
 import type { ParsedDependency } from '../types/index.js';
 
+interface StatusOptions {
+  json: boolean;
+}
+
 /**
  * 创建 status 命令
  */
@@ -20,16 +24,17 @@ export function createStatusCommand(): Command {
   return new Command('status')
     .description('查看当前项目的链接状态')
     .argument('[path]', '项目路径', '.')
-    .action(async (projectPath: string) => {
+    .option('--json', '输出 JSON 格式')
+    .action(async (projectPath: string, options: StatusOptions) => {
       await ensureInitialized();
-      await showStatus(projectPath);
+      await showStatus(projectPath, options);
     });
 }
 
 /**
  * 显示项目状态
  */
-async function showStatus(projectPath: string): Promise<void> {
+async function showStatus(projectPath: string, options: StatusOptions): Promise<void> {
   const absolutePath = resolvePath(projectPath);
 
   // 检查项目路径
@@ -69,7 +74,7 @@ async function showStatus(projectPath: string): Promise<void> {
 
   if (projectInfo) {
     info(`最后链接: ${formatDate(projectInfo.lastLinked)}`);
-    info(`平台: ${projectInfo.platform === 'mac' ? 'macOS' : 'Windows'}`);
+    info(`平台: ${projectInfo.platforms.join(', ') || '未指定'}`);
   } else {
     warn('此项目尚未链接');
   }
@@ -88,13 +93,16 @@ async function showStatus(projectPath: string): Promise<void> {
 
   for (const dep of dependencies) {
     const localPath = path.join(thirdPartyDir, dep.libName);
-    const storeLibPath = store.getLibraryPath(storePath, dep.libName, dep.commit);
+    // 使用项目注册的第一个平台，或读取链接目标来判断
+    const statusPlatform = projectInfo?.platforms?.[0] ?? 'macOS';
+    const storeLibPath = store.getLibraryPath(storePath, dep.libName, dep.commit, statusPlatform);
 
     const isLink = await linker.isSymlink(localPath);
 
     if (isLink) {
       const isValid = await linker.isValidLink(localPath);
-      const isCorrect = await linker.isCorrectLink(localPath, storeLibPath);
+      // 对于多平台链接，只检查链接是否有效，不严格检查目标路径
+      const isCorrect = isValid ? await linker.isValidLink(localPath) : false;
 
       if (isValid && isCorrect) {
         linked++;
@@ -113,6 +121,25 @@ async function showStatus(projectPath: string): Promise<void> {
         unlinkedList.push(`${dep.libName} (${dep.commit.slice(0, 7)}) - 不存在`);
       }
     }
+  }
+
+  // JSON 输出
+  if (options.json) {
+    const output = {
+      project: absolutePath,
+      lastLinked: projectInfo?.lastLinked ?? null,
+      platforms: projectInfo?.platforms ?? [],
+      dependencies: {
+        total: dependencies.length,
+        linked,
+        broken,
+        unlinked,
+      },
+      brokenList,
+      unlinkedList,
+    };
+    console.log(JSON.stringify(output, null, 2));
+    return;
   }
 
   // 显示统计

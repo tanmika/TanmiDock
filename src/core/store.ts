@@ -1,6 +1,6 @@
 /**
  * Store 存储操作
- * Store 目录结构: {storePath}/{libName}/{commit}/
+ * Store 目录结构: {storePath}/{libName}/{commit}/{platform}/
  */
 import fs from 'fs/promises';
 import path from 'path';
@@ -11,8 +11,8 @@ import { copyDir, getDirSize } from '../utils/fs-utils.js';
 /**
  * 获取库在 Store 中的路径
  */
-export function getLibraryPath(storePath: string, libName: string, commit: string): string {
-  return path.join(storePath, libName, commit);
+export function getLibraryPath(storePath: string, libName: string, commit: string, platform: string): string {
+  return path.join(storePath, libName, commit, platform);
 }
 
 /**
@@ -29,10 +29,10 @@ export async function getStorePath(): Promise<string> {
 /**
  * 检查库是否存在于 Store 中
  */
-export async function exists(libName: string, commit: string): Promise<boolean> {
+export async function exists(libName: string, commit: string, platform: string): Promise<boolean> {
   try {
     const storePath = await getStorePath();
-    const libPath = getLibraryPath(storePath, libName, commit);
+    const libPath = getLibraryPath(storePath, libName, commit, platform);
     await fs.access(libPath);
     return true;
   } catch {
@@ -43,9 +43,9 @@ export async function exists(libName: string, commit: string): Promise<boolean> 
 /**
  * 获取库的完整路径
  */
-export async function getPath(libName: string, commit: string): Promise<string | null> {
+export async function getPath(libName: string, commit: string, platform: string): Promise<string | null> {
   const storePath = await getStorePath();
-  const libPath = getLibraryPath(storePath, libName, commit);
+  const libPath = getLibraryPath(storePath, libName, commit, platform);
   try {
     await fs.access(libPath);
     return libPath;
@@ -60,11 +60,12 @@ export async function getPath(libName: string, commit: string): Promise<string |
  * @param sourcePath 源目录路径
  * @param libName 库名
  * @param commit commit hash
+ * @param platform 平台名
  * @returns Store 中的库路径
  */
-export async function absorb(sourcePath: string, libName: string, commit: string): Promise<string> {
+export async function absorb(sourcePath: string, libName: string, commit: string, platform: string): Promise<string> {
   const storePath = await getStorePath();
-  const targetPath = getLibraryPath(storePath, libName, commit);
+  const targetPath = getLibraryPath(storePath, libName, commit, platform);
 
   // 确保目标父目录存在
   const parentDir = path.dirname(targetPath);
@@ -77,7 +78,7 @@ export async function absorb(sourcePath: string, libName: string, commit: string
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOTEMPTY' || code === 'EEXIST') {
-      throw new Error(`库已存在于 Store 中: ${libName}@${commit.slice(0, 7)}`);
+      throw new Error(`库已存在于 Store 中: ${libName}@${commit.slice(0, 7)}/${platform}`);
     }
     throw err;
   }
@@ -89,9 +90,9 @@ export async function absorb(sourcePath: string, libName: string, commit: string
  * 复制库到 Store（不删除源目录）
  * 使用文件锁保护检查-创建操作，避免 TOCTOU 竞态条件
  */
-export async function copy(sourcePath: string, libName: string, commit: string): Promise<string> {
+export async function copy(sourcePath: string, libName: string, commit: string, platform: string): Promise<string> {
   const storePath = await getStorePath();
-  const targetPath = getLibraryPath(storePath, libName, commit);
+  const targetPath = getLibraryPath(storePath, libName, commit, platform);
 
   // 确保目标父目录存在
   const parentDir = path.dirname(targetPath);
@@ -103,7 +104,7 @@ export async function copy(sourcePath: string, libName: string, commit: string):
     // 检查目标是否已存在（在锁内检查，安全）
     try {
       await fs.access(targetPath);
-      throw new Error(`库已存在于 Store 中: ${libName}@${commit.slice(0, 7)}`);
+      throw new Error(`库已存在于 Store 中: ${libName}@${commit.slice(0, 7)}/${platform}`);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw err;
@@ -120,18 +121,24 @@ export async function copy(sourcePath: string, libName: string, commit: string):
 /**
  * 从 Store 中删除库
  */
-export async function remove(libName: string, commit: string): Promise<void> {
+export async function remove(libName: string, commit: string, platform: string): Promise<void> {
   const storePath = await getStorePath();
-  const libPath = getLibraryPath(storePath, libName, commit);
+  const libPath = getLibraryPath(storePath, libName, commit, platform);
 
   await fs.rm(libPath, { recursive: true, force: true });
 
-  // 如果库目录为空，也删除
-  const libDir = path.dirname(libPath);
+  // 如果 commit 目录为空，也删除
+  const commitDir = path.dirname(libPath);
   try {
-    const remaining = await fs.readdir(libDir);
+    const remaining = await fs.readdir(commitDir);
     if (remaining.length === 0) {
-      await fs.rmdir(libDir);
+      await fs.rmdir(commitDir);
+      // 如果 lib 目录也为空，也删除
+      const libDir = path.dirname(commitDir);
+      const libRemaining = await fs.readdir(libDir);
+      if (libRemaining.length === 0) {
+        await fs.rmdir(libDir);
+      }
     }
   } catch {
     // 目录可能已不存在
@@ -141,9 +148,9 @@ export async function remove(libName: string, commit: string): Promise<void> {
 /**
  * 获取库占用空间 (bytes)
  */
-export async function getSize(libName: string, commit: string): Promise<number> {
+export async function getSize(libName: string, commit: string, platform: string): Promise<number> {
   const storePath = await getStorePath();
-  const libPath = getLibraryPath(storePath, libName, commit);
+  const libPath = getLibraryPath(storePath, libName, commit, platform);
 
   return getDirSize(libPath);
 }
@@ -160,10 +167,10 @@ export async function getTotalSize(): Promise<number> {
  * 列出 Store 中所有库
  */
 export async function listLibraries(): Promise<
-  Array<{ libName: string; commit: string; path: string }>
+  Array<{ libName: string; commit: string; platform: string; path: string }>
 > {
   const storePath = await getStorePath();
-  const libraries: Array<{ libName: string; commit: string; path: string }> = [];
+  const libraries: Array<{ libName: string; commit: string; platform: string; path: string }> = [];
 
   try {
     const libDirs = await fs.readdir(storePath, { withFileTypes: true });
@@ -177,11 +184,19 @@ export async function listLibraries(): Promise<
       for (const commitDir of commits) {
         if (!commitDir.isDirectory()) continue;
 
-        libraries.push({
-          libName: libDir.name,
-          commit: commitDir.name,
-          path: path.join(libPath, commitDir.name),
-        });
+        const commitPath = path.join(libPath, commitDir.name);
+        const platforms = await fs.readdir(commitPath, { withFileTypes: true });
+
+        for (const platformDir of platforms) {
+          if (!platformDir.isDirectory()) continue;
+
+          libraries.push({
+            libName: libDir.name,
+            commit: commitDir.name,
+            platform: platformDir.name,
+            path: path.join(commitPath, platformDir.name),
+          });
+        }
       }
     }
   } catch {
@@ -192,27 +207,25 @@ export async function listLibraries(): Promise<
 }
 
 /**
- * 获取库的已下载平台目录列表
+ * 验证平台目录是否有有效内容
+ * @returns true 有内容，false 为空或只有隐藏文件
  */
-export async function getPlatforms(libName: string, commit: string): Promise<string[]> {
-  const storePath = await getStorePath();
-  const libPath = getLibraryPath(storePath, libName, commit);
-  const platforms: string[] = [];
+export async function validatePlatform(
+  libName: string,
+  commit: string,
+  platform: string
+): Promise<boolean> {
+  const platformPath = await getPath(libName, commit, platform);
+  if (!platformPath) return false;
 
   try {
-    const entries = await fs.readdir(libPath, { withFileTypes: true });
-
-    for (const entry of entries) {
-      // 排除 .git 和其他隐藏目录
-      if (entry.isDirectory() && !entry.name.startsWith('.')) {
-        platforms.push(entry.name);
-      }
-    }
+    const entries = await fs.readdir(platformPath);
+    // 过滤隐藏文件
+    const visible = entries.filter(e => !e.startsWith('.'));
+    return visible.length > 0;
   } catch {
-    // 目录不存在
+    return false;
   }
-
-  return platforms;
 }
 
 /**
@@ -234,6 +247,6 @@ export default {
   getSize,
   getTotalSize,
   listLibraries,
-  getPlatforms,
+  validatePlatform,
   ensureStoreDir,
 };

@@ -4,11 +4,23 @@
 
 ## 目录
 
+### 核心模块
 - [config - 配置管理](#config---配置管理)
 - [store - Store 存储操作](#store---store-存储操作)
 - [linker - 符号链接操作](#linker---符号链接操作)
 - [registry - 注册表管理](#registry---注册表管理)
 - [parser - codepac 解析器](#parser---codepac-解析器)
+- [platform - 跨平台适配](#platform---跨平台适配)
+- [transaction - 事务管理](#transaction---事务管理)
+- [guard - 初始化守卫](#guard---初始化守卫)
+
+### 工具模块
+- [disk - 磁盘工具](#disk---磁盘工具)
+- [global-lock - 全局操作锁](#global-lock---全局操作锁)
+- [fs-utils - 文件系统工具](#fs-utils---文件系统工具)
+- [exit-codes - 退出码](#exit-codes---退出码)
+
+### 类型定义
 - [类型定义](#类型定义)
 
 ---
@@ -334,13 +346,14 @@ interface ProjectInfo {
   path: string;
   configPath: string;
   lastLinked: string;
-  platform: 'mac' | 'win';
+  platforms: string[];       // 链接的平台列表，如 ['macOS', 'iOS']
   dependencies: DependencyRef[];
 }
 
 interface DependencyRef {
   libName: string;
   commit: string;
+  platform: string;          // 主平台
   linkedPath: string;
 }
 ```
@@ -396,3 +409,256 @@ enum DependencyStatus {
   LINK_NEW = 'LINK_NEW',   // Store 有，项目没有
 }
 ```
+
+---
+
+## platform - 跨平台适配
+
+### 平台选项
+
+```typescript
+interface PlatformOption {
+  key: string;      // CLI 参数 (mac, ios, android...)
+  value: string;    // Store 目录名 (macOS, iOS, android...)
+  asan?: string;    // ASAN 变体目录名
+  hwasan?: string;  // HWASAN 变体 (仅 android)
+}
+
+// 支持的平台列表
+const PLATFORM_OPTIONS: PlatformOption[] = [
+  { key: 'mac', value: 'macOS', asan: 'macOS-asan' },
+  { key: 'win', value: 'Win' },
+  { key: 'ios', value: 'iOS', asan: 'iOS-asan' },
+  { key: 'android', value: 'android', asan: 'android-asan', hwasan: 'android-hwasan' },
+  { key: 'linux', value: 'ubuntu' },
+  { key: 'wasm', value: 'wasm' },
+  { key: 'ohos', value: 'ohos' },
+];
+
+// 平台相关函数
+getPlatformOption(key: string): PlatformOption | undefined
+getPlatformOptionByValue(value: string): PlatformOption | undefined
+platformKeyToValue(key: string): string | undefined
+getAllPlatformKeys(): string[]
+```
+
+### 路径工具
+
+```typescript
+getConfigDir(): string           // 配置目录 (~/.tanmi-dock)
+getConfigPath(): string          // 配置文件路径
+getRegistryPath(): string        // 注册表文件路径
+getPlatform(): 'mac' | 'win'     // 当前系统平台
+isWindows(): boolean             // 是否 Windows
+isMacOS(): boolean               // 是否 macOS
+```
+
+### 路径处理
+
+```typescript
+expandHome(p: string): string    // ~ 展开为用户目录
+shrinkHome(p: string): string    // 用户目录收缩为 ~
+resolvePath(p: string): string   // 解析为绝对路径
+normalizePath(p: string): string // 规范化路径
+joinPath(...parts: string[]): string
+isAbsolutePath(p: string): boolean
+```
+
+### 路径安全验证
+
+```typescript
+interface PathSafetyResult {
+  safe: boolean;
+  reason?: string;
+}
+
+isPathSafe(p: string): PathSafetyResult   // 检查路径是否安全
+ensurePathSafe(p: string): string         // 不安全时抛出错误
+```
+
+禁止的路径（防止误操作系统目录）:
+- Unix: `/etc`, `/usr`, `/bin`, `/sbin`, `/var`, `/tmp`, `/root`, `/System`
+- Windows: `C:\Windows`, `C:\Program Files`, `C:\ProgramData`
+
+---
+
+## transaction - 事务管理
+
+支持 link 操作的原子性，中断后可恢复。
+
+### Transaction 类
+
+```typescript
+// 创建并开始事务
+const tx = new Transaction('link:/path/to/project');
+await tx.begin();
+
+// 记录操作（执行前）
+tx.recordOp('link', '/local/path', '/store/path');
+tx.recordOp('absorb', '/local/lib', '/store/lib');
+
+// 保存事务进度
+await tx.save();
+
+// 提交（删除日志）
+await tx.commit();
+
+// 或回滚
+const errors = await tx.rollback();
+```
+
+### 静态方法
+
+```typescript
+Transaction.start(projectPath): Promise<Transaction>  // 创建并开始
+Transaction.findPending(): Promise<Transaction | null> // 查找未完成事务
+Transaction.recover(id): Promise<Transaction | null>   // 恢复指定事务
+Transaction.getPendingTransactions(): Promise<TransactionLog[]>
+```
+
+### 操作类型
+
+```typescript
+type OperationType = 'link' | 'unlink' | 'move' | 'absorb' | 'replace' | 'download';
+```
+
+---
+
+## guard - 初始化守卫
+
+未初始化时阻止命令执行。
+
+```typescript
+isInitialized(): Promise<boolean>        // 检查是否已初始化
+ensureInitialized(): Promise<void>       // 未初始化时退出进程
+getInitStatus(): Promise<InitStatus>     // 获取详细状态
+configDirExists(): Promise<boolean>      // 配置目录是否存在
+```
+
+### InitStatus
+
+```typescript
+interface InitStatus {
+  initialized: boolean;
+  configExists: boolean;
+  storePathExists: boolean;
+  storePath?: string;
+}
+```
+
+---
+
+## disk - 磁盘工具
+
+### 磁盘信息
+
+```typescript
+getDiskInfo(): Promise<DiskInfo[]>       // 获取所有磁盘信息
+getFreeSpace(path): Promise<number>      // 获取可用空间 (bytes)
+hasEnoughSpace(path, bytes): Promise<boolean>
+```
+
+### 大小格式化
+
+```typescript
+formatSize(bytes: number): string        // 1073741824 => "1.0 GB"
+parseSize(str: string): number           // "1.0 GB" => 1073741824
+```
+
+### 空间检查
+
+```typescript
+interface DiskSpaceCheckResult {
+  sufficient: boolean;
+  available: number;
+  required: number;
+  safetyMargin: number;
+}
+
+checkDiskSpace(path, required, safetyGB?): Promise<DiskSpaceCheckResult>
+```
+
+### Store 路径建议
+
+```typescript
+getDefaultStorePaths(): Promise<Array<{
+  path: string;
+  label: string;
+  free: number;
+  recommended: boolean;
+}>>
+```
+
+---
+
+## global-lock - 全局操作锁
+
+防止多个 tanmi-dock 命令同时执行。
+
+```typescript
+acquireGlobalLock(): Promise<boolean>    // 获取锁
+releaseGlobalLock(): Promise<void>       // 释放锁
+isGlobalLocked(): Promise<boolean>       // 检查锁状态
+
+// 推荐：使用包装函数
+withGlobalLock<T>(fn: () => Promise<T>): Promise<T>
+```
+
+锁配置:
+- 位置: `~/.tanmi-dock/tanmi-dock.lock`
+- 过期时间: 60 秒（防止进程异常退出后锁不释放）
+
+---
+
+## fs-utils - 文件系统工具
+
+### 目录操作
+
+```typescript
+copyDir(src, dest, options?): Promise<void>
+copyDirWithProgress(src, dest, totalSize, onProgress?): Promise<void>
+getDirSize(dirPath): Promise<number>     // 递归计算大小
+ensureDir(dirPath): Promise<void>        // 确保目录存在
+removeDir(dirPath): Promise<void>        // 安全删除目录
+```
+
+### CopyDirOptions
+
+```typescript
+interface CopyDirOptions {
+  preserveSymlinks?: boolean;  // 是否保留符号链接（默认 false）
+}
+```
+
+---
+
+## exit-codes - 退出码
+
+兼容 BSD sysexits.h + 自定义扩展。
+
+```typescript
+import { EXIT_CODES, exit, getExitCodeFromError } from './utils/exit-codes.js';
+
+// 带消息退出
+exit(EXIT_CODES.NOINPUT, '文件不存在');
+
+// 从错误推断退出码
+const code = getExitCodeFromError(err);
+```
+
+### 退出码常量
+
+| 码 | 名称 | 说明 |
+|----|------|------|
+| 0 | SUCCESS | 成功 |
+| 1 | GENERAL_ERROR | 一般错误 |
+| 2 | MISUSE | 命令行参数错误 |
+| 10 | NOT_INITIALIZED | 未初始化 |
+| 11 | LOCK_HELD | 锁被占用 |
+| 65 | DATAERR | 数据格式错误 |
+| 66 | NOINPUT | 输入文件不存在 |
+| 74 | IOERR | IO 错误 |
+| 77 | NOPERM | 权限不足 |
+| 78 | CONFIG | 配置错误 |
+| 130 | INTERRUPTED | 被 SIGINT 中断 |
+| 143 | TERMINATED | 被 SIGTERM 终止 |

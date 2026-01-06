@@ -19,11 +19,12 @@ export interface DockConfig {
   initialized: boolean;
   storePath: string;
   cleanStrategy: CleanStrategy;
+  unusedDays: number;           // unused 策略的天数阈值
   maxStoreSize?: number;
   autoDownload: boolean;
 }
 
-export type CleanStrategy = 'unreferenced' | 'lru' | 'manual';
+export type CleanStrategy = 'unreferenced' | 'unused' | 'manual';
 
 /**
  * 默认配置
@@ -32,6 +33,7 @@ export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
   version: '1.0.0',
   initialized: false,
   cleanStrategy: 'unreferenced',
+  unusedDays: 30,
   autoDownload: true,
 };
 
@@ -43,7 +45,8 @@ export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
 export interface Registry {
   version: string;
   projects: Record<string, ProjectInfo>;
-  libraries: Record<string, LibraryInfo>;
+  libraries: Record<string, LibraryInfo>;  // 旧字段，兼容读取
+  stores: Record<string, StoreEntry>;       // 新字段，按平台存储
 }
 
 /**
@@ -53,7 +56,7 @@ export interface ProjectInfo {
   path: string;
   configPath: string;
   lastLinked: string;
-  platform: Platform;
+  platforms: string[];      // 项目使用的平台列表 (macOS, iOS, android...)
   dependencies: DependencyRef[];
 }
 
@@ -63,11 +66,13 @@ export interface ProjectInfo {
 export interface DependencyRef {
   libName: string;
   commit: string;
+  platform: string;         // 该依赖对应的平台
   linkedPath: string;
 }
 
 /**
- * 库信息
+ * 库信息 (旧版，保留兼容)
+ * @deprecated 使用 StoreEntry 替代
  */
 export interface LibraryInfo {
   libName: string;
@@ -82,12 +87,30 @@ export interface LibraryInfo {
 }
 
 /**
+ * Store 条目 (新版，按平台存储)
+ * key 格式: lib:commit:platform
+ */
+export interface StoreEntry {
+  libName: string;
+  commit: string;
+  platform: string;           // 平台目录名 (macOS, iOS, android...)
+  branch: string;
+  url: string;
+  size: number;
+  usedBy: string[];           // 项目 hash 列表
+  unlinkedAt?: number;        // 变成无引用的时间戳
+  createdAt: string;
+  lastAccess: string;
+}
+
+/**
  * 空注册表
  */
 export const EMPTY_REGISTRY: Registry = {
   version: '1.0.0',
   projects: {},
   libraries: {},
+  stores: {},
 };
 
 // ============ codepac 配置解析 ============

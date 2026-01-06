@@ -8,6 +8,9 @@ import { createCleanCommand } from './commands/clean.js';
 import { createUnlinkCommand } from './commands/unlink.js';
 import { createConfigCommand } from './commands/config.js';
 import { createMigrateCommand } from './commands/migrate.js';
+import { createDoctorCommand } from './commands/doctor.js';
+import { createVerifyCommand } from './commands/verify.js';
+import { createRepairCommand } from './commands/repair.js';
 import { Transaction } from './core/transaction.js';
 
 // 信号处理：优雅退出
@@ -61,7 +64,17 @@ process.on('unhandledRejection', (reason) => {
 
 const program = new Command();
 
-program.name('tanmi-dock').description('集中型第三方库链接管理工具').version('0.1.0');
+program
+  .name('tanmi-dock')
+  .description('集中型第三方库链接管理工具')
+  .version('0.1.0')
+  .option('-v, --verbose', '输出详细信息')
+  .hook('preAction', (thisCommand) => {
+    const opts = thisCommand.optsWithGlobals();
+    if (opts.verbose) {
+      process.env.VERBOSE = '1';
+    }
+  });
 
 // 注册命令
 program.addCommand(createInitCommand());
@@ -72,5 +85,8 @@ program.addCommand(createCleanCommand());
 program.addCommand(createUnlinkCommand());
 program.addCommand(createConfigCommand());
 program.addCommand(createMigrateCommand());
+program.addCommand(createDoctorCommand());
+program.addCommand(createVerifyCommand());
+program.addCommand(createRepairCommand());
 
 program.parse();

@@ -513,5 +513,280 @@ describe('registry', () => {
         expect(registry.getLibraryReferences(libKey)).not.toContain(projectHash);
       });
     });
+
+    // ========== Store 操作测试 (新版，按平台) ==========
+
+    describe('getStoreKey', () => {
+      it('should combine libName, commit and platform', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        const key = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        expect(key).toBe('mylib:abc123:macOS');
+      });
+    });
+
+    describe('store operations', () => {
+      it('should add and get store entry', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        const entry = {
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        };
+        registry.addStore(entry);
+
+        const key = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        const retrieved = registry.getStore(key);
+        expect(retrieved).toEqual(entry);
+      });
+
+      it('should update store entry', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const key = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.updateStore(key, { size: 2000 });
+
+        const updated = registry.getStore(key);
+        expect(updated?.size).toBe(2000);
+      });
+
+      it('should remove store entry', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const key = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.removeStore(key);
+
+        expect(registry.getStore(key)).toBeUndefined();
+      });
+
+      it('should list all store entries', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        registry.addStore({
+          libName: 'lib1',
+          commit: 'abc',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/lib1.git',
+          size: 1000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+        registry.addStore({
+          libName: 'lib1',
+          commit: 'abc',
+          platform: 'iOS',
+          branch: 'main',
+          url: 'https://github.com/test/lib1.git',
+          size: 2000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const stores = registry.listStores();
+        expect(stores).toHaveLength(2);
+      });
+
+      it('should get unreferenced store entries', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        registry.addStore({
+          libName: 'referenced',
+          commit: 'abc',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/referenced.git',
+          size: 1000,
+          usedBy: ['project-1'],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+        registry.addStore({
+          libName: 'unreferenced',
+          commit: 'def',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/unreferenced.git',
+          size: 2000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const unreferenced = registry.getUnreferencedStores();
+        expect(unreferenced).toHaveLength(1);
+        expect(unreferenced[0].libName).toBe('unreferenced');
+      });
+    });
+
+    describe('store reference operations', () => {
+      it('should add reference and clear unlinkedAt', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: [],
+          unlinkedAt: Date.now() - 86400000,
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const key = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.addStoreReference(key, 'project-hash-1');
+
+        const entry = registry.getStore(key);
+        expect(entry?.usedBy).toContain('project-hash-1');
+        expect(entry?.unlinkedAt).toBeUndefined();
+      });
+
+      it('should not add duplicate reference', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const key = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.addStoreReference(key, 'project-hash-1');
+        registry.addStoreReference(key, 'project-hash-1');
+
+        const entry = registry.getStore(key);
+        expect(entry?.usedBy).toHaveLength(1);
+      });
+
+      it('should remove reference and set unlinkedAt when empty', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: ['project-hash-1'],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const key = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.removeStoreReference(key, 'project-hash-1');
+
+        const entry = registry.getStore(key);
+        expect(entry?.usedBy).toHaveLength(0);
+        expect(entry?.unlinkedAt).toBeDefined();
+        expect(typeof entry?.unlinkedAt).toBe('number');
+      });
+
+      it('should not overwrite existing unlinkedAt', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        const existingUnlinkedAt = Date.now() - 86400000;
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: [],
+          unlinkedAt: existingUnlinkedAt,
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const key = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.removeStoreReference(key, 'non-existent-project');
+
+        const entry = registry.getStore(key);
+        expect(entry?.unlinkedAt).toBe(existingUnlinkedAt);
+      });
+    });
   });
 });

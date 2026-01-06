@@ -2,6 +2,7 @@
  * init 命令 - 首次初始化配置
  */
 import fs from 'fs/promises';
+import path from 'path';
 import { Command } from 'commander';
 import { isInitialized, getInitStatus } from '../core/guard.js';
 import * as config from '../core/config.js';
@@ -11,6 +12,7 @@ import { expandHome, getConfigPath, shrinkHome, isPathSafe } from '../core/platf
 import { info, success, warn, error, hint, title, blank, separator } from '../utils/logger.js';
 import { EMPTY_REGISTRY } from '../types/index.js';
 import { getRegistryPath } from '../core/platform.js';
+import { selectOption, inputText, confirmAction } from '../utils/prompt.js';
 
 /**
  * 创建 init 命令
@@ -108,24 +110,33 @@ async function selectStorePath(): Promise<string> {
 
   blank();
 
-  // 显示建议路径
+  // 构建选项
   const suggestions = await getDefaultStorePaths();
+  const choices = suggestions.map((s) => ({
+    name: `${shrinkHome(s.path)} (${formatSize(s.free)} 可用)${s.recommended ? ' (推荐)' : ''}`,
+    value: s.path,
+    description: s.free < 10 * 1024 * 1024 * 1024 ? '⚠️ 空间较小' : undefined,
+  }));
+  choices.push({ name: '自定义路径...', value: '__custom__', description: undefined });
 
-  info('选择存储位置:');
-  suggestions.forEach((s, i) => {
-    const recNote = s.recommended ? ' (推荐)' : '';
-    info(`  [${i + 1}] ${shrinkHome(s.path)}${recNote}`);
-  });
-  info(`  [${suggestions.length + 1}] 自定义路径`);
+  const selected = await selectOption('选择存储位置:', choices);
 
-  blank();
+  if (selected === '__custom__') {
+    return inputText('输入存储路径:', '~/.tanmi-dock/store', (v) => {
+      const expanded = expandHome(v);
+      const check = isPathSafe(expanded);
+      return check.safe || check.reason || '路径无效';
+    });
+  }
 
-  // 由于没有交互式输入，使用推荐路径或第一个
-  const recommended = suggestions.find((s) => s.recommended) || suggestions[0];
-  hint(`非交互模式，使用: ${shrinkHome(recommended.path)}`);
-  hint('使用 --store-path <path> 指定自定义路径');
+  // 确认选择
+  const confirmed = await confirmAction(`确认使用路径 '${shrinkHome(selected)}'?`, true);
+  if (!confirmed) {
+    info('已取消，重新选择...');
+    return selectStorePath();
+  }
 
-  return recommended.path;
+  return selected;
 }
 
 /**

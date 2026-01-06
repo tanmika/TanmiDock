@@ -5,6 +5,74 @@ import os from 'os';
 import path from 'path';
 import type { Platform } from '../types/index.js';
 
+// ============ 平台选项配置 ============
+
+/**
+ * 平台选项定义
+ */
+export interface PlatformOption {
+  key: string;           // CLI 参数 key (mac, ios, android...)
+  value: string;         // Store 目录名 (macOS, iOS, android...)
+  asan?: string;         // ASAN 版本目录名
+  hwasan?: string;       // HWASAN 版本目录名 (仅 android)
+}
+
+/**
+ * 支持的平台列表
+ */
+export const PLATFORM_OPTIONS: PlatformOption[] = [
+  { key: 'mac', value: 'macOS', asan: 'macOS-asan' },
+  { key: 'win', value: 'Win' },
+  { key: 'ios', value: 'iOS', asan: 'iOS-asan' },
+  { key: 'android', value: 'android', asan: 'android-asan', hwasan: 'android-hwasan' },
+  { key: 'linux', value: 'ubuntu' },
+  { key: 'wasm', value: 'wasm' },
+  { key: 'ohos', value: 'ohos' },
+];
+
+/**
+ * 通过 key 获取平台选项
+ */
+export function getPlatformOption(key: string): PlatformOption | undefined {
+  return PLATFORM_OPTIONS.find((p) => p.key === key);
+}
+
+/**
+ * 通过 value 获取平台选项
+ */
+export function getPlatformOptionByValue(value: string): PlatformOption | undefined {
+  return PLATFORM_OPTIONS.find(
+    (p) => p.value === value || p.asan === value || p.hwasan === value
+  );
+}
+
+/**
+ * key 转换为 value
+ */
+export function platformKeyToValue(key: string): string | undefined {
+  return getPlatformOption(key)?.value;
+}
+
+/**
+ * 获取所有平台 keys
+ */
+export function getAllPlatformKeys(): string[] {
+  return PLATFORM_OPTIONS.map((p) => p.key);
+}
+
+/**
+ * 已知平台目录名列表 (用于多平台链接时识别平台子目录)
+ */
+export const KNOWN_PLATFORM_VALUES: string[] = [
+  'macOS', 'macOS-asan',
+  'Win',
+  'iOS', 'iOS-asan',
+  'android', 'android-asan', 'android-hwasan',
+  'ubuntu',
+  'wasm',
+  'ohos',
+];
+
 /**
  * 获取配置目录路径 (固定位置)
  * - macOS: ~/.tanmi-dock

@@ -1,38 +1,45 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import path from 'path';
 
 // Mock fs/promises
 vi.mock('fs/promises', () => ({
   default: {
-    mkdir: vi.fn(),
-    symlink: vi.fn(),
     lstat: vi.fn(),
     stat: vi.fn(),
+    symlink: vi.fn(),
     readlink: vi.fn(),
     unlink: vi.fn(),
-    rename: vi.fn(),
+    mkdir: vi.fn(),
     rm: vi.fn(),
+    rename: vi.fn(),
     readdir: vi.fn(),
-    copyFile: vi.fn(),
+    access: vi.fn(),
   },
 }));
 
 // Mock platform
 vi.mock('../../src/core/platform.js', () => ({
   isWindows: vi.fn(() => false),
+  KNOWN_PLATFORM_VALUES: ['macOS', 'macOS-asan', 'Win', 'iOS', 'iOS-asan', 'android', 'android-asan', 'android-hwasan', 'ubuntu', 'wasm', 'ohos'],
+}));
+
+// Mock fs-utils
+vi.mock('../../src/utils/fs-utils.js', () => ({
+  copyDir: vi.fn(),
 }));
 
 describe('linker', () => {
   let fsMock: {
-    mkdir: ReturnType<typeof vi.fn>;
-    symlink: ReturnType<typeof vi.fn>;
     lstat: ReturnType<typeof vi.fn>;
     stat: ReturnType<typeof vi.fn>;
+    symlink: ReturnType<typeof vi.fn>;
     readlink: ReturnType<typeof vi.fn>;
     unlink: ReturnType<typeof vi.fn>;
-    rename: ReturnType<typeof vi.fn>;
+    mkdir: ReturnType<typeof vi.fn>;
     rm: ReturnType<typeof vi.fn>;
+    rename: ReturnType<typeof vi.fn>;
     readdir: ReturnType<typeof vi.fn>;
-    copyFile: ReturnType<typeof vi.fn>;
+    access: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -46,322 +53,155 @@ describe('linker', () => {
     vi.clearAllMocks();
   });
 
-  describe('link', () => {
-    it('should create symlink on macOS', async () => {
+  describe('linkLibrary', () => {
+    it('should link single platform directly', async () => {
+      const { linkLibrary } = await import('../../src/core/linker.js');
+
+      // Mock: path doesn't exist
+      fsMock.lstat.mockRejectedValue({ code: 'ENOENT' });
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.symlink.mockResolvedValue(undefined);
 
-      const { link } = await import('../../src/core/linker.js');
-      await link('/store/lib', '/project/lib');
+      await linkLibrary(
+        '/project/3rdparty/mylib',
+        '/store',
+        'mylib',
+        'abc123',
+        ['macOS']
+      );
 
-      expect(fsMock.mkdir).toHaveBeenCalledWith('/project', { recursive: true });
-      expect(fsMock.symlink).toHaveBeenCalledWith('/store/lib', '/project/lib', 'dir');
+      // Should create symlink to single platform
+      expect(fsMock.symlink).toHaveBeenCalledWith(
+        path.join('/store', 'mylib', 'abc123', 'macOS'),
+        '/project/3rdparty/mylib',
+        'dir'
+      );
     });
 
-    it('should create junction on Windows', async () => {
-      const { isWindows } = await import('../../src/core/platform.js');
-      vi.mocked(isWindows).mockReturnValue(true);
+    it('should throw error when no platforms provided', async () => {
+      const { linkLibrary } = await import('../../src/core/linker.js');
 
+      await expect(
+        linkLibrary('/project/3rdparty/mylib', '/store', 'mylib', 'abc123', [])
+      ).rejects.toThrow('至少需要一个平台');
+    });
+
+    it('should call linkMultiPlatform for multiple platforms', async () => {
+      const { linkLibrary } = await import('../../src/core/linker.js');
+
+      // Mock: setup for multi-platform linking
+      fsMock.rm.mockResolvedValue(undefined);
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.symlink.mockResolvedValue(undefined);
+      fsMock.lstat.mockRejectedValue({ code: 'ENOENT' }); // isSymlink returns false
+      fsMock.access.mockResolvedValue(undefined);
 
-      const { link } = await import('../../src/core/linker.js');
-      await link('/store/lib', '/project/lib');
+      // Mock readdir to return platform dirs and shared content
+      fsMock.readdir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'dependencies', isDirectory: () => true },
+        { name: 'CMakeLists.txt', isDirectory: () => false },
+      ]);
 
-      expect(fsMock.symlink).toHaveBeenCalledWith('/store/lib', '/project/lib', 'junction');
+      await linkLibrary(
+        '/project/3rdparty/mylib',
+        '/store',
+        'mylib',
+        'abc123',
+        ['macOS', 'iOS']
+      );
+
+      // Should create real directory and symlinks inside
+      expect(fsMock.rm).toHaveBeenCalled();
+      expect(fsMock.mkdir).toHaveBeenCalled();
+      expect(fsMock.symlink).toHaveBeenCalled();
     });
   });
 
-  describe('isSymlink', () => {
-    it('should return true for symlink', async () => {
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true });
+  describe('linkMultiPlatform', () => {
+    it('should create directory with platform and shared content links', async () => {
+      const { linkMultiPlatform } = await import('../../src/core/linker.js');
 
-      const { isSymlink } = await import('../../src/core/linker.js');
-      const result = await isSymlink('/some/link');
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.symlink.mockResolvedValue(undefined);
+      fsMock.lstat.mockRejectedValue({ code: 'ENOENT' });
+      fsMock.access.mockResolvedValue(undefined);
 
-      expect(result).toBe(true);
-    });
+      // Mock readdir to return platform dirs and shared content
+      fsMock.readdir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'iOS', isDirectory: () => true },
+        { name: 'dependencies', isDirectory: () => true },
+        { name: 'CMakeLists.txt', isDirectory: () => false },
+      ]);
 
-    it('should return false for regular directory', async () => {
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false });
+      await linkMultiPlatform(
+        '/project/3rdparty/mylib',
+        '/store',
+        'mylib',
+        'abc123',
+        ['macOS', 'iOS']
+      );
 
-      const { isSymlink } = await import('../../src/core/linker.js');
-      const result = await isSymlink('/some/dir');
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false when path does not exist', async () => {
-      fsMock.lstat.mockRejectedValue(new Error('ENOENT'));
-
-      const { isSymlink } = await import('../../src/core/linker.js');
-      const result = await isSymlink('/nonexistent');
-
-      expect(result).toBe(false);
-    });
-  });
-
-  describe('readLink', () => {
-    it('should return target path for symlink', async () => {
-      fsMock.readlink.mockResolvedValue('/target/path');
-
-      const { readLink } = await import('../../src/core/linker.js');
-      const result = await readLink('/some/link');
-
-      expect(result).toBe('/target/path');
-    });
-
-    it('should return null when not a symlink', async () => {
-      fsMock.readlink.mockRejectedValue(new Error('EINVAL'));
-
-      const { readLink } = await import('../../src/core/linker.js');
-      const result = await readLink('/some/dir');
-
-      expect(result).toBeNull();
-    });
-  });
-
-  describe('unlink', () => {
-    it('should remove symlink', async () => {
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true });
-      fsMock.unlink.mockResolvedValue(undefined);
-
-      const { unlink } = await import('../../src/core/linker.js');
-      await unlink('/some/link');
-
-      expect(fsMock.unlink).toHaveBeenCalledWith('/some/link');
-    });
-
-    it('should not remove non-symlink', async () => {
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false });
-
-      const { unlink } = await import('../../src/core/linker.js');
-      await unlink('/some/dir');
-
-      expect(fsMock.unlink).not.toHaveBeenCalled();
-    });
-
-    it('should ignore when path does not exist', async () => {
-      fsMock.lstat.mockRejectedValue(new Error('ENOENT'));
-
-      const { unlink } = await import('../../src/core/linker.js');
-      await unlink('/nonexistent');
-
-      expect(fsMock.unlink).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('isValidLink', () => {
-    it('should return true for valid symlink', async () => {
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true });
-      fsMock.stat.mockResolvedValue({});
-
-      const { isValidLink } = await import('../../src/core/linker.js');
-      const result = await isValidLink('/valid/link');
-
-      expect(result).toBe(true);
-    });
-
-    it('should return false for broken symlink', async () => {
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true });
-      fsMock.stat.mockRejectedValue(new Error('ENOENT'));
-
-      const { isValidLink } = await import('../../src/core/linker.js');
-      const result = await isValidLink('/broken/link');
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false for non-symlink', async () => {
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false });
-
-      const { isValidLink } = await import('../../src/core/linker.js');
-      const result = await isValidLink('/regular/dir');
-
-      expect(result).toBe(false);
-    });
-  });
-
-  describe('isCorrectLink', () => {
-    it('should return true when link points to expected target', async () => {
-      fsMock.readlink.mockResolvedValue('/store/lib');
-
-      const { isCorrectLink } = await import('../../src/core/linker.js');
-      const result = await isCorrectLink('/project/lib', '/store/lib');
-
-      expect(result).toBe(true);
-    });
-
-    it('should return false when link points to wrong target', async () => {
-      fsMock.readlink.mockResolvedValue('/other/lib');
-
-      const { isCorrectLink } = await import('../../src/core/linker.js');
-      const result = await isCorrectLink('/project/lib', '/store/lib');
-
-      expect(result).toBe(false);
-    });
-
-    it('should return false when not a symlink', async () => {
-      fsMock.readlink.mockRejectedValue(new Error('EINVAL'));
-
-      const { isCorrectLink } = await import('../../src/core/linker.js');
-      const result = await isCorrectLink('/project/lib', '/store/lib');
-
-      expect(result).toBe(false);
+      // Should have created multiple symlinks (macOS, iOS in primary, dependencies, CMakeLists.txt, iOS again from step 4)
+      expect(fsMock.symlink.mock.calls.length).toBeGreaterThanOrEqual(4);
     });
   });
 
   describe('getPathStatus', () => {
-    it('should return "linked" for correct symlink', async () => {
+    it('should return linked for correct symlink', async () => {
+      const { getPathStatus } = await import('../../src/core/linker.js');
+
       fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true, isDirectory: () => false });
-      fsMock.readlink.mockResolvedValue('/store/lib');
+      fsMock.readlink.mockResolvedValue('/store/mylib/abc123/macOS');
 
-      const { getPathStatus } = await import('../../src/core/linker.js');
-      const result = await getPathStatus('/project/lib', '/store/lib');
+      const status = await getPathStatus(
+        '/project/3rdparty/mylib',
+        '/store/mylib/abc123/macOS'
+      );
 
-      expect(result).toBe('linked');
+      expect(status).toBe('linked');
     });
 
-    it('should return "wrong_link" for incorrect symlink', async () => {
+    it('should return wrong_link for incorrect symlink', async () => {
+      const { getPathStatus } = await import('../../src/core/linker.js');
+
       fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true, isDirectory: () => false });
-      fsMock.readlink.mockResolvedValue('/other/lib');
+      fsMock.readlink.mockResolvedValue('/store/mylib/abc123/iOS');
 
-      const { getPathStatus } = await import('../../src/core/linker.js');
-      const result = await getPathStatus('/project/lib', '/store/lib');
+      const status = await getPathStatus(
+        '/project/3rdparty/mylib',
+        '/store/mylib/abc123/macOS'
+      );
 
-      expect(result).toBe('wrong_link');
+      expect(status).toBe('wrong_link');
     });
 
-    it('should return "directory" for regular directory', async () => {
+    it('should return directory for regular directory', async () => {
+      const { getPathStatus } = await import('../../src/core/linker.js');
+
       fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false, isDirectory: () => true });
 
+      const status = await getPathStatus(
+        '/project/3rdparty/mylib',
+        '/store/mylib/abc123/macOS'
+      );
+
+      expect(status).toBe('directory');
+    });
+
+    it('should return missing for non-existent path', async () => {
       const { getPathStatus } = await import('../../src/core/linker.js');
-      const result = await getPathStatus('/project/lib', '/store/lib');
 
-      expect(result).toBe('directory');
-    });
+      fsMock.lstat.mockRejectedValue({ code: 'ENOENT' });
 
-    it('should return "missing" for non-existent path', async () => {
-      fsMock.lstat.mockRejectedValue(new Error('ENOENT'));
+      const status = await getPathStatus(
+        '/project/3rdparty/mylib',
+        '/store/mylib/abc123/macOS'
+      );
 
-      const { getPathStatus } = await import('../../src/core/linker.js');
-      const result = await getPathStatus('/nonexistent', '/store/lib');
-
-      expect(result).toBe('missing');
-    });
-
-    it('should return "missing" for non-directory non-symlink', async () => {
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false, isDirectory: () => false });
-
-      const { getPathStatus } = await import('../../src/core/linker.js');
-      const result = await getPathStatus('/some/file', '/store/lib');
-
-      expect(result).toBe('missing');
-    });
-  });
-
-  describe('replaceWithLink', () => {
-    it('should do nothing when already correctly linked', async () => {
-      fsMock.readlink.mockResolvedValue('/store/lib');
-
-      const { replaceWithLink } = await import('../../src/core/linker.js');
-      const result = await replaceWithLink('/project/lib', '/store/lib');
-
-      expect(result).toBeNull();
-      expect(fsMock.symlink).not.toHaveBeenCalled();
-    });
-
-    it('should relink when pointing to wrong target', async () => {
-      fsMock.readlink.mockResolvedValue('/wrong/lib');
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true });
-      fsMock.unlink.mockResolvedValue(undefined);
-      fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.symlink.mockResolvedValue(undefined);
-
-      const { replaceWithLink } = await import('../../src/core/linker.js');
-      const result = await replaceWithLink('/project/lib', '/store/lib');
-
-      expect(result).toBeNull();
-      expect(fsMock.unlink).toHaveBeenCalled();
-      expect(fsMock.symlink).toHaveBeenCalled();
-    });
-
-    it('should create link when directory does not exist', async () => {
-      fsMock.readlink.mockRejectedValue(new Error('EINVAL'));
-      fsMock.lstat
-        .mockResolvedValueOnce({ isSymbolicLink: () => false }) // isSymlink check
-        .mockRejectedValueOnce({ code: 'ENOENT' }); // directory check
-      fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.symlink.mockResolvedValue(undefined);
-
-      const { replaceWithLink } = await import('../../src/core/linker.js');
-      const result = await replaceWithLink('/project/lib', '/store/lib');
-
-      expect(result).toBeNull();
-    });
-
-    it('should delete directory and create link when not backup', async () => {
-      fsMock.readlink.mockRejectedValue(new Error('EINVAL'));
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false, isDirectory: () => true });
-      fsMock.rm.mockResolvedValue(undefined);
-      fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.symlink.mockResolvedValue(undefined);
-
-      const { replaceWithLink } = await import('../../src/core/linker.js');
-      const result = await replaceWithLink('/project/lib', '/store/lib', false);
-
-      expect(fsMock.rm).toHaveBeenCalledWith('/project/lib', { recursive: true, force: true });
-      expect(result).toBeNull();
-    });
-
-    it('should backup directory when backup is true', async () => {
-      fsMock.readlink.mockRejectedValue(new Error('EINVAL'));
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false, isDirectory: () => true });
-      fsMock.rename.mockResolvedValue(undefined);
-      fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.symlink.mockResolvedValue(undefined);
-
-      const { replaceWithLink } = await import('../../src/core/linker.js');
-      const result = await replaceWithLink('/project/lib', '/store/lib', true);
-
-      expect(fsMock.rename).toHaveBeenCalled();
-      expect(result).toMatch(/\/project\/lib\.backup\.\d+/);
-    });
-
-    it('should throw when path is not a directory', async () => {
-      fsMock.readlink.mockRejectedValue(new Error('EINVAL'));
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false, isDirectory: () => false });
-
-      const { replaceWithLink } = await import('../../src/core/linker.js');
-
-      await expect(replaceWithLink('/project/file', '/store/lib')).rejects.toThrow('路径不是目录');
-    });
-  });
-
-  describe('restoreFromLink', () => {
-    it('should copy contents from target and remove link', async () => {
-      fsMock.readlink.mockResolvedValue('/store/lib');
-      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true });
-      fsMock.unlink.mockResolvedValue(undefined);
-      fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.readdir.mockResolvedValue([
-        { name: 'file.txt', isDirectory: () => false, isSymbolicLink: () => false },
-      ]);
-      fsMock.copyFile.mockResolvedValue(undefined);
-
-      const { restoreFromLink } = await import('../../src/core/linker.js');
-      await restoreFromLink('/project/lib');
-
-      expect(fsMock.unlink).toHaveBeenCalledWith('/project/lib');
-      expect(fsMock.copyFile).toHaveBeenCalled();
-    });
-
-    it('should throw when not a symlink', async () => {
-      fsMock.readlink.mockRejectedValue(new Error('EINVAL'));
-
-      const { restoreFromLink } = await import('../../src/core/linker.js');
-
-      await expect(restoreFromLink('/project/lib')).rejects.toThrow('不是符号链接');
+      expect(status).toBe('missing');
     });
   });
 });

@@ -90,7 +90,10 @@ async function unlinkProject(projectPath: string, options: UnlinkOptions): Promi
       if (lib && lib.referencedBy.length === 0) {
         try {
           const store = await import('../core/store.js');
-          await store.remove(dep.libName, dep.commit);
+          // TODO: 1-1 需要遍历所有平台删除，暂时使用 platforms 字段
+          for (const platform of lib.platforms) {
+            await store.remove(dep.libName, dep.commit, platform);
+          }
           registry.removeLibrary(libKey);
           removed++;
           hint(`${dep.libName} (${dep.commit.slice(0, 7)}) - 已从 Store 删除`);
