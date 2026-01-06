@@ -60,14 +60,20 @@ interface LinkOptions {
 async function linkProject(projectPath: string, options: LinkOptions): Promise<void> {
   const absolutePath = resolvePath(projectPath);
 
+  // 获取项目之前的平台选择（用于记忆）
+  const registry = getRegistry();
+  await registry.load();
+  const existingProject = registry.getProject(absolutePath);
+  const rememberedPlatforms = existingProject?.platforms;
+
   // 确定平台列表
   let platforms: string[];
   if (options.platform && options.platform.length > 0) {
     // CLI 指定了平台，解析为 values
     platforms = parsePlatformArgs(options.platform);
   } else if (!options.yes && process.stdout.isTTY) {
-    // 交互模式：显示平台选择
-    platforms = await selectPlatforms();
+    // 交互模式：显示平台选择，使用记忆的平台作为默认勾选
+    platforms = await selectPlatforms(rememberedPlatforms);
     if (platforms.length === 0) {
       error('至少需要选择一个平台');
       process.exit(EXIT_CODES.MISUSE);
@@ -164,9 +170,7 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
     }
   }
 
-  // 执行链接
-  const registry = getRegistry();
-  await registry.load();
+  // 执行链接（registry 已在前面加载）
 
   let savedBytes = 0;
   const storePath = await store.getStorePath();
