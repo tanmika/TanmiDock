@@ -63,7 +63,7 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
   // 获取项目之前的平台选择（用于记忆）
   const registry = getRegistry();
   await registry.load();
-  const existingProject = registry.getProject(absolutePath);
+  const existingProject = registry.getProjectByPath(absolutePath);
   const rememberedPlatforms = existingProject?.platforms;
 
   // 确定平台列表

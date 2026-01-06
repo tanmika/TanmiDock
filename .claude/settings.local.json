@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run test:*)",
+      "Bash(wc:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run lint:*)",
+      "Bash(node dist/index.js:*)",
+      "mcp__tanmi-workspace__session_bind",
+      "mcp__tanmi-workspace__context_get",
+      "mcp__tanmi-workspace-dev1__session_status",
+      "mcp__tanmi-workspace-dev1__session_bind",
+      "mcp__tanmi-workspace-dev1__node_list",
+      "mcp__tanmi-workspace-dev1__node_get",
+      "mcp__tanmi-workspace-dev1__memo_get",
+      "mcp__tanmi-workspace__session_status",
+      "mcp__tanmi-workspace__workspace_get",
+      "mcp__tanmi-workspace__node_list",
+      "mcp__tanmi-workspace__workspace_list",
+      "mcp__tanmi-workspace-dev1__workspace_get"
+    ]
+  }
+}
