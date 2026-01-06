@@ -1,6 +1,6 @@
 {
   "name": "tanmi-dock",
-  "version": "0.4.0-beta.5",
+  "version": "0.4.0-beta.6",
   "description": "集中型第三方库链接管理工具",
   "type": "module",
   "main": "./dist/index.js",
