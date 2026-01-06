@@ -64,8 +64,12 @@ export async function install(options: InstallOptions): Promise<void> {
     throw new Error('codepac 未安装，请先安装 codepac 工具');
   }
 
+  // 拆分配置路径为目录和文件名
+  const configDir = path.dirname(configPath);
+  const configFileName = path.basename(configPath);
+
   // 构建命令参数
-  const args = ['install', '-c', configPath, '-d', targetDir];
+  const args = ['install', '--configdir', configDir, '--configfile', configFileName, '--targetdir', targetDir];
 
   // 添加平台参数
   if (platform) {
@@ -74,7 +78,7 @@ export async function install(options: InstallOptions): Promise<void> {
 
   return new Promise((resolve, reject) => {
     const proc = spawn(CODEPAC_CMD, args, {
-      cwd: path.dirname(configPath),
+      cwd: configDir,
       stdio: silent ? 'ignore' : 'pipe',
     });
 
@@ -211,15 +215,20 @@ export async function update(options: UpdateOptions): Promise<void> {
     throw new Error('codepac 未安装，请先安装 codepac 工具');
   }
 
-  // 构建命令参数
-  const args = ['update', '-c', configPath, '-d', targetDir];
+  // 拆分配置路径为目录和文件名
+  const configDir = path.dirname(configPath);
+  const configFileName = path.basename(configPath);
+
+  // 构建命令参数（库名直接作为参数，不用 -n）
+  const args = ['update'];
   if (libName) {
-    args.push('-n', libName);
+    args.push(libName);
   }
+  args.push('--configdir', configDir, '--configfile', configFileName, '--targetdir', targetDir);
 
   return new Promise((resolve, reject) => {
     const proc = spawn(CODEPAC_CMD, args, {
-      cwd: path.dirname(configPath),
+      cwd: configDir,
       stdio: 'pipe',
     });
 
