@@ -457,6 +457,9 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
     // 事务提交成功
     await tx.commit();
 
+    // 同步 cache 文件（兼容 codepac 的 checkValid.js 检测）
+    await syncCacheFile(configPath);
+
     // 显示统计
     blank();
     separator();
@@ -607,6 +610,31 @@ function getStatusKey(status: DependencyStatus): StatsKey {
     [DependencyStatus.LINK_NEW]: 'linkNew',
   };
   return map[status];
+}
+
+/**
+ * 同步配置文件到 cache 目录
+ * 使 cmake 的 checkValid.js 检测能够通过
+ */
+async function syncCacheFile(configPath: string): Promise<void> {
+  const configDir = path.dirname(configPath);
+  const cacheDir = path.join(configDir, '.cache');
+  const cachePath = path.join(cacheDir, 'codepac-dep.json');
+
+  try {
+    // 确保 .cache 目录存在
+    await fs.mkdir(cacheDir, { recursive: true });
+
+    // 复制配置文件到 cache
+    await fs.copyFile(configPath, cachePath);
+
+    if (process.env.VERBOSE) {
+      info(`已同步 cache: ${path.basename(configPath)}`);
+    }
+  } catch (err) {
+    // cache 同步失败不应阻塞主流程，仅警告
+    warn(`cache 同步失败: ${(err as Error).message}`);
+  }
 }
 
 export default createLinkCommand;

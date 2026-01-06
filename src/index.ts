@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { createRequire } from 'module';
 import { createInitCommand } from './commands/init.js';
 import { createLinkCommand } from './commands/link.js';
 import { createStatusCommand } from './commands/status.js';
@@ -12,6 +13,10 @@ import { createDoctorCommand } from './commands/doctor.js';
 import { createVerifyCommand } from './commands/verify.js';
 import { createRepairCommand } from './commands/repair.js';
 import { Transaction } from './core/transaction.js';
+
+// 读取 package.json 版本
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json') as { version: string };
 
 // 信号处理：优雅退出
 let isShuttingDown = false;
@@ -67,7 +72,7 @@ const program = new Command();
 program
   .name('tanmi-dock')
   .description('集中型第三方库链接管理工具')
-  .version('0.1.0')
+  .version(pkg.version)
   .option('-v, --verbose', '输出详细信息')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.optsWithGlobals();
