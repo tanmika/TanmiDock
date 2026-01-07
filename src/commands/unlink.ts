@@ -69,8 +69,26 @@ async function unlinkProject(projectPath: string, options: UnlinkOptions): Promi
     const localPath = path.join(absolutePath, dep.linkedPath);
     const libKey = registry.getLibraryKey(dep.libName, dep.commit);
 
-    // 检查是否为符号链接
-    if (await linker.isSymlink(localPath)) {
+    // 检查是否为符号链接（支持单平台和多平台模式）
+    const isTopLevelLink = await linker.isSymlink(localPath);
+    let hasInternalLinks = false;
+
+    if (!isTopLevelLink) {
+      // 检查内部是否有符号链接（多平台模式）
+      try {
+        const entries = await fs.readdir(localPath, { withFileTypes: true });
+        for (const entry of entries) {
+          if (await linker.isSymlink(path.join(localPath, entry.name))) {
+            hasInternalLinks = true;
+            break;
+          }
+        }
+      } catch {
+        // 目录不存在或无法读取
+      }
+    }
+
+    if (isTopLevelLink || hasInternalLinks) {
       try {
         // 还原为普通目录（从 Store 复制内容）
         await linker.restoreFromLink(localPath);
