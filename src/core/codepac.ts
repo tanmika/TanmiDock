@@ -5,6 +5,9 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import fs from 'fs/promises';
+import os from 'os';
+import { KNOWN_PLATFORM_VALUES } from './platform.js';
 
 const execAsync = promisify(exec);
 
@@ -264,10 +267,191 @@ export async function update(options: UpdateOptions): Promise<void> {
   });
 }
 
+// ============ downloadToTemp 接口定义 ============
+
+/**
+ * 下载选项
+ */
+export interface DownloadOptions {
+  /** 库的 Git URL */
+  url: string;
+  /** commit hash */
+  commit: string;
+  /** 分支名 */
+  branch: string;
+  /** 库名称 */
+  libName: string;
+  /** 平台 CLI keys: ["mac", "android"] */
+  platforms: string[];
+  /** sparse checkout 配置 */
+  sparse?: object | string;
+  /** 进度回调 */
+  onProgress?: (msg: string) => void;
+}
+
+/**
+ * 下载结果
+ */
+export interface DownloadResult {
+  /** 临时目录根路径 */
+  tempDir: string;
+  /** 库目录: tempDir/libName */
+  libDir: string;
+  /** 实际下载的平台目录名 ["macOS", "macOS-asan", "android"] */
+  platformDirs: string[];
+  /** 共享文件列表 */
+  sharedFiles: string[];
+}
+
+/**
+ * 生成唯一临时目录名
+ */
+function generateTempDirName(): string {
+  const timestamp = Date.now();
+  const randomId = Math.random().toString(36).substring(2, 8);
+  return `tanmi-dock-${timestamp}-${randomId}`;
+}
+
+/**
+ * 下载库到临时目录
+ *
+ * @param options 下载选项
+ * @returns 下载结果，包含临时目录路径、平台目录和共享文件列表
+ * @throws 如果下载失败，会清理临时目录后抛出错误
+ *
+ * @deprecated installSingle 已被本函数替代
+ */
+export async function downloadToTemp(options: DownloadOptions): Promise<DownloadResult> {
+  const { url, commit, branch, libName, platforms, sparse, onProgress } = options;
+
+  // 检查 codepac 是否安装
+  if (!(await isCodepacInstalled())) {
+    throw new Error('codepac 未安装，请先安装 codepac 工具');
+  }
+
+  // 创建唯一临时目录
+  const tempDirName = generateTempDirName();
+  const tempDir = path.join(os.tmpdir(), tempDirName);
+
+  // 生成临时配置文件路径
+  const configPath = path.join(tempDir, 'codepac-dep.json');
+
+  try {
+    // 创建临时目录
+    await fs.mkdir(tempDir, { recursive: true });
+
+    // 生成临时 codepac 配置文件
+    const tempConfig = {
+      version: '1.0.0',
+      repos: {
+        common: [
+          {
+            url,
+            commit,
+            branch,
+            dir: libName,
+            ...(sparse && { sparse }),
+          },
+        ],
+      },
+    };
+
+    await fs.writeFile(configPath, JSON.stringify(tempConfig, null, 2), 'utf-8');
+
+    // 构建 codepac 命令参数
+    // 关键: 多平台参数使用 -p platform1 platform2 ... 格式
+    const args = ['install', '-cf', configPath, '-td', tempDir, '-p', ...platforms];
+
+    // 调用 codepac
+    await spawnCodepac(args, tempDir, onProgress);
+
+    // 分析下载结果，区分平台目录和共享文件
+    const libDir = path.join(tempDir, libName);
+    const entries = await fs.readdir(libDir, { withFileTypes: true });
+
+    const platformDirs: string[] = [];
+    const sharedFiles: string[] = [];
+
+    for (const entry of entries) {
+      const name = entry.name;
+      if (KNOWN_PLATFORM_VALUES.includes(name)) {
+        platformDirs.push(name);
+      } else {
+        sharedFiles.push(name);
+      }
+    }
+
+    return {
+      tempDir,
+      libDir,
+      platformDirs,
+      sharedFiles,
+    };
+  } catch (error) {
+    // 清理临时目录
+    try {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    } catch {
+      // 忽略清理错误
+    }
+
+    // 重新抛出原始错误
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`下载库失败: ${message}`);
+  }
+}
+
+/**
+ * 内部辅助函数: 执行 codepac 命令
+ */
+function spawnCodepac(
+  args: string[],
+  cwd: string,
+  onProgress?: (msg: string) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(CODEPAC_CMD, args, {
+      cwd,
+      stdio: 'pipe',
+    });
+
+    let stderr = '';
+
+    if (proc.stdout && onProgress) {
+      proc.stdout.on('data', (data: Buffer) => {
+        const message = data.toString().trim();
+        if (message) {
+          onProgress(message);
+        }
+      });
+    }
+
+    if (proc.stderr) {
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
+    }
+
+    proc.on('error', (err) => {
+      reject(new Error(`无法执行 codepac 命令: ${err.message}`));
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        const errorMsg = stderr.trim() || `codepac 命令执行失败，退出码: ${code}`;
+        reject(new Error(errorMsg));
+      }
+    });
+  });
+}
+
 export default {
   isCodepacInstalled,
   getVersion,
   install,
   installSingle,
   update,
+  downloadToTemp,
 };

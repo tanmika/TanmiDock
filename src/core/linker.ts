@@ -290,6 +290,67 @@ export async function linkMultiPlatform(
   }
 }
 
+/**
+ * 链接库到项目（新版：符号链接平台目录 + 复制共享文件）
+ *
+ * 目标结构:
+ * ```
+ * 3rdParty/libName/
+ * ├── macOS/      → Store/.../macOS/     (符号链接)
+ * ├── android/    → Store/.../android/   (符号链接)
+ * ├── codepac-dep.json                   (复制自 _shared)
+ * └── *.cmake                            (复制自 _shared)
+ * ```
+ *
+ * @param localPath 本地路径 (3rdParty/libName)
+ * @param storeCommitPath Store 中的 commit 路径 (Store/libName/commit)
+ * @param platforms 要链接的平台列表
+ */
+export async function linkLib(
+  localPath: string,
+  storeCommitPath: string,
+  platforms: string[]
+): Promise<void> {
+  // 1. 清理旧内容
+  await fs.rm(localPath, { recursive: true, force: true });
+
+  // 2. 创建目录
+  await fs.mkdir(localPath, { recursive: true });
+
+  try {
+    // 3. 链接平台目录
+    for (const platform of platforms) {
+      const storePlatformPath = path.join(storeCommitPath, platform);
+
+      // 检查 Store 中平台目录是否存在
+      try {
+        await fs.access(storePlatformPath);
+      } catch {
+        // 平台目录不存在，跳过
+        continue;
+      }
+
+      const localPlatformPath = path.join(localPath, platform);
+      const type = isWindows() ? 'junction' : 'dir';
+      await fs.symlink(storePlatformPath, localPlatformPath, type);
+    }
+
+    // 4. 复制共享文件（非链接）
+    const sharedPath = path.join(storeCommitPath, '_shared');
+    try {
+      await fs.access(sharedPath);
+      // _shared 目录存在，复制其内容到 localPath
+      await copyDir(sharedPath, localPath);
+    } catch {
+      // _shared 目录不存在，跳过
+    }
+  } catch (err) {
+    // 链接失败时清理已创建的内容
+    await fs.rm(localPath, { recursive: true, force: true });
+    throw err;
+  }
+}
+
 export default {
   link,
   isSymlink,
@@ -302,4 +363,5 @@ export default {
   getPathStatus,
   linkLibrary,
   linkMultiPlatform,
+  linkLib,
 };

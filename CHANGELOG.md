@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-01-07
+
+### Breaking Changes
+
+- Store 结构变更，与 v0.4.x 不兼容
+- 旧 Store 数据需删除后重新 link
+
+### Changed
+
+- Store 结构重构: 平台目录和共享文件分离存储
+- codepac 调用优化: 一次下载多平台
+
+### Added
+
+- `downloadToTemp()` - 多平台一次性下载
+- `absorbLib()` - 智能拆分平台/共享内容
+- `linkLib()` - 统一链接逻辑
+- Store 版本检测: 自动识别旧结构并提示
+
+### Deprecated
+
+- `installSingle()` → `downloadToTemp()`
+- `linkMultiPlatform()` → `linkLib()`
+- `linkLibrary()` → `linkLib()`
+
 ## [0.4.0] - 2026-01-06
 
 ### Added

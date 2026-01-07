@@ -149,6 +149,194 @@ describe('linker', () => {
     });
   });
 
+  describe('linkLib', () => {
+    let copyDirMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(async () => {
+      const fsUtils = await import('../../src/utils/fs-utils.js');
+      copyDirMock = fsUtils.copyDir as ReturnType<typeof vi.fn>;
+      copyDirMock.mockReset();
+    });
+
+    it('should create symlinks for platform directories', async () => {
+      const { linkLib } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.symlink.mockResolvedValue(undefined);
+      copyDirMock.mockResolvedValue(undefined);
+
+      await linkLib(
+        '/project/3rdParty/libtest',
+        '/store/libtest/abc123',
+        ['macOS', 'Win']
+      );
+
+      // 验证平台目录符号链接被创建
+      expect(fsMock.symlink).toHaveBeenCalledWith(
+        path.join('/store/libtest/abc123', 'macOS'),
+        path.join('/project/3rdParty/libtest', 'macOS'),
+        'dir'
+      );
+      expect(fsMock.symlink).toHaveBeenCalledWith(
+        path.join('/store/libtest/abc123', 'Win'),
+        path.join('/project/3rdParty/libtest', 'Win'),
+        'dir'
+      );
+    });
+
+    it('should copy shared files (not symlink)', async () => {
+      const { linkLib } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.symlink.mockResolvedValue(undefined);
+      copyDirMock.mockResolvedValue(undefined);
+
+      await linkLib(
+        '/project/3rdParty/libtest',
+        '/store/libtest/abc123',
+        ['macOS']
+      );
+
+      // 验证 _shared 目录被复制（非符号链接）
+      expect(copyDirMock).toHaveBeenCalledWith(
+        path.join('/store/libtest/abc123', '_shared'),
+        '/project/3rdParty/libtest'
+      );
+    });
+
+    it('should skip non-existent platforms without error', async () => {
+      const { linkLib } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      // macOS 存在，Win 不存在
+      fsMock.access
+        .mockResolvedValueOnce(undefined) // macOS exists
+        .mockRejectedValueOnce({ code: 'ENOENT' }) // Win doesn't exist
+        .mockResolvedValueOnce(undefined); // _shared exists
+      fsMock.symlink.mockResolvedValue(undefined);
+      copyDirMock.mockResolvedValue(undefined);
+
+      // 不应该抛出错误
+      await expect(
+        linkLib(
+          '/project/3rdParty/libtest',
+          '/store/libtest/abc123',
+          ['macOS', 'Win']
+        )
+      ).resolves.not.toThrow();
+
+      // 只有 macOS 被链接
+      expect(fsMock.symlink).toHaveBeenCalledTimes(1);
+      expect(fsMock.symlink).toHaveBeenCalledWith(
+        path.join('/store/libtest/abc123', 'macOS'),
+        path.join('/project/3rdParty/libtest', 'macOS'),
+        'dir'
+      );
+    });
+
+    it('should skip _shared copy when it does not exist', async () => {
+      const { linkLib } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      // 平台存在，_shared 不存在
+      fsMock.access
+        .mockResolvedValueOnce(undefined) // macOS exists
+        .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
+      fsMock.symlink.mockResolvedValue(undefined);
+      copyDirMock.mockResolvedValue(undefined);
+
+      await linkLib(
+        '/project/3rdParty/libtest',
+        '/store/libtest/abc123',
+        ['macOS']
+      );
+
+      // _shared 不存在时不应调用 copyDir
+      expect(copyDirMock).not.toHaveBeenCalled();
+    });
+
+    it('should clean up and recreate local directory', async () => {
+      const { linkLib } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.symlink.mockResolvedValue(undefined);
+      copyDirMock.mockResolvedValue(undefined);
+
+      await linkLib(
+        '/project/3rdParty/libtest',
+        '/store/libtest/abc123',
+        ['macOS']
+      );
+
+      // 验证先删除再创建
+      expect(fsMock.rm).toHaveBeenCalledWith(
+        '/project/3rdParty/libtest',
+        { recursive: true, force: true }
+      );
+      expect(fsMock.mkdir).toHaveBeenCalledWith(
+        '/project/3rdParty/libtest',
+        { recursive: true }
+      );
+    });
+
+    it('should cleanup on symlink failure', async () => {
+      const { linkLib } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.symlink.mockRejectedValue(new Error('symlink failed'));
+      copyDirMock.mockResolvedValue(undefined);
+
+      await expect(
+        linkLib(
+          '/project/3rdParty/libtest',
+          '/store/libtest/abc123',
+          ['macOS']
+        )
+      ).rejects.toThrow('symlink failed');
+
+      // 验证失败后清理
+      expect(fsMock.rm).toHaveBeenCalledTimes(2);
+      expect(fsMock.rm).toHaveBeenLastCalledWith(
+        '/project/3rdParty/libtest',
+        { recursive: true, force: true }
+      );
+    });
+
+    it('should handle empty platforms array', async () => {
+      const { linkLib } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.symlink.mockResolvedValue(undefined);
+      copyDirMock.mockResolvedValue(undefined);
+
+      // 空平台列表应该正常执行（只复制 _shared）
+      await expect(
+        linkLib(
+          '/project/3rdParty/libtest',
+          '/store/libtest/abc123',
+          []
+        )
+      ).resolves.not.toThrow();
+
+      // 无平台，不创建符号链接
+      expect(fsMock.symlink).not.toHaveBeenCalled();
+      // 仍然复制 _shared
+      expect(copyDirMock).toHaveBeenCalled();
+    });
+  });
+
   describe('getPathStatus', () => {
     it('should return linked for correct symlink', async () => {
       const { getPathStatus } = await import('../../src/core/linker.js');

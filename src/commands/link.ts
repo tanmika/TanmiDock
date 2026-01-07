@@ -188,25 +188,31 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
       const primaryPlatform = platforms[0];
       const primaryStorePath = store.getLibraryPath(storePath, dependency.libName, dependency.commit, primaryPlatform);
 
+      // 检查 Store 版本兼容性（v0.5 旧结构会报错）
+      await store.ensureCompatibleStore(storePath, dependency.libName, dependency.commit);
+
       switch (status) {
         case DependencyStatus.LINKED:
           // 已链接，跳过
           break;
 
-        case DependencyStatus.RELINK:
-          // 重建链接（使用 linkLibrary 支持多平台）
+        case DependencyStatus.RELINK: {
+          // 重建链接（Store 已有，直接 linkLib）
+          const relinkCommitPath = path.join(storePath, dependency.libName, dependency.commit);
           tx.recordOp('unlink', localPath);
           await linker.unlink(localPath);
-          tx.recordOp('link', localPath, primaryStorePath);
-          await linker.linkLibrary(localPath, storePath, dependency.libName, dependency.commit, platforms);
+          tx.recordOp('link', localPath, relinkCommitPath);
+          await linker.linkLib(localPath, relinkCommitPath, platforms);
           success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接 [${platforms.join(', ')}]`);
           break;
+        }
 
         case DependencyStatus.REPLACE: {
-          // 删除目录，创建链接
+          // Store 已有，删除本地目录，直接 linkLib
           const replaceSize = await getDirSize(localPath);
-          tx.recordOp('replace', localPath, primaryStorePath);
-          await linker.linkLibrary(localPath, storePath, dependency.libName, dependency.commit, platforms);
+          const replaceCommitPath = path.join(storePath, dependency.libName, dependency.commit);
+          tx.recordOp('replace', localPath, replaceCommitPath);
+          await linker.linkLib(localPath, replaceCommitPath, platforms);
           savedBytes += replaceSize;
           success(
             `${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接 [${platforms.join(', ')}]`
@@ -215,25 +221,37 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
         }
 
         case DependencyStatus.ABSORB: {
-          // 移入 Store（吸收到主平台）
+          // 移入 Store（吸收本地目录所有平台内容）
           const absorbSize = await getDirSize(localPath);
-          tx.recordOp('absorb', localPath, primaryStorePath);
-          await store.absorb(localPath, dependency.libName, dependency.commit, primaryPlatform);
-          tx.recordOp('link', localPath, primaryStorePath);
-          await linker.linkLibrary(localPath, storePath, dependency.libName, dependency.commit, [primaryPlatform]);
-          // 添加库到注册表
-          registry.addLibrary({
-            libName: dependency.libName,
-            commit: dependency.commit,
-            branch: dependency.branch,
-            url: dependency.url,
-            platforms: [primaryPlatform],
-            size: absorbSize,
-            referencedBy: [],
-            createdAt: new Date().toISOString(),
-            lastAccess: new Date().toISOString(),
-          });
-          hint(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 本地已有，移入 Store [${primaryPlatform}]`);
+          const storeCommitPath = path.join(storePath, dependency.libName, dependency.commit);
+          tx.recordOp('absorb', localPath, storeCommitPath);
+          const absorbResult = await store.absorbLib(
+            localPath,
+            platforms,
+            dependency.libName,
+            dependency.commit
+          );
+          // 获取实际吸收的平台
+          const absorbedPlatforms = Object.keys(absorbResult.platformPaths);
+          if (absorbedPlatforms.length > 0) {
+            tx.recordOp('link', localPath, storeCommitPath);
+            await linker.linkLib(localPath, storeCommitPath, absorbedPlatforms);
+            // 添加库到注册表
+            registry.addLibrary({
+              libName: dependency.libName,
+              commit: dependency.commit,
+              branch: dependency.branch,
+              url: dependency.url,
+              platforms: absorbedPlatforms,
+              size: absorbSize,
+              referencedBy: [],
+              createdAt: new Date().toISOString(),
+              lastAccess: new Date().toISOString(),
+            });
+            hint(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 本地已有，移入 Store [${absorbedPlatforms.join(', ')}]`);
+          } else {
+            warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 本地目录不含任何平台内容，跳过`);
+          }
           break;
         }
 
@@ -241,12 +259,14 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
           // 跳过，后续并行处理
           break;
 
-        case DependencyStatus.LINK_NEW:
-          // Store 有，项目没有，创建链接
-          tx.recordOp('link', localPath, primaryStorePath);
-          await linker.linkLibrary(localPath, storePath, dependency.libName, dependency.commit, platforms);
+        case DependencyStatus.LINK_NEW: {
+          // Store 已有，本地无，直接 linkLib
+          const linkNewCommitPath = path.join(storePath, dependency.libName, dependency.commit);
+          tx.recordOp('link', localPath, linkNewCommitPath);
+          await linker.linkLib(localPath, linkNewCommitPath, platforms);
           success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 创建链接 [${platforms.join(', ')}]`);
           break;
+        }
       }
       // 保存事务进度
       await tx.save();
@@ -283,89 +303,90 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
       }
 
       if (toDownload.length > 0) {
-        const totalDownloads = toDownload.length * platforms.length;
-        info(`开始并行下载 ${toDownload.length} 个库 × ${platforms.length} 个平台 (最多 3 个并发)...`);
+        info(`开始并行下载 ${toDownload.length} 个库 (最多 3 个并发)...`);
         blank();
 
         // 并行控制器，最多同时 3 个下载
         const downloadLimit = pLimit(3);
 
-        // 为每个库下载所有选中的平台
+        // 为每个库下载所有选中的平台（使用 downloadToTemp + absorbLib + linkLib 新流程）
         const downloadTasks = toDownload.map((item) =>
           downloadLimit(async () => {
             const { dependency, localPath } = item;
-            const downloadedPlatforms: string[] = [];
-            const skippedPlatforms: string[] = [];
 
             try {
               info(`下载 ${dependency.libName} [${platforms.join(', ')}]...`);
 
-              // 依次下载每个平台
-              for (const platform of platforms) {
-                const storeLibPath = store.getLibraryPath(storePath, dependency.libName, dependency.commit, platform);
-                tx.recordOp('download', storeLibPath);
-
-                await codepac.installSingle({
-                  url: dependency.url,
-                  commit: dependency.commit,
-                  branch: dependency.branch,
-                  targetDir: storeLibPath,
-                  platform: platform,
-                  sparse: dependency.sparse,
-                });
-
-                // 验证平台目录是否有有效内容
-                const isValid = await store.validatePlatform(dependency.libName, dependency.commit, platform);
-                if (!isValid) {
-                  await store.remove(dependency.libName, dependency.commit, platform);
-                  skippedPlatforms.push(platform);
-                } else {
-                  downloadedPlatforms.push(platform);
-                }
-              }
-
-              // 如果没有任何平台下载成功，视为失败
-              if (downloadedPlatforms.length === 0) {
-                return {
-                  success: false,
-                  name: dependency.libName,
-                  skipped: true,
-                  skippedPlatforms,
-                };
-              }
-
-              // 使用 linkLibrary 创建链接（支持多平台）
-              const primaryStorePath = store.getLibraryPath(storePath, dependency.libName, dependency.commit, downloadedPlatforms[0]);
-              tx.recordOp('link', localPath, primaryStorePath);
-              await linker.linkLibrary(localPath, storePath, dependency.libName, dependency.commit, downloadedPlatforms);
-
-              // 计算总大小
-              let totalSize = 0;
-              for (const platform of downloadedPlatforms) {
-                totalSize += await store.getSize(dependency.libName, dependency.commit, platform);
-              }
-
-              registry.addLibrary({
-                libName: dependency.libName,
+              // 1. 调用 downloadToTemp 一次性下载所有平台
+              const downloadResult = await codepac.downloadToTemp({
+                url: dependency.url,
                 commit: dependency.commit,
                 branch: dependency.branch,
-                url: dependency.url,
-                platforms: downloadedPlatforms,
-                size: totalSize,
-                referencedBy: [],
-                createdAt: new Date().toISOString(),
-                lastAccess: new Date().toISOString(),
+                libName: dependency.libName,
+                platforms,
+                sparse: dependency.sparse,
               });
-              const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
-              registry.addReference(libKey, projectHash);
-              success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 下载完成 [${downloadedPlatforms.join(', ')}]`);
 
-              return {
-                success: true,
-                name: dependency.libName,
-                downloadedPlatforms,
-                skippedPlatforms,
-              };
+              try {
+                // 2. 调用 absorbLib 将临时目录内容移入 Store
+                const storeCommitPath = path.join(storePath, dependency.libName, dependency.commit);
+                tx.recordOp('absorb', downloadResult.libDir, storeCommitPath);
+                const absorbResult = await store.absorbLib(
+                  downloadResult.libDir,
+                  downloadResult.platformDirs,
+                  dependency.libName,
+                  dependency.commit
+                );
+
+                // 获取实际吸收的平台
+                const absorbedPlatforms = Object.keys(absorbResult.platformPaths);
+                if (absorbedPlatforms.length === 0) {
+                  return {
+                    success: false,
+                    name: dependency.libName,
+                    skipped: true,
+                    skippedPlatforms: platforms,
+                  };
+                }
+
+                // 3. 调用 linkLib 创建符号链接并复制共享文件
+                tx.recordOp('link', localPath, storeCommitPath);
+                await linker.linkLib(localPath, storeCommitPath, absorbedPlatforms);
+
+                // 计算总大小
+                let totalSize = 0;
+                for (const platform of absorbedPlatforms) {
+                  totalSize += await store.getSize(dependency.libName, dependency.commit, platform);
+                }
+
+                registry.addLibrary({
+                  libName: dependency.libName,
+                  commit: dependency.commit,
+                  branch: dependency.branch,
+                  url: dependency.url,
+                  platforms: absorbedPlatforms,
+                  size: totalSize,
+                  referencedBy: [],
+                  createdAt: new Date().toISOString(),
+                  lastAccess: new Date().toISOString(),
+                });
+                const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+                registry.addReference(libKey, projectHash);
+
+                // 计算跳过的平台
+                const skippedPlatforms = platforms.filter((p) => !absorbedPlatforms.includes(p));
+                success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 下载完成 [${absorbedPlatforms.join(', ')}]`);
+
+                return {
+                  success: true,
+                  name: dependency.libName,
+                  downloadedPlatforms: absorbedPlatforms,
+                  skippedPlatforms,
+                };
+              } finally {
+                // 4. 清理临时目录（无论成功还是失败）
+                await fs.rm(downloadResult.tempDir, { recursive: true, force: true }).catch(() => {});
+              }
             } catch (err) {
               error(`${dependency.libName} 下载失败: ${(err as Error).message}`);
               return { success: false, name: dependency.libName, error: (err as Error).message };

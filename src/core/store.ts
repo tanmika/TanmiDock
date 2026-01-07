@@ -7,6 +7,23 @@ import path from 'path';
 import * as config from './config.js';
 import { withFileLock } from '../utils/lock.js';
 import { copyDir, getDirSize } from '../utils/fs-utils.js';
+import { KNOWN_PLATFORM_VALUES } from './platform.js';
+
+/**
+ * Store 版本类型
+ * - v0.5: 旧版结构，双层平台目录
+ * - v0.6: 新版结构，单层平台目录 + _shared
+ * - unknown: 未知或空目录
+ */
+export type StoreVersion = 'v0.5' | 'v0.6' | 'unknown';
+
+/**
+ * absorbLib 返回结果
+ */
+export interface AbsorbResult {
+  platformPaths: Record<string, string>;  // { macOS: "Store/.../macOS", android: "..." }
+  sharedPath: string;                     // Store/.../_shared
+}
 
 /**
  * 获取库在 Store 中的路径
@@ -55,6 +72,7 @@ export async function getPath(libName: string, commit: string, platform: string)
 }
 
 /**
+ * @deprecated 使用 absorbLib 替代
  * 将本地库目录移入 Store (absorb)
  * 使用原子重命名 + 错误处理，避免 TOCTOU 竞态条件
  * @param sourcePath 源目录路径
@@ -87,6 +105,81 @@ export async function absorb(sourcePath: string, libName: string, commit: string
 }
 
 /**
+ * 将库目录吸收到 Store 中（新版多平台支持）
+ *
+ * 遍历 libDir 内容，根据 KNOWN_PLATFORM_VALUES 判断:
+ * - 平台目录 → 移动到 Store/.../平台名/
+ * - 共享内容 → 移动到 Store/.../_shared/
+ *
+ * @param libDir 源库目录路径 (tempDir/libName 或 3rdParty/libXxx)
+ * @param platforms 要吸收的平台目录名列表
+ * @param libName 库名
+ * @param commit commit hash
+ * @returns AbsorbResult 包含 platformPaths 和 sharedPath
+ */
+export async function absorbLib(
+  libDir: string,
+  platforms: string[],
+  libName: string,
+  commit: string
+): Promise<AbsorbResult> {
+  const storePath = await getStorePath();
+  const baseDir = path.join(storePath, libName, commit);
+  const sharedPath = path.join(baseDir, '_shared');
+
+  // 确保基础目录和 _shared 目录存在
+  await fs.mkdir(baseDir, { recursive: true });
+  await fs.mkdir(sharedPath, { recursive: true });
+
+  const platformPaths: Record<string, string> = {};
+
+  // 读取 libDir 内容
+  const entries = await fs.readdir(libDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const sourcePath = path.join(libDir, entry.name);
+
+    if (entry.isDirectory() && KNOWN_PLATFORM_VALUES.includes(entry.name)) {
+      // 平台目录: 只移动用户选择的平台
+      if (platforms.includes(entry.name)) {
+        const targetPath = path.join(baseDir, entry.name);
+
+        try {
+          await fs.rename(sourcePath, targetPath);
+          platformPaths[entry.name] = targetPath;
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === 'ENOTEMPTY' || code === 'EEXIST') {
+            throw new Error(`平台目录已存在于 Store 中: ${libName}@${commit.slice(0, 7)}/${entry.name}`);
+          }
+          throw err;
+        }
+      }
+      // 非选择的平台目录不移动，保留在原位置
+    } else {
+      // 共享文件/目录: 移动到 _shared
+      const targetPath = path.join(sharedPath, entry.name);
+
+      try {
+        await fs.rename(sourcePath, targetPath);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOTEMPTY' || code === 'EEXIST') {
+          throw new Error(`共享文件已存在于 Store 中: ${libName}@${commit.slice(0, 7)}/_shared/${entry.name}`);
+        }
+        throw err;
+      }
+    }
+  }
+
+  return {
+    platformPaths,
+    sharedPath,
+  };
+}
+
+/**
+ * @deprecated 不再需要，使用 absorbLib 替代
  * 复制库到 Store（不删除源目录）
  * 使用文件锁保护检查-创建操作，避免 TOCTOU 竞态条件
  */
@@ -236,12 +329,105 @@ export async function ensureStoreDir(): Promise<void> {
   await fs.mkdir(storePath, { recursive: true });
 }
 
+/**
+ * 获取 commit 路径（辅助函数）
+ * @param storePath Store 根目录路径
+ * @param libName 库名
+ * @param commit commit hash
+ * @returns commit 目录路径
+ */
+export function getCommitPath(storePath: string, libName: string, commit: string): string {
+  return path.join(storePath, libName, commit);
+}
+
+/**
+ * 检测 Store 版本
+ *
+ * 检测逻辑:
+ * - 存在 _shared 目录 → v0.6
+ * - 存在双层平台目录 (platform/platform) → v0.5
+ * - 其他情况 → unknown
+ *
+ * @param commitPath commit 目录路径
+ * @returns Store 版本
+ */
+export async function detectStoreVersion(commitPath: string): Promise<StoreVersion> {
+  // 检查目录是否存在
+  try {
+    await fs.access(commitPath);
+  } catch {
+    return 'unknown';
+  }
+
+  // 检查 _shared 目录 → v0.6
+  const sharedPath = path.join(commitPath, '_shared');
+  try {
+    await fs.access(sharedPath);
+    return 'v0.6';
+  } catch {
+    // _shared 不存在，继续检查
+  }
+
+  // 检查是否有双层平台目录 → v0.5
+  for (const platform of KNOWN_PLATFORM_VALUES) {
+    const innerPath = path.join(commitPath, platform, platform);
+    try {
+      await fs.access(innerPath);
+      return 'v0.5';
+    } catch {
+      // 继续检查下一个平台
+    }
+  }
+
+  return 'unknown';
+}
+
+/**
+ * 确保 Store 兼容性
+ *
+ * 检测指定库的 Store 版本，如果是 v0.5 旧版结构则抛出错误，
+ * 提示用户删除后重新 link。
+ *
+ * @param storePath Store 根目录路径
+ * @param libName 库名
+ * @param commit commit hash
+ * @throws Error 当检测到 v0.5 旧版结构时
+ */
+export async function ensureCompatibleStore(
+  storePath: string,
+  libName: string,
+  commit: string
+): Promise<void> {
+  const commitPath = getCommitPath(storePath, libName, commit);
+
+  // 检查目录是否存在
+  try {
+    await fs.access(commitPath);
+  } catch {
+    // 目录不存在，新库无需检测
+    return;
+  }
+
+  const version = await detectStoreVersion(commitPath);
+
+  if (version === 'v0.5') {
+    throw new Error(
+      `Store 结构不兼容 (v0.5)\n` +
+      `库: ${libName}@${commit.slice(0, 7)}\n` +
+      `请删除后重新 link:\n` +
+      `  rm -rf "${commitPath}"\n` +
+      `  tanmi-dock link`
+    );
+  }
+}
+
 export default {
   getLibraryPath,
   getStorePath,
   exists,
   getPath,
   absorb,
+  absorbLib,
   copy,
   remove,
   getSize,
@@ -249,4 +435,7 @@ export default {
   listLibraries,
   validatePlatform,
   ensureStoreDir,
+  getCommitPath,
+  detectStoreVersion,
+  ensureCompatibleStore,
 };

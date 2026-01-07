@@ -190,6 +190,175 @@ describe('store', () => {
     });
   });
 
+  describe('absorbLib', () => {
+    it('should move platform directories to Store', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.rename.mockResolvedValue(undefined);
+
+      // Mock readdir 返回平台目录和共享文件
+      fsMock.readdir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'Win', isDirectory: () => true },
+        { name: 'CMakeLists.txt', isDirectory: () => false },
+      ]);
+
+      const { absorbLib } = await import('../../src/core/store.js');
+      const result = await absorbLib('/tmp/libtest', ['macOS', 'Win'], 'libtest', 'abc123');
+
+      // 验证平台目录移动
+      expect(result.platformPaths['macOS']).toBe(path.join('/store', 'libtest', 'abc123', 'macOS'));
+      expect(result.platformPaths['Win']).toBe(path.join('/store', 'libtest', 'abc123', 'Win'));
+
+      // 验证 rename 被调用
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        '/tmp/libtest/macOS',
+        path.join('/store', 'libtest', 'abc123', 'macOS')
+      );
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        '/tmp/libtest/Win',
+        path.join('/store', 'libtest', 'abc123', 'Win')
+      );
+    });
+
+    it('should move shared files to _shared directory', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.rename.mockResolvedValue(undefined);
+
+      // Mock readdir 返回平台目录和共享文件
+      fsMock.readdir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'CMakeLists.txt', isDirectory: () => false },
+        { name: 'include', isDirectory: () => true },
+        { name: 'README.md', isDirectory: () => false },
+      ]);
+
+      const { absorbLib } = await import('../../src/core/store.js');
+      const result = await absorbLib('/tmp/libtest', ['macOS'], 'libtest', 'abc123');
+
+      // 验证 sharedPath
+      expect(result.sharedPath).toBe(path.join('/store', 'libtest', 'abc123', '_shared'));
+
+      // 验证共享文件被移动到 _shared
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        '/tmp/libtest/CMakeLists.txt',
+        path.join('/store', 'libtest', 'abc123', '_shared', 'CMakeLists.txt')
+      );
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        '/tmp/libtest/include',
+        path.join('/store', 'libtest', 'abc123', '_shared', 'include')
+      );
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        '/tmp/libtest/README.md',
+        path.join('/store', 'libtest', 'abc123', '_shared', 'README.md')
+      );
+    });
+
+    it('should only move selected platforms', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.rename.mockResolvedValue(undefined);
+
+      // Mock readdir 返回多个平台目录
+      fsMock.readdir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'macOS-asan', isDirectory: () => true },
+        { name: 'Win', isDirectory: () => true },
+        { name: 'iOS', isDirectory: () => true },
+      ]);
+
+      const { absorbLib } = await import('../../src/core/store.js');
+      const result = await absorbLib('/tmp/libtest', ['macOS'], 'libtest', 'abc123');
+
+      // 验证只有选择的平台被移动
+      expect(result.platformPaths['macOS']).toBeDefined();
+      expect(result.platformPaths['Win']).toBeUndefined();
+      expect(result.platformPaths['iOS']).toBeUndefined();
+      expect(result.platformPaths['macOS-asan']).toBeUndefined();
+
+      // 验证只调用了一次平台 rename（macOS）
+      const renameCalls = fsMock.rename.mock.calls.filter(
+        (call: string[]) => call[0].includes('macOS') && !call[0].includes('_shared')
+      );
+      expect(renameCalls).toHaveLength(1);
+    });
+
+    it('should throw when platform directory already exists (ENOTEMPTY)', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+
+      fsMock.readdir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+      ]);
+
+      const err = new Error('ENOTEMPTY') as NodeJS.ErrnoException;
+      err.code = 'ENOTEMPTY';
+      fsMock.rename.mockRejectedValue(err);
+
+      const { absorbLib } = await import('../../src/core/store.js');
+
+      await expect(
+        absorbLib('/tmp/libtest', ['macOS'], 'libtest', 'abc123')
+      ).rejects.toThrow('平台目录已存在于 Store 中');
+    });
+
+    it('should throw when shared file already exists (EEXIST)', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+
+      fsMock.readdir.mockResolvedValue([
+        { name: 'README.md', isDirectory: () => false },
+      ]);
+
+      const err = new Error('EEXIST') as NodeJS.ErrnoException;
+      err.code = 'EEXIST';
+      fsMock.rename.mockRejectedValue(err);
+
+      const { absorbLib } = await import('../../src/core/store.js');
+
+      await expect(
+        absorbLib('/tmp/libtest', [], 'libtest', 'abc123')
+      ).rejects.toThrow('共享文件已存在于 Store 中');
+    });
+
+    it('should create base directory and _shared directory', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.rename.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue([]);
+
+      const { absorbLib } = await import('../../src/core/store.js');
+      await absorbLib('/tmp/libtest', [], 'libtest', 'abc123');
+
+      // 验证基础目录和 _shared 目录被创建
+      expect(fsMock.mkdir).toHaveBeenCalledWith(
+        path.join('/store', 'libtest', 'abc123'),
+        { recursive: true }
+      );
+      expect(fsMock.mkdir).toHaveBeenCalledWith(
+        path.join('/store', 'libtest', 'abc123', '_shared'),
+        { recursive: true }
+      );
+    });
+
+    it('should handle empty library directory (no shared files)', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.rename.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+      ]);
+
+      const { absorbLib } = await import('../../src/core/store.js');
+      const result = await absorbLib('/tmp/libtest', ['macOS'], 'libtest', 'abc123');
+
+      // 验证 _shared 目录仍然存在（即使为空）
+      expect(result.sharedPath).toBe(path.join('/store', 'libtest', 'abc123', '_shared'));
+      expect(result.platformPaths['macOS']).toBeDefined();
+    });
+  });
+
   describe('remove', () => {
     it('should remove library directory with platform', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
@@ -337,6 +506,129 @@ describe('store', () => {
       await ensureStoreDir();
 
       expect(fsMock.mkdir).toHaveBeenCalledWith('/store', { recursive: true });
+    });
+  });
+
+  describe('getCommitPath', () => {
+    it('should return correct commit path', async () => {
+      const { getCommitPath } = await import('../../src/core/store.js');
+      const result = getCommitPath('/store', 'mylib', 'abc123');
+
+      expect(result).toBe(path.join('/store', 'mylib', 'abc123'));
+    });
+  });
+
+  describe('detectStoreVersion', () => {
+    it('should return v0.6 when _shared directory exists', async () => {
+      fsMock.access.mockImplementation((p: string) => {
+        // commitPath 存在
+        if (p === '/store/mylib/abc123') return Promise.resolve();
+        // _shared 存在
+        if (p.endsWith('_shared')) return Promise.resolve();
+        return Promise.reject(new Error('ENOENT'));
+      });
+
+      const { detectStoreVersion } = await import('../../src/core/store.js');
+      const result = await detectStoreVersion('/store/mylib/abc123');
+
+      expect(result).toBe('v0.6');
+    });
+
+    it('should return v0.5 when double-layer platform directory exists', async () => {
+      fsMock.access.mockImplementation((p: string) => {
+        // commitPath 存在
+        if (p === '/store/mylib/abc123') return Promise.resolve();
+        // _shared 不存在
+        if (p.endsWith('_shared')) return Promise.reject(new Error('ENOENT'));
+        // macOS/macOS 存在 (双层目录)
+        if (p.endsWith(path.join('macOS', 'macOS'))) return Promise.resolve();
+        return Promise.reject(new Error('ENOENT'));
+      });
+
+      const { detectStoreVersion } = await import('../../src/core/store.js');
+      const result = await detectStoreVersion('/store/mylib/abc123');
+
+      expect(result).toBe('v0.5');
+    });
+
+    it('should return unknown when commit directory does not exist', async () => {
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+
+      const { detectStoreVersion } = await import('../../src/core/store.js');
+      const result = await detectStoreVersion('/store/mylib/abc123');
+
+      expect(result).toBe('unknown');
+    });
+
+    it('should return unknown when neither v0.5 nor v0.6 structure detected', async () => {
+      fsMock.access.mockImplementation((p: string) => {
+        // commitPath 存在
+        if (p === '/store/mylib/abc123') return Promise.resolve();
+        // 其他都不存在
+        return Promise.reject(new Error('ENOENT'));
+      });
+
+      const { detectStoreVersion } = await import('../../src/core/store.js');
+      const result = await detectStoreVersion('/store/mylib/abc123');
+
+      expect(result).toBe('unknown');
+    });
+  });
+
+  describe('ensureCompatibleStore', () => {
+    it('should pass when commit directory does not exist', async () => {
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+
+      const { ensureCompatibleStore } = await import('../../src/core/store.js');
+
+      // 不应该抛出错误
+      await expect(ensureCompatibleStore('/store', 'mylib', 'abc123')).resolves.toBeUndefined();
+    });
+
+    it('should pass when v0.6 structure detected', async () => {
+      fsMock.access.mockImplementation((p: string) => {
+        if (p.endsWith('_shared')) return Promise.resolve();
+        return Promise.resolve(); // commit 目录存在
+      });
+
+      const { ensureCompatibleStore } = await import('../../src/core/store.js');
+
+      await expect(ensureCompatibleStore('/store', 'mylib', 'abc123')).resolves.toBeUndefined();
+    });
+
+    it('should throw when v0.5 structure detected', async () => {
+      fsMock.access.mockImplementation((p: string) => {
+        // commit 目录存在
+        if (p === path.join('/store', 'mylib', 'abc123')) return Promise.resolve();
+        // _shared 不存在
+        if (p.endsWith('_shared')) return Promise.reject(new Error('ENOENT'));
+        // macOS/macOS 存在 (双层目录)
+        if (p.endsWith(path.join('macOS', 'macOS'))) return Promise.resolve();
+        return Promise.reject(new Error('ENOENT'));
+      });
+
+      const { ensureCompatibleStore } = await import('../../src/core/store.js');
+
+      await expect(ensureCompatibleStore('/store', 'mylib', 'abc123')).rejects.toThrow('Store 结构不兼容');
+    });
+
+    it('should include delete command hint in error message', async () => {
+      fsMock.access.mockImplementation((p: string) => {
+        if (p === path.join('/store', 'mylib', 'abc123')) return Promise.resolve();
+        if (p.endsWith('_shared')) return Promise.reject(new Error('ENOENT'));
+        if (p.endsWith(path.join('macOS', 'macOS'))) return Promise.resolve();
+        return Promise.reject(new Error('ENOENT'));
+      });
+
+      const { ensureCompatibleStore } = await import('../../src/core/store.js');
+
+      try {
+        await ensureCompatibleStore('/store', 'mylib', 'abc123');
+        expect.fail('Should have thrown');
+      } catch (err) {
+        expect((err as Error).message).toContain('rm -rf');
+        expect((err as Error).message).toContain('tanmi-dock link');
+      }
     });
   });
 });

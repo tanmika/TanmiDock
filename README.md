@@ -256,20 +256,37 @@ tanmi-dock repair [options]
 
 ## 目录结构
 
+### Store 结构 (v0.6.0+)
+
 ```
 Store/
-├── lib-name-1/
-│   └── abc1234/           # commit hash
-│       ├── macOS/         # macOS 平台内容
-│       ├── iOS/           # iOS 平台内容
-│       └── android/       # Android 平台内容
-└── lib-name-2/
-    └── def5678/
-        ├── macOS/
-        └── Win/
+└── libImageCodec/
+    └── 38648c31/
+        ├── macOS/        # 平台特定内容
+        ├── iOS/
+        ├── android/
+        └── _shared/      # 共享文件
+            ├── codepac-dep.json
+            ├── *.cmake
+            └── README.md
 ```
 
-> **说明**: 每个库按 `库名/commit/平台` 的结构存储，支持同一库多平台共存。
+**平台目录识别规则**: macOS, macOS-asan, Win, iOS, iOS-asan, android, android-asan, android-hwasan, ubuntu, wasm, ohos
+
+其他文件/目录都归入 `_shared/`。
+
+### 链接后的项目结构
+
+```
+3rdParty/libImageCodec/
+├── macOS/      → Store/.../macOS/  (符号链接)
+├── iOS/        → Store/.../iOS/    (符号链接)
+├── codepac-dep.json                (复制)
+└── *.cmake                         (复制)
+```
+
+- **平台目录**: 符号链接到 Store，节省空间
+- **共享文件**: 物理复制，避免多项目冲突
 
 ## 开发
 
