@@ -13,7 +13,7 @@ let mockExecShouldFail = false;
 
 // Mock child_process
 vi.mock('child_process', () => ({
-  exec: vi.fn((_cmd: string, _opts: unknown, callback?: Function) => {
+  exec: vi.fn((_cmd: string, _opts: unknown, callback?: (...args: unknown[]) => void) => {
     if (callback) {
       if (mockExecShouldFail) {
         callback(new Error('command not found'), '', 'codepac: command not found');

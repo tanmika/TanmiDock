@@ -21,8 +21,17 @@ export type StoreVersion = 'v0.5' | 'v0.6' | 'unknown';
  * absorbLib 返回结果
  */
 export interface AbsorbResult {
-  platformPaths: Record<string, string>;  // { macOS: "Store/.../macOS", android: "..." }
+  platformPaths: Record<string, string>;  // { macOS: "Store/.../macOS", android: "..." } 新增的平台
   sharedPath: string;                     // Store/.../_shared
+  skippedPlatforms: string[];             // 已存在而跳过的平台
+}
+
+/**
+ * 平台完整性检查结果
+ */
+export interface PlatformCompletenessResult {
+  existing: string[];   // Store 中已有的平台
+  missing: string[];    // Store 中缺失的平台
 }
 
 /**
@@ -132,6 +141,7 @@ export async function absorbLib(
   await fs.mkdir(sharedPath, { recursive: true });
 
   const platformPaths: Record<string, string> = {};
+  const skippedPlatforms: string[] = [];
 
   // 读取 libDir 内容
   const entries = await fs.readdir(libDir, { withFileTypes: true });
@@ -144,13 +154,25 @@ export async function absorbLib(
       if (platforms.includes(entry.name)) {
         const targetPath = path.join(baseDir, entry.name);
 
+        // 检查目标目录是否已存在
+        try {
+          await fs.access(targetPath);
+          // 已存在，跳过移动
+          skippedPlatforms.push(entry.name);
+          continue;
+        } catch {
+          // 不存在，继续移动
+        }
+
         try {
           await fs.rename(sourcePath, targetPath);
           platformPaths[entry.name] = targetPath;
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
           if (code === 'ENOTEMPTY' || code === 'EEXIST') {
-            throw new Error(`平台目录已存在于 Store 中: ${libName}@${commit.slice(0, 7)}/${entry.name}`);
+            // 竞态条件：检查时不存在，移动时已存在，跳过
+            skippedPlatforms.push(entry.name);
+            continue;
           }
           throw err;
         }
@@ -160,12 +182,22 @@ export async function absorbLib(
       // 共享文件/目录: 移动到 _shared
       const targetPath = path.join(sharedPath, entry.name);
 
+      // 检查目标是否已存在
+      try {
+        await fs.access(targetPath);
+        // 已存在，跳过移动
+        continue;
+      } catch {
+        // 不存在，继续移动
+      }
+
       try {
         await fs.rename(sourcePath, targetPath);
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
         if (code === 'ENOTEMPTY' || code === 'EEXIST') {
-          throw new Error(`共享文件已存在于 Store 中: ${libName}@${commit.slice(0, 7)}/_shared/${entry.name}`);
+          // 竞态条件：检查时不存在，移动时已存在，跳过
+          continue;
         }
         throw err;
       }
@@ -175,6 +207,7 @@ export async function absorbLib(
   return {
     platformPaths,
     sharedPath,
+    skippedPlatforms,
   };
 }
 
@@ -421,6 +454,46 @@ export async function ensureCompatibleStore(
   }
 }
 
+/**
+ * 检查 Store 中指定 lib/commit 的平台完整性
+ *
+ * 遍历请求的平台数组，检查每个平台目录是否存在于 Store 中，
+ * 返回已存在和缺失的平台列表。
+ *
+ * @param libName 库名
+ * @param commit commit hash
+ * @param platforms 要检查的平台列表
+ * @returns PlatformCompletenessResult 包含 existing 和 missing 数组
+ */
+export async function checkPlatformCompleteness(
+  libName: string,
+  commit: string,
+  platforms: string[]
+): Promise<PlatformCompletenessResult> {
+  // 空数组直接返回
+  if (platforms.length === 0) {
+    return { existing: [], missing: [] };
+  }
+
+  const storePath = await getStorePath();
+  const commitPath = getCommitPath(storePath, libName, commit);
+
+  const existing: string[] = [];
+  const missing: string[] = [];
+
+  for (const platform of platforms) {
+    const platformPath = path.join(commitPath, platform);
+    try {
+      await fs.access(platformPath);
+      existing.push(platform);
+    } catch {
+      missing.push(platform);
+    }
+  }
+
+  return { existing, missing };
+}
+
 export default {
   getLibraryPath,
   getStorePath,
@@ -438,4 +511,5 @@ export default {
   getCommitPath,
   detectStoreVersion,
   ensureCompatibleStore,
+  checkPlatformCompleteness,
 };

@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import { isCodepacInstalled } from '../core/codepac.js';
 import { getDiskInfo, formatSize } from '../utils/disk.js';
 import * as config from '../core/config.js';
-import { info, warn, error, success, blank, title } from '../utils/logger.js';
+import { warn, error, success, blank, title } from '../utils/logger.js';
 
 interface CheckResult {
   name: string;

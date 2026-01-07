@@ -61,6 +61,21 @@ export function getAllPlatformKeys(): string[] {
 }
 
 /**
+ * 生成平台帮助文本
+ * 格式: key.padEnd(10) + ' -> ' + value (包含 asan/hwasan 变体)
+ */
+export function getPlatformHelpText(): string {
+  const lines = ['\nPlatforms:'];
+  for (const opt of PLATFORM_OPTIONS) {
+    const values = [opt.value];
+    if (opt.asan) values.push(opt.asan);
+    if (opt.hwasan) values.push(opt.hwasan);
+    lines.push(`  ${opt.key.padEnd(10)} -> ${values.join(', ')}`);
+  }
+  return lines.join('\n');
+}
+
+/**
  * 已知平台目录名列表 (用于多平台链接时识别平台子目录)
  */
 export const KNOWN_PLATFORM_VALUES: string[] = [

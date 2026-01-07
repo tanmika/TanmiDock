@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0-beta.3] - 2026-01-07
+
+### Fixed
+
+- **P0**: unlink 正确清理所有平台的 StoreEntry 引用（遍历 projectInfo.platforms）
+- **P2**: MISSING 场景添加 checkPlatformCompleteness 检查，避免重复下载已存在平台
+
+### Added
+
+- `checkPlatformCompleteness()` - 检查 Store 中平台完整性
+- `getPlatformHelpText()` - 生成平台帮助信息表格
+- absorbLib 返回 `skippedPlatforms` 标识已存在而跳过的平台
+- ABSORB 场景支持询问是否吸收额外平台
+- registry 新增 `getProjectStoreKeys()` 方法
+
+### Changed
+
+- link 命令帮助信息显示平台映射表
+- MISSING/LINK_NEW 场景使用 existing + missing 组合链接
+
+### Tests
+
+- 新增 store.checkPlatformCompleteness 测试用例
+- 新增 registry StoreEntry 引用管理测试
+
 ## [0.5.0] - 2026-01-07
 
 ### Breaking Changes

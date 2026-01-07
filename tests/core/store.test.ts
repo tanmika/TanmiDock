@@ -195,6 +195,8 @@ describe('store', () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.rename.mockResolvedValue(undefined);
+      // Mock access 抛出错误表示目录不存在
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
 
       // Mock readdir 返回平台目录和共享文件
       fsMock.readdir.mockResolvedValue([
@@ -209,6 +211,7 @@ describe('store', () => {
       // 验证平台目录移动
       expect(result.platformPaths['macOS']).toBe(path.join('/store', 'libtest', 'abc123', 'macOS'));
       expect(result.platformPaths['Win']).toBe(path.join('/store', 'libtest', 'abc123', 'Win'));
+      expect(result.skippedPlatforms).toEqual([]);
 
       // 验证 rename 被调用
       expect(fsMock.rename).toHaveBeenCalledWith(
@@ -225,6 +228,8 @@ describe('store', () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.rename.mockResolvedValue(undefined);
+      // Mock access 抛出错误表示目录/文件不存在
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
 
       // Mock readdir 返回平台目录和共享文件
       fsMock.readdir.mockResolvedValue([
@@ -259,6 +264,8 @@ describe('store', () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.rename.mockResolvedValue(undefined);
+      // Mock access 抛出错误表示目录不存在
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
 
       // Mock readdir 返回多个平台目录
       fsMock.readdir.mockResolvedValue([
@@ -284,42 +291,63 @@ describe('store', () => {
       expect(renameCalls).toHaveLength(1);
     });
 
-    it('should throw when platform directory already exists (ENOTEMPTY)', async () => {
+    it('should skip platform directory when already exists', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.mkdir.mockResolvedValue(undefined);
 
       fsMock.readdir.mockResolvedValue([
         { name: 'macOS', isDirectory: () => true },
+        { name: 'Win', isDirectory: () => true },
       ]);
 
-      const err = new Error('ENOTEMPTY') as NodeJS.ErrnoException;
-      err.code = 'ENOTEMPTY';
-      fsMock.rename.mockRejectedValue(err);
+      // Mock access: macOS 已存在，Win 不存在
+      fsMock.access.mockImplementation((targetPath: string) => {
+        if (targetPath.endsWith('macOS')) {
+          return Promise.resolve(); // 已存在
+        }
+        return Promise.reject(new Error('ENOENT')); // 不存在
+      });
+      fsMock.rename.mockResolvedValue(undefined);
 
       const { absorbLib } = await import('../../src/core/store.js');
+      const result = await absorbLib('/tmp/libtest', ['macOS', 'Win'], 'libtest', 'abc123');
 
-      await expect(
-        absorbLib('/tmp/libtest', ['macOS'], 'libtest', 'abc123')
-      ).rejects.toThrow('平台目录已存在于 Store 中');
+      // 验证 macOS 被跳过，Win 被移动
+      expect(result.skippedPlatforms).toEqual(['macOS']);
+      expect(result.platformPaths['macOS']).toBeUndefined();
+      expect(result.platformPaths['Win']).toBeDefined();
     });
 
-    it('should throw when shared file already exists (EEXIST)', async () => {
+    it('should skip shared file when already exists', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.mkdir.mockResolvedValue(undefined);
 
       fsMock.readdir.mockResolvedValue([
         { name: 'README.md', isDirectory: () => false },
+        { name: 'LICENSE', isDirectory: () => false },
       ]);
 
-      const err = new Error('EEXIST') as NodeJS.ErrnoException;
-      err.code = 'EEXIST';
-      fsMock.rename.mockRejectedValue(err);
+      // Mock access: README.md 已存在，LICENSE 不存在
+      fsMock.access.mockImplementation((targetPath: string) => {
+        if (targetPath.endsWith('README.md')) {
+          return Promise.resolve(); // 已存在
+        }
+        return Promise.reject(new Error('ENOENT')); // 不存在
+      });
+      fsMock.rename.mockResolvedValue(undefined);
 
       const { absorbLib } = await import('../../src/core/store.js');
+      await absorbLib('/tmp/libtest', [], 'libtest', 'abc123');
 
-      await expect(
-        absorbLib('/tmp/libtest', [], 'libtest', 'abc123')
-      ).rejects.toThrow('共享文件已存在于 Store 中');
+      // 验证只有 LICENSE 被移动（README.md 被跳过）
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        '/tmp/libtest/LICENSE',
+        path.join('/store', 'libtest', 'abc123', '_shared', 'LICENSE')
+      );
+      expect(fsMock.rename).not.toHaveBeenCalledWith(
+        '/tmp/libtest/README.md',
+        expect.anything()
+      );
     });
 
     it('should create base directory and _shared directory', async () => {
@@ -346,6 +374,8 @@ describe('store', () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.rename.mockResolvedValue(undefined);
+      // Mock access 抛出错误表示目录不存在
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
       fsMock.readdir.mockResolvedValue([
         { name: 'macOS', isDirectory: () => true },
       ]);
@@ -356,6 +386,7 @@ describe('store', () => {
       // 验证 _shared 目录仍然存在（即使为空）
       expect(result.sharedPath).toBe(path.join('/store', 'libtest', 'abc123', '_shared'));
       expect(result.platformPaths['macOS']).toBeDefined();
+      expect(result.skippedPlatforms).toEqual([]);
     });
   });
 
@@ -629,6 +660,73 @@ describe('store', () => {
         expect((err as Error).message).toContain('rm -rf');
         expect((err as Error).message).toContain('tanmi-dock link');
       }
+    });
+  });
+
+  describe('checkPlatformCompleteness', () => {
+    it('should return existing platforms when they exist in Store', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      // Mock access: macOS 存在，Win 存在
+      fsMock.access.mockResolvedValue(undefined);
+
+      const { checkPlatformCompleteness } = await import('../../src/core/store.js');
+      const result = await checkPlatformCompleteness('mylib', 'abc123', ['macOS', 'Win']);
+
+      expect(result.existing).toEqual(['macOS', 'Win']);
+      expect(result.missing).toEqual([]);
+    });
+
+    it('should return missing platforms when they do not exist in Store', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      // Mock access: 所有平台都不存在
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+
+      const { checkPlatformCompleteness } = await import('../../src/core/store.js');
+      const result = await checkPlatformCompleteness('mylib', 'abc123', ['macOS', 'Win']);
+
+      expect(result.existing).toEqual([]);
+      expect(result.missing).toEqual(['macOS', 'Win']);
+    });
+
+    it('should return empty arrays when platforms is empty', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+
+      const { checkPlatformCompleteness } = await import('../../src/core/store.js');
+      const result = await checkPlatformCompleteness('mylib', 'abc123', []);
+
+      expect(result.existing).toEqual([]);
+      expect(result.missing).toEqual([]);
+      // access 不应该被调用
+      expect(fsMock.access).not.toHaveBeenCalled();
+    });
+
+    it('should categorize mixed existing and missing platforms', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      // Mock access: macOS 存在，Win 不存在，iOS 存在
+      fsMock.access.mockImplementation((targetPath: string) => {
+        if (targetPath.endsWith('macOS') || targetPath.endsWith('iOS')) {
+          return Promise.resolve();
+        }
+        return Promise.reject(new Error('ENOENT'));
+      });
+
+      const { checkPlatformCompleteness } = await import('../../src/core/store.js');
+      const result = await checkPlatformCompleteness('mylib', 'abc123', ['macOS', 'Win', 'iOS']);
+
+      expect(result.existing).toEqual(['macOS', 'iOS']);
+      expect(result.missing).toEqual(['Win']);
+    });
+
+    it('should return all missing when commit path does not exist', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      // 所有 access 都失败（commit 路径不存在）
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+
+      const { checkPlatformCompleteness } = await import('../../src/core/store.js');
+      const result = await checkPlatformCompleteness('nonexistent', 'abc123', ['macOS', 'Win']);
+
+      expect(result.existing).toEqual([]);
+      expect(result.missing).toEqual(['macOS', 'Win']);
     });
   });
 });

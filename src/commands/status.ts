@@ -83,7 +83,7 @@ async function showStatus(projectPath: string, options: StatusOptions): Promise<
 
   // 分析依赖状态
   const thirdPartyDir = path.dirname(configPath);
-  const storePath = await store.getStorePath();
+  const _storePath = await store.getStorePath();
 
   let linked = 0;
   let broken = 0;
@@ -94,8 +94,7 @@ async function showStatus(projectPath: string, options: StatusOptions): Promise<
   for (const dep of dependencies) {
     const localPath = path.join(thirdPartyDir, dep.libName);
     // 使用项目注册的第一个平台，或读取链接目标来判断
-    const statusPlatform = projectInfo?.platforms?.[0] ?? 'macOS';
-    const storeLibPath = store.getLibraryPath(storePath, dep.libName, dep.commit, statusPlatform);
+    const _statusPlatform = projectInfo?.platforms?.[0] ?? 'macOS';
 
     const isLink = await linker.isSymlink(localPath);
 

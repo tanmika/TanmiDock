@@ -66,7 +66,6 @@ async function verifyIntegrity(): Promise<void> {
       const linkPath = path.join(project.path, dep.linkedPath);
       // 使用依赖记录的平台，或项目的第一个平台
       const verifyPlatform = dep.platform ?? project.platforms?.[0] ?? 'macOS';
-      const expectedTarget = store.getLibraryPath(storePath, dep.libName, dep.commit, verifyPlatform);
 
       try {
         const stat = await fs.lstat(linkPath);

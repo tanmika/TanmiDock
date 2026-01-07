@@ -50,7 +50,13 @@
       "Bash(npm run test:unit:*)",
       "Bash(node /Users/tanmika/WebProject/tanmi-dock/dist/index.js:*)",
       "Bash(npm whoami:*)",
-      "Bash(npm version:*)"
+      "Bash(npm version:*)",
+      "Bash(tanmi-dock:*)",
+      "Bash(ls:*)",
+      "mcp__tanmi-workspace-dev1__dispatch_disable_execute",
+      "mcp__tanmi-workspace-dev1__dispatch_disable",
+      "Bash(npm run:*)",
+      "Bash(npm test:*)"
     ]
   }
 }

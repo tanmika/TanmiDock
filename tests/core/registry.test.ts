@@ -787,6 +787,53 @@ describe('registry', () => {
         const entry = registry.getStore(key);
         expect(entry?.unlinkedAt).toBe(existingUnlinkedAt);
       });
+
+      it('should remove references from all platforms when unlink (multi-platform scenario)', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        const platforms = ['macOS', 'iOS', 'android'];
+        const projectHash = 'project-hash-multi';
+
+        // 创建多个平台的 StoreEntry，模拟 link -p mac ios android
+        for (const platform of platforms) {
+          registry.addStore({
+            libName: 'mylib',
+            commit: 'abc123',
+            platform,
+            branch: 'main',
+            url: 'https://github.com/test/mylib.git',
+            size: 1000,
+            usedBy: [projectHash],
+            createdAt: '2026-01-05',
+            lastAccess: '2026-01-05',
+          });
+        }
+
+        // 验证所有平台都有引用
+        for (const platform of platforms) {
+          const key = registry.getStoreKey('mylib', 'abc123', platform);
+          const entry = registry.getStore(key);
+          expect(entry?.usedBy).toContain(projectHash);
+        }
+
+        // 模拟 unlink 行为：遍历所有平台移除引用
+        for (const platform of platforms) {
+          const key = registry.getStoreKey('mylib', 'abc123', platform);
+          registry.removeStoreReference(key, projectHash);
+        }
+
+        // 验证所有平台的引用都被移除，且设置了 unlinkedAt
+        for (const platform of platforms) {
+          const key = registry.getStoreKey('mylib', 'abc123', platform);
+          const entry = registry.getStore(key);
+          expect(entry?.usedBy).toHaveLength(0);
+          expect(entry?.unlinkedAt).toBeDefined();
+        }
+      });
     });
   });
 });

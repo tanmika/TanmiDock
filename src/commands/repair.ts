@@ -8,7 +8,7 @@ import { ensureInitialized } from '../core/guard.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
 import { formatSize } from '../utils/disk.js';
-import { info, warn, success, error, hint, blank, title, separator } from '../utils/logger.js';
+import { info, success, error, hint, blank, title, separator } from '../utils/logger.js';
 import { confirmAction } from '../utils/prompt.js';
 
 interface RepairResult {

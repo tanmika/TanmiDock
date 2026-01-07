@@ -84,6 +84,12 @@ async function unlinkProject(projectPath: string, options: UnlinkOptions): Promi
     // 移除引用关系
     registry.removeReference(libKey, projectHash);
 
+    // 移除 StoreEntry 引用（所有平台）
+    for (const platform of projectInfo.platforms) {
+      const storeKey = registry.getStoreKey(dep.libName, dep.commit, platform);
+      registry.removeStoreReference(storeKey, projectHash);
+    }
+
     // 如果需要删除无引用的库
     if (options.remove) {
       const lib = registry.getLibrary(libKey);

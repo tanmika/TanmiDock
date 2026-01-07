@@ -1,5 +1,5 @@
 import { select, confirm, input, checkbox, Separator } from '@inquirer/prompts';
-import { PLATFORM_OPTIONS, type PlatformOption } from '../core/platform.js';
+import { PLATFORM_OPTIONS } from '../core/platform.js';
 
 export async function selectOption<T extends string>(
   message: string,

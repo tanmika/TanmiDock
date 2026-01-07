@@ -2,7 +2,6 @@
  * init 命令 - 首次初始化配置
  */
 import fs from 'fs/promises';
-import path from 'path';
 import { Command } from 'commander';
 import { isInitialized, getInitStatus } from '../core/guard.js';
 import * as config from '../core/config.js';
