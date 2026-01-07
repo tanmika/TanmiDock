@@ -93,32 +93,20 @@ async function showStatus(projectPath: string, options: StatusOptions): Promise<
 
   for (const dep of dependencies) {
     const localPath = path.join(thirdPartyDir, dep.libName);
-    // 使用项目注册的第一个平台，或读取链接目标来判断
-    const _statusPlatform = projectInfo?.platforms?.[0] ?? 'macOS';
 
-    const isLink = await linker.isSymlink(localPath);
+    // 检查链接状态：支持单平台（顶层符号链接）和多平台（内部符号链接）
+    const linkStatus = await checkLinkStatus(localPath);
 
-    if (isLink) {
-      const isValid = await linker.isValidLink(localPath);
-      // 对于多平台链接，只检查链接是否有效，不严格检查目标路径
-      const isCorrect = isValid ? await linker.isValidLink(localPath) : false;
-
-      if (isValid && isCorrect) {
+    if (linkStatus.isLinked) {
+      if (linkStatus.isValid) {
         linked++;
       } else {
         broken++;
         brokenList.push(`${dep.libName} (${dep.commit.slice(0, 7)})`);
       }
     } else {
-      // 检查是否存在
-      try {
-        await fs.access(localPath);
-        unlinked++;
-        unlinkedList.push(`${dep.libName} (${dep.commit.slice(0, 7)}) - 普通目录`);
-      } catch {
-        unlinked++;
-        unlinkedList.push(`${dep.libName} (${dep.commit.slice(0, 7)}) - 不存在`);
-      }
+      unlinked++;
+      unlinkedList.push(`${dep.libName} (${dep.commit.slice(0, 7)}) - ${linkStatus.reason}`);
     }
   }
 
@@ -176,6 +164,62 @@ async function showStatus(projectPath: string, options: StatusOptions): Promise<
     separator();
     hint('运行 tanmi-dock link . 更新链接');
   }
+}
+
+/**
+ * 链接状态检查结果
+ */
+interface LinkStatus {
+  isLinked: boolean;  // 是否已链接（单平台或多平台）
+  isValid: boolean;   // 链接是否有效
+  reason: string;     // 未链接时的原因
+}
+
+/**
+ * 检查目录的链接状态
+ * 支持两种模式：
+ * - 单平台：顶层目录是符号链接
+ * - 多平台：顶层是普通目录，内部平台子目录是符号链接
+ */
+async function checkLinkStatus(localPath: string): Promise<LinkStatus> {
+  // 1. 检查路径是否存在
+  try {
+    await fs.access(localPath);
+  } catch {
+    return { isLinked: false, isValid: false, reason: '不存在' };
+  }
+
+  // 2. 检查顶层是否是符号链接（单平台模式）
+  const isTopLevelLink = await linker.isSymlink(localPath);
+  if (isTopLevelLink) {
+    const isValid = await linker.isValidLink(localPath);
+    return { isLinked: true, isValid, reason: '' };
+  }
+
+  // 3. 检查内部是否有平台符号链接（多平台模式）
+  try {
+    const entries = await fs.readdir(localPath, { withFileTypes: true });
+    let hasSymlink = false;
+    let allValid = true;
+
+    for (const entry of entries) {
+      const entryPath = path.join(localPath, entry.name);
+      if (await linker.isSymlink(entryPath)) {
+        hasSymlink = true;
+        if (!(await linker.isValidLink(entryPath))) {
+          allValid = false;
+        }
+      }
+    }
+
+    if (hasSymlink) {
+      return { isLinked: true, isValid: allValid, reason: '' };
+    }
+  } catch {
+    // 读取目录失败
+  }
+
+  return { isLinked: false, isValid: false, reason: '普通目录' };
 }
 
 /**

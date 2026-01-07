@@ -181,6 +181,53 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
   const tx = new Transaction(`link:${absolutePath}`);
   await tx.begin();
 
+  // 预扫描 ABSORB 依赖的额外平台，让用户选择要链接的平台
+  let finalLinkPlatforms: string[] = platforms; // 默认为用户请求的平台
+  if (!options.yes && process.stdout.isTTY) {
+    const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
+    const absorbItems = classified.filter(c => c.status === DependencyStatus.ABSORB);
+
+    // 收集所有本地存在的平台（去重）
+    const allLocalPlatforms = new Set<string>();
+    for (const item of absorbItems) {
+      try {
+        const entries = await fs.readdir(item.localPath, { withFileTypes: true });
+        entries
+          .filter(e => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name))
+          .forEach(e => allLocalPlatforms.add(e.name));
+      } catch {
+        // 读取失败，跳过
+      }
+    }
+
+    // 检测额外平台
+    const extraPlatforms = [...allLocalPlatforms].filter(p => !platforms.includes(p));
+
+    if (extraPlatforms.length > 0) {
+      info(`本地检测到额外平台: ${extraPlatforms.join(', ')}`);
+      blank();
+
+      const { checkbox } = await import('@inquirer/prompts');
+      const allAvailable = [...platforms, ...extraPlatforms];
+
+      finalLinkPlatforms = await checkbox({
+        message: '选择要链接的平台 (未选择的将被删除):',
+        choices: allAvailable.map(p => ({
+          name: p,
+          value: p,
+          checked: platforms.includes(p), // 用户请求的默认勾选
+        })),
+      });
+
+      if (finalLinkPlatforms.length === 0) {
+        warn('至少需要选择一个平台');
+        process.exit(1);
+      }
+
+      blank();
+    }
+  }
+
   try {
     for (const item of classified) {
       const { dependency, status, localPath } = item;
@@ -232,25 +279,8 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
             .filter(entry => entry.isDirectory() && KNOWN_PLATFORM_VALUES.includes(entry.name))
             .map(entry => entry.name);
 
-          // 2. 检测额外平台（本地有但用户未请求的）
-          const extraPlatforms = localPlatforms.filter(p => !platforms.includes(p));
-
-          // 3. 确定最终要吸收的平台
-          let finalPlatforms = platforms;
-          if (extraPlatforms.length > 0 && !options.yes && process.stdout.isTTY) {
-            info(`检测到额外平台: ${extraPlatforms.join(', ')}`);
-            const { select } = await import('@inquirer/prompts');
-            const choice = await select({
-              message: `本地有 ${extraPlatforms.length} 个额外平台，如何处理?`,
-              choices: [
-                { name: '全部吸收 (所有本地平台都移入 Store)', value: 'absorb_all' },
-                { name: '只吸收请求的平台 (额外平台保留在本地)', value: 'absorb_requested' },
-              ],
-            });
-            if (choice === 'absorb_all') {
-              finalPlatforms = [...platforms, ...extraPlatforms];
-            }
-          }
+          // 2. 确定最终要吸收的平台（取本地存在的 ∩ 用户选择的）
+          const finalPlatforms = localPlatforms.filter(p => finalLinkPlatforms.includes(p));
 
           tx.recordOp('absorb', localPath, storeCommitPath);
           const absorbResult = await store.absorbLib(
@@ -662,7 +692,7 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
       path: absolutePath,
       configPath: relConfigPath,
       lastLinked: new Date().toISOString(),
-      platforms: platforms,
+      platforms: finalLinkPlatforms, // 记录实际链接的平台（包括用户选择的额外平台）
       dependencies: newDependencies,
     });
 
