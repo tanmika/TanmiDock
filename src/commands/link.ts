@@ -115,8 +115,8 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
   info(`找到 ${dependencies.length} 个依赖，平台: ${platforms.join(', ')}`);
   blank();
 
-  // 分类依赖（使用第一个平台作为主平台进行分类）
-  const classified = await classifyDependencies(dependencies, absolutePath, configPath, platforms[0]);
+  // 分类依赖（检查所有请求的平台）
+  const classified = await classifyDependencies(dependencies, absolutePath, configPath, platforms);
 
   // 显示分类结果
   const stats = {
@@ -246,11 +246,19 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
         case DependencyStatus.RELINK: {
           // 重建链接（Store 已有，直接 linkLib）
           const relinkCommitPath = path.join(storePath, dependency.libName, dependency.commit);
+
+          // 获取 Store 中实际存在的平台
+          const { existing: relinkExisting } = await store.checkPlatformCompleteness(
+            dependency.libName,
+            dependency.commit,
+            platforms
+          );
+
           tx.recordOp('unlink', localPath);
           await linker.unlink(localPath);
           tx.recordOp('link', localPath, relinkCommitPath);
-          await linker.linkLib(localPath, relinkCommitPath, platforms);
-          success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接 [${platforms.join(', ')}]`);
+          await linker.linkLib(localPath, relinkCommitPath, relinkExisting);
+          success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接 [${relinkExisting.join(', ')}]`);
           break;
         }
 
@@ -258,11 +266,19 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
           // Store 已有，删除本地目录，直接 linkLib
           const replaceSize = await getDirSize(localPath);
           const replaceCommitPath = path.join(storePath, dependency.libName, dependency.commit);
+
+          // 获取 Store 中实际存在的平台
+          const { existing: replaceExisting } = await store.checkPlatformCompleteness(
+            dependency.libName,
+            dependency.commit,
+            platforms
+          );
+
           tx.recordOp('replace', localPath, replaceCommitPath);
           await linker.linkLib(localPath, replaceCommitPath, platforms);
           savedBytes += replaceSize;
           success(
-            `${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接 [${platforms.join(', ')}]`
+            `${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接 [${replaceExisting.join(', ')}]`
           );
           break;
         }
@@ -384,12 +400,19 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
             }
           }
 
-          // 3. linkLib 所有请求的平台
-          tx.recordOp('link', localPath, linkNewCommitPath);
-          await linker.linkLib(localPath, linkNewCommitPath, platforms);
+          // 3. 获取 Store 中实际存在的平台（下载后可能仍有缺失）
+          const { existing: linkNewExisting } = await store.checkPlatformCompleteness(
+            dependency.libName,
+            dependency.commit,
+            platforms
+          );
 
-          // 4. 为每个平台添加 StoreReference
-          for (const platform of platforms) {
+          // 4. linkLib 实际存在的平台
+          tx.recordOp('link', localPath, linkNewCommitPath);
+          await linker.linkLib(localPath, linkNewCommitPath, linkNewExisting);
+
+          // 5. 为每个实际存在的平台添加 StoreReference
+          for (const platform of linkNewExisting) {
             const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
             // 如果 StoreEntry 不存在，创建它
             if (!registry.getStore(storeKey)) {
@@ -409,7 +432,7 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
             registry.addStoreReference(storeKey, projectHash);
           }
 
-          success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 创建链接 [${platforms.join(', ')}]`);
+          success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 创建链接 [${linkNewExisting.join(', ')}]`);
           break;
         }
       }
@@ -756,23 +779,26 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
  * @param dependencies 依赖列表
  * @param projectPath 项目路径
  * @param configPath 配置文件路径
- * @param platform 用于分类的主平台
+ * @param platforms 请求的平台列表
  */
 async function classifyDependencies(
   dependencies: ParsedDependency[],
   projectPath: string,
   configPath: string,
-  platform: string
+  platforms: string[]
 ): Promise<ClassifiedDependency[]> {
   const result: ClassifiedDependency[] = [];
   const thirdPartyDir = path.dirname(configPath);
   const storePath = await store.getStorePath();
+  const primaryPlatform = platforms[0];
 
   for (const dep of dependencies) {
     const localPath = path.join(thirdPartyDir, dep.libName);
-    const storeLibPath = store.getLibraryPath(storePath, dep.libName, dep.commit, platform);
+    const storeLibPath = store.getLibraryPath(storePath, dep.libName, dep.commit, primaryPlatform);
 
-    const inStore = await store.exists(dep.libName, dep.commit, platform);
+    // 检查 Store 中是否有任意请求的平台（而非只检查主平台）
+    const { existing } = await store.checkPlatformCompleteness(dep.libName, dep.commit, platforms);
+    const inStore = existing.length > 0;
     const pathStatus = await linker.getPathStatus(localPath, storeLibPath);
 
     let status: DependencyStatus;
