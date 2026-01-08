@@ -89,11 +89,15 @@ export const KNOWN_PLATFORM_VALUES: string[] = [
 ];
 
 /**
- * 获取配置目录路径 (固定位置)
- * - macOS: ~/.tanmi-dock
- * - Windows: %USERPROFILE%\.tanmi-dock
+ * 获取配置目录路径
+ * - 支持 TANMI_DOCK_HOME 环境变量覆盖（用于测试和开发）
+ * - 默认: ~/.tanmi-dock (macOS) 或 %USERPROFILE%\.tanmi-dock (Windows)
  */
 export function getConfigDir(): string {
+  const envHome = process.env.TANMI_DOCK_HOME;
+  if (envHome) {
+    return envHome;
+  }
   return path.join(os.homedir(), '.tanmi-dock');
 }
 

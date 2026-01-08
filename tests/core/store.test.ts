@@ -388,6 +388,42 @@ describe('store', () => {
       expect(result.platformPaths['macOS']).toBeDefined();
       expect(result.skippedPlatforms).toEqual([]);
     });
+
+    it('should rollback moved files on failure', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.access.mockRejectedValue(new Error('ENOENT')); // 目标不存在
+
+      // 模拟目录内容：macOS, Win, shared.txt
+      fsMock.readdir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'Win', isDirectory: () => true },
+        { name: 'shared.txt', isDirectory: () => false },
+      ]);
+
+      // 跟踪 rename 调用
+      const renameCalls: Array<{ from: string; to: string }> = [];
+      fsMock.rename.mockImplementation(async (from: string, to: string) => {
+        renameCalls.push({ from, to });
+        // macOS 成功，Win 失败
+        if (to.includes('Win')) {
+          throw new Error('EACCES: permission denied');
+        }
+      });
+
+      const { absorbLib } = await import('../../src/core/store.js');
+
+      // 应该抛出错误
+      await expect(absorbLib('/tmp/libtest', ['macOS', 'Win'], 'libtest', 'abc123'))
+        .rejects.toThrow('EACCES');
+
+      // 验证回滚被调用（macOS 被移回）
+      const rollbackCall = renameCalls.find(
+        c => c.from === path.join('/store', 'libtest', 'abc123', 'macOS') &&
+             c.to === '/tmp/libtest/macOS'
+      );
+      expect(rollbackCall).toBeDefined();
+    });
   });
 
   describe('remove', () => {

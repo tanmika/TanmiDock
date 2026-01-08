@@ -88,10 +88,19 @@ async function unlinkProject(projectPath: string, options: UnlinkOptions): Promi
       }
     }
 
-    if (isTopLevelLink || hasInternalLinks) {
+    if (isTopLevelLink) {
       try {
-        // 还原为普通目录（从 Store 复制内容）
+        // 单平台模式：顶层是符号链接，直接还原
         await linker.restoreFromLink(localPath);
+        success(`${dep.libName} (${dep.commit.slice(0, 7)}) - 已还原`);
+        restored++;
+      } catch (err) {
+        warn(`${dep.libName} 还原失败: ${(err as Error).message}`);
+      }
+    } else if (hasInternalLinks) {
+      try {
+        // 多平台模式：顶层是普通目录，内部有符号链接
+        await linker.restoreMultiPlatform(localPath);
         success(`${dep.libName} (${dep.commit.slice(0, 7)}) - 已还原`);
         restored++;
       } catch (err) {
@@ -114,8 +123,9 @@ async function unlinkProject(projectPath: string, options: UnlinkOptions): Promi
       if (lib && lib.referencedBy.length === 0) {
         try {
           const store = await import('../core/store.js');
-          // TODO: 1-1 需要遍历所有平台删除，暂时使用 platforms 字段
-          for (const platform of lib.platforms) {
+          // 从 StoreEntry 动态获取平台列表（比 LibraryInfo.platforms 更准确）
+          const platforms = registry.getLibraryPlatforms(dep.libName, dep.commit);
+          for (const platform of platforms) {
             await store.remove(dep.libName, dep.commit, platform);
           }
           registry.removeLibrary(libKey);

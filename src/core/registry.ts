@@ -300,6 +300,25 @@ class RegistryManager {
   }
 
   /**
+   * 获取指定库的所有平台（从 StoreEntry 动态获取，比 LibraryInfo.platforms 更准确）
+   * @param libName 库名
+   * @param commit commit hash
+   * @returns 平台列表
+   */
+  getLibraryPlatforms(libName: string, commit: string): string[] {
+    this.ensureLoaded();
+    const prefix = `${libName}:${commit}:`;
+    const platforms: string[] = [];
+    for (const key of Object.keys(this.registry.stores)) {
+      if (key.startsWith(prefix)) {
+        const platform = key.slice(prefix.length);
+        platforms.push(platform);
+      }
+    }
+    return platforms;
+  }
+
+  /**
    * 获取无引用的 Store 条目
    */
   getUnreferencedStores(): StoreEntry[] {

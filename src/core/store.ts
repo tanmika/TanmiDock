@@ -143,22 +143,65 @@ export async function absorbLib(
   const platformPaths: Record<string, string> = {};
   const skippedPlatforms: string[] = [];
 
+  // 跟踪已移动的文件，用于失败时回滚
+  const movedFiles: Array<{ source: string; target: string }> = [];
+
+  // 回滚函数：将已移动的文件移回原位置
+  const rollbackMoves = async () => {
+    for (const { source, target } of movedFiles.reverse()) {
+      try {
+        await fs.rename(target, source);
+      } catch {
+        // 回滚失败时忽略，尽力而为
+      }
+    }
+  };
+
   // 读取 libDir 内容
   const entries = await fs.readdir(libDir, { withFileTypes: true });
 
-  for (const entry of entries) {
-    const sourcePath = path.join(libDir, entry.name);
+  try {
+    for (const entry of entries) {
+      const sourcePath = path.join(libDir, entry.name);
 
-    if (entry.isDirectory() && KNOWN_PLATFORM_VALUES.includes(entry.name)) {
-      // 平台目录: 只移动用户选择的平台
-      if (platforms.includes(entry.name)) {
-        const targetPath = path.join(baseDir, entry.name);
+      if (entry.isDirectory() && KNOWN_PLATFORM_VALUES.includes(entry.name)) {
+        // 平台目录: 只移动用户选择的平台
+        if (platforms.includes(entry.name)) {
+          const targetPath = path.join(baseDir, entry.name);
 
-        // 检查目标目录是否已存在
+          // 检查目标目录是否已存在
+          try {
+            await fs.access(targetPath);
+            // 已存在，跳过移动
+            skippedPlatforms.push(entry.name);
+            continue;
+          } catch {
+            // 不存在，继续移动
+          }
+
+          try {
+            await fs.rename(sourcePath, targetPath);
+            platformPaths[entry.name] = targetPath;
+            movedFiles.push({ source: sourcePath, target: targetPath });
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ENOTEMPTY' || code === 'EEXIST') {
+              // 竞态条件：检查时不存在，移动时已存在，跳过
+              skippedPlatforms.push(entry.name);
+              continue;
+            }
+            throw err;
+          }
+        }
+        // 非选择的平台目录不移动，保留在原位置
+      } else {
+        // 共享文件/目录: 移动到 _shared
+        const targetPath = path.join(sharedPath, entry.name);
+
+        // 检查目标是否已存在
         try {
           await fs.access(targetPath);
           // 已存在，跳过移动
-          skippedPlatforms.push(entry.name);
           continue;
         } catch {
           // 不存在，继续移动
@@ -166,42 +209,21 @@ export async function absorbLib(
 
         try {
           await fs.rename(sourcePath, targetPath);
-          platformPaths[entry.name] = targetPath;
+          movedFiles.push({ source: sourcePath, target: targetPath });
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
           if (code === 'ENOTEMPTY' || code === 'EEXIST') {
             // 竞态条件：检查时不存在，移动时已存在，跳过
-            skippedPlatforms.push(entry.name);
             continue;
           }
           throw err;
         }
       }
-      // 非选择的平台目录不移动，保留在原位置
-    } else {
-      // 共享文件/目录: 移动到 _shared
-      const targetPath = path.join(sharedPath, entry.name);
-
-      // 检查目标是否已存在
-      try {
-        await fs.access(targetPath);
-        // 已存在，跳过移动
-        continue;
-      } catch {
-        // 不存在，继续移动
-      }
-
-      try {
-        await fs.rename(sourcePath, targetPath);
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code === 'ENOTEMPTY' || code === 'EEXIST') {
-          // 竞态条件：检查时不存在，移动时已存在，跳过
-          continue;
-        }
-        throw err;
-      }
     }
+  } catch (err) {
+    // 发生错误时回滚已移动的文件
+    await rollbackMoves();
+    throw err;
   }
 
   return {

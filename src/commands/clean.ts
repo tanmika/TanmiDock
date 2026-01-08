@@ -225,7 +225,9 @@ async function cleanLibraries(options: CleanOptions): Promise<void> {
     // unreferenced 策略：清理 LibraryInfo
     for (const lib of toCleanLibs) {
       try {
-        for (const platform of lib.platforms) {
+        // 从 StoreEntry 动态获取平台列表（比 LibraryInfo.platforms 更准确）
+        const platforms = registry.getLibraryPlatforms(lib.libName, lib.commit);
+        for (const platform of platforms) {
           await store.remove(lib.libName, lib.commit, platform);
         }
         const libKey = registry.getLibraryKey(lib.libName, lib.commit);

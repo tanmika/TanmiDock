@@ -640,6 +640,79 @@ describe('registry', () => {
         expect(stores).toHaveLength(2);
       });
 
+      it('should get library platforms from store entries', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        // 添加多个平台的 StoreEntry
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'Win',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 2000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'android',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1500,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+        // 不同 commit 的平台不应该被包含
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'def456',
+          platform: 'iOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1200,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        const platforms = registry.getLibraryPlatforms('mylib', 'abc123');
+        expect(platforms).toHaveLength(3);
+        expect(platforms).toContain('macOS');
+        expect(platforms).toContain('Win');
+        expect(platforms).toContain('android');
+        expect(platforms).not.toContain('iOS'); // 不同 commit
+      });
+
+      it('should return empty array for non-existent library', async () => {
+        fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+        const { getRegistry } = await import('../../src/core/registry.js');
+        const registry = getRegistry();
+        await registry.load();
+
+        const platforms = registry.getLibraryPlatforms('nonexistent', 'abc123');
+        expect(platforms).toHaveLength(0);
+      });
+
       it('should get unreferenced store entries', async () => {
         fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
 

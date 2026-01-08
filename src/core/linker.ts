@@ -173,6 +173,38 @@ export async function restoreFromLink(linkPath: string): Promise<void> {
 }
 
 /**
+ * 将多平台链接目录还原为普通目录
+ * 遍历目录内容，将符号链接替换为真实目录，保留非链接文件
+ */
+export async function restoreMultiPlatform(localPath: string): Promise<void> {
+  // 遍历目录内容
+  const entries = await fs.readdir(localPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const entryPath = path.join(localPath, entry.name);
+
+    // 检查是否为符号链接
+    if (await isSymlink(entryPath)) {
+      // 读取链接目标
+      const target = await readLink(entryPath);
+      if (!target) {
+        continue; // 无法读取目标，跳过
+      }
+
+      // 获取绝对目标路径
+      const absoluteTarget = path.resolve(path.dirname(entryPath), target);
+
+      // 删除符号链接
+      await unlink(entryPath);
+
+      // 复制目标内容到原位置
+      await copyDir(absoluteTarget, entryPath);
+    }
+    // 非符号链接的文件/目录保持不变（如 _shared 复制过来的文件）
+  }
+}
+
+/**
  * 检查路径状态
  */
 export async function getPathStatus(
@@ -360,6 +392,7 @@ export default {
   isCorrectLink,
   replaceWithLink,
   restoreFromLink,
+  restoreMultiPlatform,
   getPathStatus,
   linkLibrary,
   linkMultiPlatform,
