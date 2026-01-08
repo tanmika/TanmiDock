@@ -15,7 +15,6 @@ import {
   createTestEnv,
   createMockStoreData,
   verifyNotSymlink,
-  verifyDirectoryContents,
   type TestEnv,
 } from './setup.js';
 import { linkLib, restoreMultiPlatform, restoreFromLink, isSymlink } from '../../src/core/linker.js';

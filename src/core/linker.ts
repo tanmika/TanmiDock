@@ -383,6 +383,19 @@ export async function linkLib(
   }
 }
 
+/**
+ * 为 General 类型库创建整目录符号链接
+ * 将 localPath 整个变为符号链接，指向 Store 的 _shared
+ */
+export async function linkGeneral(
+  localPath: string,
+  storeSharedPath: string
+): Promise<void> {
+  await fs.rm(localPath, { recursive: true, force: true });
+  const type = isWindows() ? 'junction' : 'dir';
+  await fs.symlink(storeSharedPath, localPath, type);
+}
+
 export default {
   link,
   isSymlink,
@@ -397,4 +410,5 @@ export default {
   linkLibrary,
   linkMultiPlatform,
   linkLib,
+  linkGeneral,
 };

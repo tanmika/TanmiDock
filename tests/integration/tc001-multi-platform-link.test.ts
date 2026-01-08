@@ -19,7 +19,7 @@ import {
   type TestEnv,
 } from './setup.js';
 import { linkLib } from '../../src/core/linker.js';
-import type { Registry, StoreEntry, ProjectInfo } from '../../src/types/index.js';
+import type { Registry } from '../../src/types/index.js';
 
 describe('TC-001: 多平台累积链接', () => {
   let env: TestEnv | null = null;

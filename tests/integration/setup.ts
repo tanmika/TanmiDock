@@ -241,6 +241,58 @@ export async function createMockProjectData(
   );
 }
 
+/**
+ * 创建 General 类型库的 Store 数据（只有 _shared，无平台目录）
+ *
+ * @param env 测试环境
+ * @param libName 库名
+ * @param commit 提交 hash
+ */
+export async function createMockGeneralStoreData(
+  env: TestEnv,
+  libName: string,
+  commit: string
+): Promise<void> {
+  const libDir = path.join(env.storeDir, libName, commit);
+
+  // 只创建 _shared 目录
+  const sharedDir = path.join(libDir, '_shared');
+  await fs.mkdir(sharedDir, { recursive: true });
+
+  // 创建 codepac-dep.json
+  const codepacDep = {
+    version: '1.0.0',
+    vars: {},
+    repos: {
+      common: [
+        {
+          url: `https://github.com/test/${libName}.git`,
+          commit,
+          branch: 'main',
+          dir: libName,
+        },
+      ],
+    },
+  };
+  await fs.writeFile(
+    path.join(sharedDir, 'codepac-dep.json'),
+    JSON.stringify(codepacDep, null, 2),
+    'utf-8'
+  );
+
+  // 创建共享文件
+  await fs.writeFile(
+    path.join(sharedDir, 'common.cmake'),
+    `# CMake config for ${libName}`,
+    'utf-8'
+  );
+  await fs.writeFile(
+    path.join(sharedDir, 'config.h'),
+    `// Config header for ${libName}`,
+    'utf-8'
+  );
+}
+
 // ============ 验证函数 ============
 
 /**

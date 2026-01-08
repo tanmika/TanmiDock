@@ -11,7 +11,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import path from 'path';
 import fs from 'fs/promises';
 import { createTestEnv, createMockStoreData, type TestEnv } from './setup.js';
-import { replaceWithLink, isSymlink, readLink, isCorrectLink } from '../../src/core/linker.js';
+import { replaceWithLink, isSymlink, isCorrectLink } from '../../src/core/linker.js';
 
 describe('TC-012: REPLACE 场景测试', () => {
   let env: TestEnv | null = null;

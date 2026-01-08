@@ -393,4 +393,74 @@ describe('linker', () => {
       expect(status).toBe('missing');
     });
   });
+
+  describe('linkGeneral', () => {
+    it('should create symlink for entire directory', async () => {
+      const { linkGeneral } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.symlink.mockResolvedValue(undefined);
+
+      await linkGeneral('/project/3rdparty/eigen', '/store/eigen/abc123/_shared');
+
+      expect(fsMock.rm).toHaveBeenCalledWith(
+        '/project/3rdparty/eigen',
+        { recursive: true, force: true }
+      );
+      expect(fsMock.symlink).toHaveBeenCalledWith(
+        '/store/eigen/abc123/_shared',
+        '/project/3rdparty/eigen',
+        'dir'
+      );
+    });
+
+    it('should replace existing directory with symlink', async () => {
+      const { linkGeneral } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.symlink.mockResolvedValue(undefined);
+
+      // 模拟已存在目录
+      await linkGeneral('/project/3rdparty/eigen', '/store/eigen/abc123/_shared');
+
+      // 应该先删除旧目录
+      expect(fsMock.rm).toHaveBeenCalledWith(
+        '/project/3rdparty/eigen',
+        { recursive: true, force: true }
+      );
+
+      // 然后创建符号链接
+      expect(fsMock.symlink).toHaveBeenCalledWith(
+        '/store/eigen/abc123/_shared',
+        '/project/3rdparty/eigen',
+        'dir'
+      );
+    });
+
+    it('should use junction on Windows', async () => {
+      // 重新设置 mock 以使用 Windows
+      vi.resetModules();
+
+      // 临时修改 isWindows 返回值
+      vi.doMock('../../src/core/platform.js', () => ({
+        isWindows: vi.fn(() => true),
+        KNOWN_PLATFORM_VALUES: ['macOS', 'macOS-asan', 'Win', 'iOS', 'iOS-asan', 'android', 'android-asan', 'android-hwasan', 'ubuntu', 'wasm', 'ohos'],
+      }));
+
+      const fs = await import('fs/promises');
+      const fsMockWin = fs.default as typeof fsMock;
+      fsMockWin.rm.mockResolvedValue(undefined);
+      fsMockWin.symlink.mockResolvedValue(undefined);
+
+      const { linkGeneral } = await import('../../src/core/linker.js');
+
+      await linkGeneral('/project/3rdparty/eigen', '/store/eigen/abc123/_shared');
+
+      expect(fsMockWin.symlink).toHaveBeenCalledWith(
+        '/store/eigen/abc123/_shared',
+        '/project/3rdparty/eigen',
+        'junction'
+      );
+    });
+  });
 });

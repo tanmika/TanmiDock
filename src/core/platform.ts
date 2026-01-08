@@ -89,6 +89,12 @@ export const KNOWN_PLATFORM_VALUES: string[] = [
 ];
 
 /**
+ * General 类型库的平台标识
+ * 用于只有 _shared 目录、无平台目录的库（如 eigen、header-only 库）
+ */
+export const GENERAL_PLATFORM = 'general';
+
+/**
  * 获取配置目录路径
  * - 支持 TANMI_DOCK_HOME 环境变量覆盖（用于测试和开发）
  * - 默认: ~/.tanmi-dock (macOS) 或 %USERPROFILE%\.tanmi-dock (Windows)

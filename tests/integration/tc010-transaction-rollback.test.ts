@@ -82,7 +82,7 @@ describe('TC-010: 事务回滚验证', () => {
         await fs.symlink(platformStorePath, platformLocalPath);
         createdLinks.push(platformLocalPath);
       }
-    } catch (err) {
+    } catch (_err) {
       // 回滚：删除已创建的链接
       if (rollbackNeeded) {
         for (const link of createdLinks) {

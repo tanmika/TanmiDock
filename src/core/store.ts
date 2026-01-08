@@ -7,7 +7,7 @@ import path from 'path';
 import * as config from './config.js';
 import { withFileLock } from '../utils/lock.js';
 import { copyDir, getDirSize, copyDirWithProgress, removeDir } from '../utils/fs-utils.js';
-import { KNOWN_PLATFORM_VALUES } from './platform.js';
+import { KNOWN_PLATFORM_VALUES, GENERAL_PLATFORM } from './platform.js';
 
 /**
  * Store 版本类型
@@ -64,10 +64,19 @@ export async function getStorePath(): Promise<string> {
 
 /**
  * 检查库是否存在于 Store 中
+ * 当 platform 为 'general' 时，检查 _shared 目录是否存在
  */
 export async function exists(libName: string, commit: string, platform: string): Promise<boolean> {
   try {
     const storePath = await getStorePath();
+
+    if (platform === GENERAL_PLATFORM) {
+      // General 库检查 _shared 目录
+      const sharedPath = path.join(storePath, libName, commit, '_shared');
+      await fs.access(sharedPath);
+      return true;
+    }
+
     const libPath = getLibraryPath(storePath, libName, commit, platform);
     await fs.access(libPath);
     return true;
@@ -588,6 +597,30 @@ export async function checkPlatformCompleteness(
   return { existing, missing };
 }
 
+/**
+ * 检测 Store 中的库是否为 General 类型
+ * 条件：有 _shared 目录 且 无任何已知平台目录
+ */
+export async function isGeneralLib(libName: string, commit: string): Promise<boolean> {
+  const storePath = await getStorePath();
+  const commitPath = path.join(storePath, libName, commit);
+
+  try {
+    const entries = await fs.readdir(commitPath, { withFileTypes: true });
+    const hasShared = entries.some(e => e.isDirectory() && e.name === '_shared');
+    if (!hasShared) return false;
+
+    // KNOWN_PLATFORM_VALUES 已在文件顶部静态导入
+    const hasPlatform = entries.some(e =>
+      e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name)
+    );
+
+    return !hasPlatform;
+  } catch {
+    return false;
+  }
+}
+
 export default {
   getLibraryPath,
   getStorePath,
@@ -606,4 +639,5 @@ export default {
   detectStoreVersion,
   ensureCompatibleStore,
   checkPlatformCompleteness,
+  isGeneralLib,
 };
