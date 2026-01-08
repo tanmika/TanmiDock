@@ -14,6 +14,7 @@ import { resolvePath, getPlatformHelpText } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize } from '../utils/fs-utils.js';
+import { ProgressTracker, DownloadMonitor } from '../utils/progress.js';
 import { success, warn, error, info, hint, blank, separator } from '../utils/logger.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency } from '../types/index.js';
@@ -285,7 +286,6 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
 
         case DependencyStatus.ABSORB: {
           // 移入 Store（吸收本地目录所有平台内容）
-          const absorbSize = await getDirSize(localPath);
           const storeCommitPath = path.join(storePath, dependency.libName, dependency.commit);
 
           // 1. 扫描本地平台目录
@@ -298,13 +298,42 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
           // 2. 确定最终要吸收的平台（取本地存在的 ∩ 用户选择的）
           const finalPlatforms = localPlatforms.filter(p => finalLinkPlatforms.includes(p));
 
+          // 3. 计算大小并显示进度（只计算一次，用于进度条和 registry）
+          info(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 正在分析...`);
+          const absorbSize = await getDirSize(localPath);
+
+          // 4. 创建进度追踪器（用于跨文件系统复制时显示进度）
+          const progressTracker = new ProgressTracker({
+            name: `  移入 Store`,
+            total: absorbSize,
+            showSpeed: true,
+          });
+
           tx.recordOp('absorb', localPath, storeCommitPath);
+
+          // 进度回调 - 只在跨文件系统时触发
+          let progressStarted = false;
           const absorbResult = await store.absorbLib(
             localPath,
             finalPlatforms,
             dependency.libName,
-            dependency.commit
+            dependency.commit,
+            {
+              totalSize: absorbSize,
+              onProgress: (copied, total) => {
+                if (!progressStarted) {
+                  progressStarted = true;
+                  progressTracker.start();
+                }
+                progressTracker.update(copied);
+              },
+            }
           );
+
+          // 如果进度条启动了，停止它
+          if (progressStarted) {
+            progressTracker.stop();
+          }
 
           // 获取所有可链接的平台（新吸收 + 已存在跳过的）
           const linkPlatforms = [...Object.keys(absorbResult.platformPaths), ...absorbResult.skippedPlatforms];
@@ -373,6 +402,18 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
           // 2. 如果有缺失平台，下载并吸收
           if (missing.length > 0) {
             info(`${dependency.libName} 缺少平台 [${missing.join(', ')}]，开始下载...`);
+
+            // 查找历史记录中的大小估算
+            const linkNewLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+            const linkNewHistoryLib = registry.getLibrary(linkNewLibKey);
+
+            // 创建下载进度监控器
+            const linkNewMonitor = new DownloadMonitor({
+              name: `  ${dependency.libName}`,
+              estimatedSize: linkNewHistoryLib?.size,
+              getDirSize,
+            });
+
             const downloadResult = await codepac.downloadToTemp({
               url: dependency.url,
               commit: dependency.commit,
@@ -380,7 +421,13 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
               libName: dependency.libName,
               platforms: missing,
               sparse: dependency.sparse,
+              onTempDirCreated: (_tempDir, libDir) => {
+                linkNewMonitor.start(libDir);
+              },
             });
+
+            // 停止进度监控
+            await linkNewMonitor.stop();
 
             try {
               // 过滤：只保留实际下载的且在 missing 列表中的平台
@@ -551,6 +598,18 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
               // 只下载缺失的平台
               info(`下载 ${dependency.libName} [${missing.join(', ')}]...`);
 
+              // 查找历史记录中的大小估算（用于进度条）
+              const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+              const historyLib = registry.getLibrary(libKey);
+              const estimatedSize = historyLib?.size;
+
+              // 创建下载进度监控器
+              const downloadMonitor = new DownloadMonitor({
+                name: `  ${dependency.libName}`,
+                estimatedSize,
+                getDirSize,
+              });
+
               // 1. 调用 downloadToTemp 只下载缺失的平台
               const downloadResult = await codepac.downloadToTemp({
                 url: dependency.url,
@@ -559,7 +618,14 @@ async function linkProject(projectPath: string, options: LinkOptions): Promise<v
                 libName: dependency.libName,
                 platforms: missing,
                 sparse: dependency.sparse,
+                onTempDirCreated: (_tempDir, libDir) => {
+                  // 临时目录创建后启动进度监控
+                  downloadMonitor.start(libDir);
+                },
               });
+
+              // 停止进度监控
+              await downloadMonitor.stop();
 
               try {
                 // 2. 过滤平台：只保留实际下载的且在 missing 列表中的平台

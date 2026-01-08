@@ -287,6 +287,8 @@ export interface DownloadOptions {
   sparse?: object | string;
   /** 进度回调 */
   onProgress?: (msg: string) => void;
+  /** 临时目录创建后回调（用于启动进度监控） */
+  onTempDirCreated?: (tempDir: string, libDir: string) => void;
 }
 
 /**
@@ -322,7 +324,7 @@ function generateTempDirName(): string {
  * @deprecated installSingle 已被本函数替代
  */
 export async function downloadToTemp(options: DownloadOptions): Promise<DownloadResult> {
-  const { url, commit, branch, libName, platforms, sparse, onProgress } = options;
+  const { url, commit, branch, libName, platforms, sparse, onProgress, onTempDirCreated } = options;
 
   // 检查 codepac 是否安装
   if (!(await isCodepacInstalled())) {
@@ -332,6 +334,7 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
   // 创建唯一临时目录
   const tempDirName = generateTempDirName();
   const tempDir = path.join(os.tmpdir(), tempDirName);
+  const libDir = path.join(tempDir, libName);
 
   // 生成临时配置文件路径
   const configPath = path.join(tempDir, 'codepac-dep.json');
@@ -339,6 +342,9 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
   try {
     // 创建临时目录
     await fs.mkdir(tempDir, { recursive: true });
+
+    // 通知调用方临时目录已创建（用于启动进度监控）
+    onTempDirCreated?.(tempDir, libDir);
 
     // 生成临时 codepac 配置文件
     const tempConfig = {
@@ -366,7 +372,6 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
     await spawnCodepac(args, tempDir, onProgress);
 
     // 分析下载结果，区分平台目录和共享文件
-    const libDir = path.join(tempDir, libName);
     const entries = await fs.readdir(libDir, { withFileTypes: true });
 
     const platformDirs: string[] = [];

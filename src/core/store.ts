@@ -6,7 +6,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import * as config from './config.js';
 import { withFileLock } from '../utils/lock.js';
-import { copyDir, getDirSize } from '../utils/fs-utils.js';
+import { copyDir, getDirSize, copyDirWithProgress, removeDir } from '../utils/fs-utils.js';
 import { KNOWN_PLATFORM_VALUES } from './platform.js';
 
 /**
@@ -24,6 +24,16 @@ export interface AbsorbResult {
   platformPaths: Record<string, string>;  // { macOS: "Store/.../macOS", android: "..." } 新增的平台
   sharedPath: string;                     // Store/.../_shared
   skippedPlatforms: string[];             // 已存在而跳过的平台
+}
+
+/**
+ * absorbLib 进度回调选项
+ */
+export interface AbsorbProgressOptions {
+  /** 进度回调 (copiedBytes, totalBytes, currentItem) => void */
+  onProgress?: (copiedBytes: number, totalBytes: number, currentItem: string) => void;
+  /** 预计总大小 (bytes)，用于计算进度百分比 */
+  totalSize?: number;
 }
 
 /**
@@ -114,23 +124,64 @@ export async function absorb(sourcePath: string, libName: string, commit: string
 }
 
 /**
+ * 跨文件系统安全移动目录
+ * 先尝试 rename，失败时回退到 copy + delete
+ *
+ * @param sourcePath 源路径
+ * @param targetPath 目标路径
+ * @param progressOptions 进度回调选项（用于跨文件系统复制时）
+ * @returns 是否使用了复制模式（跨文件系统）
+ */
+async function safeMoveDir(
+  sourcePath: string,
+  targetPath: string,
+  progressOptions?: {
+    onProgress?: (copiedBytes: number, totalBytes: number) => void;
+    totalSize?: number;
+  }
+): Promise<boolean> {
+  try {
+    await fs.rename(sourcePath, targetPath);
+    return false; // 使用 rename，非跨文件系统
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EXDEV') {
+      // 跨文件系统，回退到复制 + 删除
+      const totalSize = progressOptions?.totalSize ?? 0;
+      if (progressOptions?.onProgress && totalSize > 0) {
+        await copyDirWithProgress(sourcePath, targetPath, totalSize, progressOptions.onProgress);
+      } else {
+        await copyDir(sourcePath, targetPath);
+      }
+      await removeDir(sourcePath);
+      return true; // 使用了复制模式
+    }
+    throw err;
+  }
+}
+
+/**
  * 将库目录吸收到 Store 中（新版多平台支持）
  *
  * 遍历 libDir 内容，根据 KNOWN_PLATFORM_VALUES 判断:
  * - 平台目录 → 移动到 Store/.../平台名/
  * - 共享内容 → 移动到 Store/.../_shared/
  *
+ * 当源和目标跨文件系统时（EXDEV），自动回退到复制+删除模式。
+ *
  * @param libDir 源库目录路径 (tempDir/libName 或 3rdParty/libXxx)
  * @param platforms 要吸收的平台目录名列表
  * @param libName 库名
  * @param commit commit hash
+ * @param progressOptions 进度回调选项（可选）
  * @returns AbsorbResult 包含 platformPaths 和 sharedPath
  */
 export async function absorbLib(
   libDir: string,
   platforms: string[],
   libName: string,
-  commit: string
+  commit: string,
+  progressOptions?: AbsorbProgressOptions
 ): Promise<AbsorbResult> {
   const storePath = await getStorePath();
   const baseDir = path.join(storePath, libName, commit);
@@ -180,7 +231,13 @@ export async function absorbLib(
           }
 
           try {
-            await fs.rename(sourcePath, targetPath);
+            // 使用 safeMoveDir 处理跨文件系统情况
+            await safeMoveDir(sourcePath, targetPath, {
+              onProgress: progressOptions?.onProgress
+                ? (copied, total) => progressOptions.onProgress!(copied, total, entry.name)
+                : undefined,
+              totalSize: progressOptions?.totalSize,
+            });
             platformPaths[entry.name] = targetPath;
             movedFiles.push({ source: sourcePath, target: targetPath });
           } catch (err) {
@@ -208,7 +265,22 @@ export async function absorbLib(
         }
 
         try {
-          await fs.rename(sourcePath, targetPath);
+          // 使用 safeMoveDir 处理跨文件系统情况（共享内容不传进度回调）
+          if (entry.isDirectory()) {
+            await safeMoveDir(sourcePath, targetPath);
+          } else {
+            // 文件直接 rename，失败时复制+删除
+            try {
+              await fs.rename(sourcePath, targetPath);
+            } catch (renameErr) {
+              if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+                await fs.copyFile(sourcePath, targetPath);
+                await fs.unlink(sourcePath);
+              } else {
+                throw renameErr;
+              }
+            }
+          }
           movedFiles.push({ source: sourcePath, target: targetPath });
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;

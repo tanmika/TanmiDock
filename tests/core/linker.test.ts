@@ -204,7 +204,8 @@ describe('linker', () => {
       // 验证 _shared 目录被复制（非符号链接）
       expect(copyDirMock).toHaveBeenCalledWith(
         path.join('/store/libtest/abc123', '_shared'),
-        '/project/3rdParty/libtest'
+        '/project/3rdParty/libtest',
+        { preserveSymlinks: true }
       );
     });
 

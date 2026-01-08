@@ -197,8 +197,8 @@ export async function restoreMultiPlatform(localPath: string): Promise<void> {
       // 删除符号链接
       await unlink(entryPath);
 
-      // 复制目标内容到原位置
-      await copyDir(absoluteTarget, entryPath);
+      // 复制目标内容到原位置（保留符号链接结构，如 macOS framework）
+      await copyDir(absoluteTarget, entryPath, { preserveSymlinks: true });
     }
     // 非符号链接的文件/目录保持不变（如 _shared 复制过来的文件）
   }
@@ -372,7 +372,7 @@ export async function linkLib(
     try {
       await fs.access(sharedPath);
       // _shared 目录存在，复制其内容到 localPath
-      await copyDir(sharedPath, localPath);
+      await copyDir(sharedPath, localPath, { preserveSymlinks: true });
     } catch {
       // _shared 目录不存在，跳过
     }
