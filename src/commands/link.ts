@@ -248,42 +248,74 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           break;
 
         case DependencyStatus.RELINK: {
-          // 重建链接（Store 已有，直接 linkLib）
+          // 重建链接（Store 已有）
           const relinkCommitPath = path.join(storePath, dependency.libName, dependency.commit);
 
-          // 获取 Store 中实际存在的平台
-          const { existing: relinkExisting } = await store.checkPlatformCompleteness(
-            dependency.libName,
-            dependency.commit,
-            platforms
-          );
+          // 检查是否为 General 库
+          const isRelinkGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
 
           tx.recordOp('unlink', localPath);
           await linker.unlink(localPath);
-          tx.recordOp('link', localPath, relinkCommitPath);
-          await linker.linkLib(localPath, relinkCommitPath, relinkExisting);
-          success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接 [${relinkExisting.join(', ')}]`);
+
+          if (isRelinkGeneral) {
+            // General 库：整目录链接到 _shared
+            const sharedPath = path.join(relinkCommitPath, '_shared');
+            tx.recordOp('link', localPath, sharedPath);
+            await linker.linkGeneral(localPath, sharedPath);
+
+            // 记录为 General 库
+            generalLibs.add(dependency.libName);
+
+            success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，重建链接`);
+          } else {
+            // 平台库：多平台链接
+            const { existing: relinkExisting } = await store.checkPlatformCompleteness(
+              dependency.libName,
+              dependency.commit,
+              platforms
+            );
+
+            tx.recordOp('link', localPath, relinkCommitPath);
+            await linker.linkLib(localPath, relinkCommitPath, relinkExisting);
+            success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接 [${relinkExisting.join(', ')}]`);
+          }
           break;
         }
 
         case DependencyStatus.REPLACE: {
-          // Store 已有，删除本地目录，直接 linkLib
+          // Store 已有，删除本地目录，直接链接
           const replaceSize = await getDirSize(localPath);
           const replaceCommitPath = path.join(storePath, dependency.libName, dependency.commit);
 
-          // 获取 Store 中实际存在的平台
-          const { existing: replaceExisting } = await store.checkPlatformCompleteness(
-            dependency.libName,
-            dependency.commit,
-            platforms
-          );
+          // 检查是否为 General 库
+          const isReplaceGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
 
-          tx.recordOp('replace', localPath, replaceCommitPath);
-          await linker.linkLib(localPath, replaceCommitPath, platforms);
-          savedBytes += replaceSize;
-          success(
-            `${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接 [${replaceExisting.join(', ')}]`
-          );
+          if (isReplaceGeneral) {
+            // General 库：整目录链接到 _shared
+            const sharedPath = path.join(replaceCommitPath, '_shared');
+            tx.recordOp('replace', localPath, sharedPath);
+            await linker.linkGeneral(localPath, sharedPath);
+            savedBytes += replaceSize;
+
+            // 记录为 General 库
+            generalLibs.add(dependency.libName);
+
+            success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，创建链接`);
+          } else {
+            // 平台库：多平台链接
+            const { existing: replaceExisting } = await store.checkPlatformCompleteness(
+              dependency.libName,
+              dependency.commit,
+              platforms
+            );
+
+            tx.recordOp('replace', localPath, replaceCommitPath);
+            await linker.linkLib(localPath, replaceCommitPath, platforms);
+            savedBytes += replaceSize;
+            success(
+              `${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接 [${replaceExisting.join(', ')}]`
+            );
+          }
           break;
         }
 
@@ -386,6 +418,13 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
             const sharedPath = path.join(storeCommitPath, '_shared');
             try {
               await fs.access(sharedPath);
+
+              // 检查 _shared 目录是否有内容（防止空目录静默成功）
+              const sharedEntries = await fs.readdir(sharedPath);
+              if (sharedEntries.length === 0) {
+                warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - _shared 目录为空，请重新下载源文件后再 link`);
+                break;
+              }
 
               // General 类型：整目录链接
               const { GENERAL_PLATFORM } = await import('../core/platform.js');
@@ -1016,8 +1055,15 @@ async function classifyDependencies(
 
     // 检查 Store 中是否有任意请求的平台（而非只检查主平台）
     const { existing } = await store.checkPlatformCompleteness(dep.libName, dep.commit, platforms);
-    const inStore = existing.length > 0;
-    const pathStatus = await linker.getPathStatus(localPath, storeLibPath);
+    // 也检查是否为 General 库（有 _shared 且有内容）
+    const isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
+    const inStore = existing.length > 0 || isGeneral;
+
+    // General 库的目标路径是 _shared，而不是平台目录
+    const expectedTarget = isGeneral
+      ? path.join(storePath, dep.libName, dep.commit, '_shared')
+      : storeLibPath;
+    const pathStatus = await linker.getPathStatus(localPath, expectedTarget);
 
     let status: DependencyStatus;
 

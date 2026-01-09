@@ -64,17 +64,18 @@ export async function getStorePath(): Promise<string> {
 
 /**
  * 检查库是否存在于 Store 中
- * 当 platform 为 'general' 时，检查 _shared 目录是否存在
+ * 当 platform 为 'general' 时，检查 _shared 目录是否存在且有内容
  */
 export async function exists(libName: string, commit: string, platform: string): Promise<boolean> {
   try {
     const storePath = await getStorePath();
 
     if (platform === GENERAL_PLATFORM) {
-      // General 库检查 _shared 目录
+      // General 库检查 _shared 目录是否存在且有内容
       const sharedPath = path.join(storePath, libName, commit, '_shared');
       await fs.access(sharedPath);
-      return true;
+      const entries = await fs.readdir(sharedPath);
+      return entries.length > 0; // 空目录视为不存在
     }
 
     const libPath = getLibraryPath(storePath, libName, commit, platform);
@@ -613,7 +614,7 @@ export async function checkPlatformCompleteness(
 
 /**
  * 检测 Store 中的库是否为 General 类型
- * 条件：有 _shared 目录 且 无任何已知平台目录
+ * 条件：有 _shared 目录（且有内容）且 无任何已知平台目录
  */
 export async function isGeneralLib(libName: string, commit: string): Promise<boolean> {
   const storePath = await getStorePath();
@@ -623,6 +624,11 @@ export async function isGeneralLib(libName: string, commit: string): Promise<boo
     const entries = await fs.readdir(commitPath, { withFileTypes: true });
     const hasShared = entries.some(e => e.isDirectory() && e.name === '_shared');
     if (!hasShared) return false;
+
+    // 检查 _shared 目录是否有内容（空目录不算 General 库）
+    const sharedPath = path.join(commitPath, '_shared');
+    const sharedEntries = await fs.readdir(sharedPath);
+    if (sharedEntries.length === 0) return false;
 
     // KNOWN_PLATFORM_VALUES 已在文件顶部静态导入
     const hasPlatform = entries.some(e =>
