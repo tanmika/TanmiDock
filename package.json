@@ -5,7 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "tanmi-dock": "./dist/index.js"
+    "tanmi-dock": "./dist/index.js",
+    "tanmidock": "./dist/index.js",
+    "td": "./dist/index.js"
   },
   "files": [
     "dist",
