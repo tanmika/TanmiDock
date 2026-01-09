@@ -31,7 +31,7 @@ interface UnlinkOptions {
 /**
  * 取消链接
  */
-async function unlinkProject(projectPath: string, options: UnlinkOptions): Promise<void> {
+export async function unlinkProject(projectPath: string, options: UnlinkOptions): Promise<void> {
   const absolutePath = resolvePath(projectPath);
 
   // 检查项目路径

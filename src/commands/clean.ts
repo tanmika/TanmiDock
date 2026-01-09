@@ -39,7 +39,7 @@ interface CleanOptions {
 /**
  * 清理库
  */
-async function cleanLibraries(options: CleanOptions): Promise<void> {
+export async function cleanLibraries(options: CleanOptions): Promise<void> {
   const registry = getRegistry();
   await registry.load();
 
@@ -227,8 +227,21 @@ async function cleanLibraries(options: CleanOptions): Promise<void> {
       try {
         // 从 StoreEntry 动态获取平台列表（比 LibraryInfo.platforms 更准确）
         const platforms = registry.getLibraryPlatforms(lib.libName, lib.commit);
-        for (const platform of platforms) {
-          await store.remove(lib.libName, lib.commit, platform);
+        if (platforms.length > 0) {
+          // 有平台目录，逐个删除
+          for (const platform of platforms) {
+            await store.remove(lib.libName, lib.commit, platform);
+            // 同步删除 stores 记录
+            const storeKey = registry.getStoreKey(lib.libName, lib.commit, platform);
+            registry.removeStore(storeKey);
+          }
+        } else {
+          // 无平台目录（只有 _shared 或 General 库），使用 general 平台删除整个 commit 目录
+          const { GENERAL_PLATFORM } = await import('../core/platform.js');
+          await store.remove(lib.libName, lib.commit, GENERAL_PLATFORM);
+          // 同步删除可能存在的 general stores 记录
+          const storeKey = registry.getStoreKey(lib.libName, lib.commit, GENERAL_PLATFORM);
+          registry.removeStore(storeKey);
         }
         const libKey = registry.getLibraryKey(lib.libName, lib.commit);
         registry.removeLibrary(libKey);

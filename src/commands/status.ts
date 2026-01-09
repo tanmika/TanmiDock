@@ -34,7 +34,7 @@ export function createStatusCommand(): Command {
 /**
  * 显示项目状态
  */
-async function showStatus(projectPath: string, options: StatusOptions): Promise<void> {
+export async function showStatus(projectPath: string, options: StatusOptions): Promise<void> {
   const absolutePath = resolvePath(projectPath);
 
   // 检查项目路径

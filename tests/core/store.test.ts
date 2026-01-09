@@ -452,6 +452,39 @@ describe('store', () => {
 
       expect(fsMock.rmdir).not.toHaveBeenCalled();
     });
+
+    it('should remove commit dir when only _shared remains', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.rm.mockResolvedValue(undefined);
+      // 删除平台目录后，只剩 _shared
+      fsMock.readdir
+        .mockResolvedValueOnce(['_shared'])  // commit 目录只剩 _shared
+        .mockResolvedValueOnce([]);          // lib 目录为空
+
+      const { remove } = await import('../../src/core/store.js');
+      await remove('mylib', 'abc123', 'macOS');
+
+      // 应该删除整个 commit 目录
+      expect(fsMock.rm).toHaveBeenCalledWith(
+        path.join('/store', 'mylib', 'abc123'),
+        { recursive: true, force: true }
+      );
+    });
+
+    it('should remove entire commit dir for general platform', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue([]);  // lib 目录为空
+
+      const { remove } = await import('../../src/core/store.js');
+      await remove('mylib', 'abc123', 'general');
+
+      // general 类型应该直接删除 commit 目录
+      expect(fsMock.rm).toHaveBeenCalledWith(
+        path.join('/store', 'mylib', 'abc123'),
+        { recursive: true, force: true }
+      );
+    });
   });
 
   describe('listLibraries', () => {

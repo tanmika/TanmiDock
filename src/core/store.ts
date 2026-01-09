@@ -349,25 +349,39 @@ export async function copy(sourcePath: string, libName: string, commit: string, 
 
 /**
  * 从 Store 中删除库
+ * 当 platform 为 'general' 时，删除整个 commit 目录（包含 _shared）
  */
 export async function remove(libName: string, commit: string, platform: string): Promise<void> {
   const storePath = await getStorePath();
-  const libPath = getLibraryPath(storePath, libName, commit, platform);
+  const commitDir = path.join(storePath, libName, commit);
 
-  await fs.rm(libPath, { recursive: true, force: true });
+  if (platform === GENERAL_PLATFORM) {
+    // General 库：直接删除整个 commit 目录
+    await fs.rm(commitDir, { recursive: true, force: true });
+  } else {
+    // 平台库：只删除平台目录
+    const libPath = getLibraryPath(storePath, libName, commit, platform);
+    await fs.rm(libPath, { recursive: true, force: true });
 
-  // 如果 commit 目录为空，也删除
-  const commitDir = path.dirname(libPath);
-  try {
-    const remaining = await fs.readdir(commitDir);
-    if (remaining.length === 0) {
-      await fs.rmdir(commitDir);
-      // 如果 lib 目录也为空，也删除
-      const libDir = path.dirname(commitDir);
-      const libRemaining = await fs.readdir(libDir);
-      if (libRemaining.length === 0) {
-        await fs.rmdir(libDir);
+    // 检查 commit 目录是否可以清理
+    try {
+      const remaining = await fs.readdir(commitDir);
+      // 如果只剩 _shared 或完全为空，删除整个 commit 目录
+      const hasOnlyShared = remaining.length === 1 && remaining[0] === '_shared';
+      if (remaining.length === 0 || hasOnlyShared) {
+        await fs.rm(commitDir, { recursive: true, force: true });
       }
+    } catch {
+      // 目录可能已不存在
+    }
+  }
+
+  // 如果 lib 目录为空，也删除
+  const libDir = path.join(storePath, libName);
+  try {
+    const libRemaining = await fs.readdir(libDir);
+    if (libRemaining.length === 0) {
+      await fs.rmdir(libDir);
     }
   } catch {
     // 目录可能已不存在

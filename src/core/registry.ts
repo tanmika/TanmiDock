@@ -480,13 +480,14 @@ class RegistryManager {
 
   /**
    * 清理失效的 Store 引用
-   * 检查所有 StoreEntry.usedBy 中的项目是否还存在
+   * 检查所有 StoreEntry.usedBy 和 LibraryInfo.referencedBy 中的项目是否还存在
    * @returns 被清理的引用数量
    */
   async cleanStaleReferences(): Promise<number> {
     this.ensureLoaded();
     let cleaned = 0;
 
+    // 清理 stores.usedBy 中的失效引用
     for (const entry of Object.values(this.registry.stores)) {
       const validRefs: string[] = [];
 
@@ -515,6 +516,31 @@ class RegistryManager {
       }
     }
 
+    // 清理 libraries.referencedBy 中的失效引用
+    for (const lib of Object.values(this.registry.libraries)) {
+      const validRefs: string[] = [];
+
+      for (const projectHash of lib.referencedBy) {
+        const project = this.registry.projects[projectHash];
+        if (project) {
+          // 检查项目路径是否存在
+          try {
+            await fs.access(project.path);
+            validRefs.push(projectHash);
+          } catch {
+            cleaned++;
+          }
+        } else {
+          cleaned++;
+        }
+      }
+
+      // 更新引用列表
+      if (validRefs.length !== lib.referencedBy.length) {
+        lib.referencedBy = validRefs;
+      }
+    }
+
     return cleaned;
   }
 }
@@ -522,6 +548,14 @@ class RegistryManager {
 // 导出单例获取函数
 export function getRegistry(): RegistryManager {
   return RegistryManager.getInstance();
+}
+
+/**
+ * 重置 Registry 单例（仅用于测试）
+ * 清除缓存的实例，下次 getRegistry() 将创建新实例
+ */
+export function resetRegistry(): void {
+  (RegistryManager as unknown as { instance: RegistryManager | null }).instance = null as unknown as RegistryManager;
 }
 
 export default RegistryManager;

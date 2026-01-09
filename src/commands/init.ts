@@ -34,7 +34,7 @@ interface InitOptions {
 /**
  * 初始化
  */
-async function initializeDock(options: InitOptions): Promise<void> {
+export async function initializeDock(options: InitOptions): Promise<void> {
   // 检查是否已初始化
   if (await isInitialized()) {
     const status = await getInitStatus();

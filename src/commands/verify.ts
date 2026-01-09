@@ -32,7 +32,7 @@ export function createVerifyCommand(): Command {
 /**
  * 验证完整性
  */
-async function verifyIntegrity(): Promise<void> {
+export async function verifyIntegrity(): Promise<void> {
   title('验证 Store 完整性');
   blank();
 

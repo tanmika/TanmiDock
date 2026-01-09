@@ -59,7 +59,7 @@ interface LinkOptions {
 /**
  * 执行链接操作
  */
-async function linkProject(projectPath: string, options: LinkOptions): Promise<void> {
+export async function linkProject(projectPath: string, options: LinkOptions): Promise<void> {
   const absolutePath = resolvePath(projectPath);
 
   // 获取项目之前的平台选择（用于记忆）

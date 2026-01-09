@@ -41,7 +41,7 @@ interface RepairOptions {
 /**
  * 修复问题
  */
-async function repairIssues(options: RepairOptions): Promise<void> {
+export async function repairIssues(options: RepairOptions): Promise<void> {
   title('修复 Store 问题');
   blank();
 
