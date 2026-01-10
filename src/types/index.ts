@@ -84,6 +84,8 @@ export interface LibraryInfo {
   referencedBy: string[];
   createdAt: string;
   lastAccess: string;
+  /** 已确认远程不存在的平台（避免重复下载尝试） */
+  unavailablePlatforms?: string[];
 }
 
 /**

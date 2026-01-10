@@ -210,11 +210,17 @@ export async function restoreMultiPlatform(localPath: string): Promise<void> {
 export async function getPathStatus(
   localPath: string,
   expectedTarget: string
-): Promise<'linked' | 'wrong_link' | 'directory' | 'missing'> {
+): Promise<'linked' | 'wrong_link' | 'broken_link' | 'directory' | 'missing'> {
   try {
     const lstat = await fs.lstat(localPath);
 
     if (lstat.isSymbolicLink()) {
+      // 先检查链接目标是否存在（断链检测）
+      const isValid = await isValidLink(localPath);
+      if (!isValid) {
+        return 'broken_link';
+      }
+
       const isCorrect = await isCorrectLink(localPath, expectedTarget);
       return isCorrect ? 'linked' : 'wrong_link';
     }
