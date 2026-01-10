@@ -1119,9 +1119,23 @@ async function classifyDependencies(
       }
     } else {
       switch (pathStatus) {
-        case 'directory':
-          status = DependencyStatus.ABSORB;
+        case 'directory': {
+          // 检查本地目录是否是"之前链接的残留"（平台子目录是符号链接指向旧 commit）
+          // 如果是，应该走 MISSING 而不是 ABSORB，因为本地没有新 commit 的实际内容
+          const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
+          const localEntries = await fs.readdir(localPath, { withFileTypes: true });
+          const platformSymlinks = localEntries.filter(
+            (entry) => entry.isSymbolicLink() && KNOWN_PLATFORM_VALUES.includes(entry.name)
+          );
+
+          if (platformSymlinks.length > 0) {
+            // 本地平台目录是符号链接，说明是之前链接过的，新 commit 需要下载
+            status = DependencyStatus.MISSING;
+          } else {
+            status = DependencyStatus.ABSORB;
+          }
           break;
+        }
         default:
           status = DependencyStatus.MISSING;
       }
