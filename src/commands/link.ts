@@ -1068,21 +1068,54 @@ async function classifyDependencies(
     let status: DependencyStatus;
 
     if (inStore) {
-      switch (pathStatus) {
-        case 'linked':
+      if (isGeneral) {
+        // General 库：检查根目录符号链接状态
+        switch (pathStatus) {
+          case 'linked':
+            status = DependencyStatus.LINKED;
+            break;
+          case 'wrong_link':
+            status = DependencyStatus.RELINK;
+            break;
+          case 'directory':
+            status = DependencyStatus.REPLACE;
+            break;
+          case 'missing':
+            status = DependencyStatus.LINK_NEW;
+            break;
+          default:
+            status = DependencyStatus.LINK_NEW;
+        }
+      } else {
+        // 平台库：检查各平台子目录的链接状态
+        const storeCommitPath = path.join(storePath, dep.libName, dep.commit);
+        let allLinked = true;
+        let hasWrongLink = false;
+        let checkedCount = 0;
+
+        for (const platform of existing) {
+          const platformLocalPath = path.join(localPath, platform);
+          const platformStorePath = path.join(storeCommitPath, platform);
+          const platformStatus = await linker.getPathStatus(platformLocalPath, platformStorePath);
+
+          checkedCount++;
+          if (platformStatus !== 'linked') {
+            allLinked = false;
+            if (platformStatus === 'wrong_link') {
+              hasWrongLink = true;
+            }
+          }
+        }
+
+        if (checkedCount > 0 && allLinked) {
           status = DependencyStatus.LINKED;
-          break;
-        case 'wrong_link':
+        } else if (hasWrongLink) {
           status = DependencyStatus.RELINK;
-          break;
-        case 'directory':
+        } else if (pathStatus === 'missing') {
+          status = DependencyStatus.LINK_NEW;
+        } else {
           status = DependencyStatus.REPLACE;
-          break;
-        case 'missing':
-          status = DependencyStatus.LINK_NEW;
-          break;
-        default:
-          status = DependencyStatus.LINK_NEW;
+        }
       }
     } else {
       switch (pathStatus) {
