@@ -1,0 +1,264 @@
+{
+  "$schema": "./real-libraries.schema.json",
+  "$comment": "真实测试库数据 - 所有集成测试必须使用这些数据",
+
+  "gitServer": "git@git.inner.truesightai.com",
+
+  "libraries": {
+    "eigen": {
+      "type": "general",
+      "subtype": "source",
+      "url": "git@git.inner.truesightai.com:TSPublicSource/eigen.git",
+      "description": "C++ 矩阵运算头文件库",
+      "sizeApprox": "19MB",
+      "versions": {
+        "v3.4": {
+          "branch": "3.4",
+          "commit": "9df21dc8b4b576a7aa5c0094daa8d7e8b8be60f0"
+        },
+        "v3.3": {
+          "branch": "3.3",
+          "commit": "02f420012a169ed9267a8a78083aaa588e713353"
+        },
+        "v3.2": {
+          "branch": "3.2",
+          "commit": "ed5cd0a4d16e12daa1bef608628c103e67969d63"
+        }
+      },
+      "defaultVersion": "v3.4",
+      "storeStructure": ["_shared"]
+    },
+
+    "Lz4": {
+      "type": "platform",
+      "subtype": "binary",
+      "url": "git@git.inner.truesightai.com:TSPublicBinary/3rdparty/Lz4.git",
+      "description": "高性能压缩库",
+      "sizeApprox": "620KB",
+      "versions": {
+        "ts_dev": {
+          "branch": "ts_dev",
+          "commit": "dc1bce25f43c2c888bd1133c3555b443559d523a"
+        },
+        "master": {
+          "branch": "master",
+          "commit": "dc7917972f5ebd96e638412841eae1626dc254af"
+        }
+      },
+      "defaultVersion": "ts_dev",
+      "platforms": ["macOS", "iOS", "android/arm64-v8a", "android/armeabi-v7a"],
+      "storeStructure": ["_shared", "macOS", "iOS", "android"],
+      "sparse": {
+        "mac": ["macOS"],
+        "ios": ["iOS"],
+        "android": ["android"]
+      }
+    },
+
+    "virboxprotect": {
+      "type": "general",
+      "subtype": "binary",
+      "url": "git@git.inner.truesightai.com:TSPublicBinary/3rdparty/virboxprotect.git",
+      "description": "软件保护库",
+      "sizeApprox": "124KB",
+      "versions": {
+        "current": {
+          "branch": "master",
+          "commit": "73d374bae0640cf895fb007cbf0a4ac540238d7e"
+        },
+        "latest": {
+          "branch": "master",
+          "commit": "5bb67335c95803f0392937ec12d0d85aef4353ff"
+        }
+      },
+      "defaultVersion": "current",
+      "storeStructure": ["_shared"]
+    },
+
+    "pthreads": {
+      "type": "general",
+      "subtype": "binary",
+      "url": "git@git.inner.truesightai.com:TSPublicBinary/3rdparty/pthreads.git",
+      "description": "POSIX 线程库 (Windows only)",
+      "sizeApprox": "0 on macOS",
+      "versions": {
+        "develop": {
+          "branch": "develop",
+          "commit": "a66e21790fc16c66650aca42cb2c8c53f4b9fca1"
+        },
+        "master": {
+          "branch": "master",
+          "commit": "c311d3003a3cb9ff3936bf10d52f84fb4a19f09d"
+        }
+      },
+      "defaultVersion": "develop",
+      "storeStructure": ["_shared"],
+      "platformSpecific": {
+        "windows": true,
+        "macOS": false,
+        "linux": false
+      },
+      "testNote": "macOS 下目录为空，用于测试平台不适用场景"
+    },
+
+    "yalantinglibs": {
+      "type": "header-only",
+      "subtype": "source",
+      "url": "git@git.inner.truesightai.com:TSPublicSource/3rdparty/yalantinglibs.git",
+      "description": "C++ 异步编程库",
+      "sizeApprox": "small",
+      "versions": {
+        "ts_dev": {
+          "branch": "ts_dev",
+          "commit": "1e1022d2f369f8551a69c74f136692c07a5197d2"
+        },
+        "main": {
+          "branch": "main",
+          "commit": "2f287f0db7b586c99bc3c12459573cc9f7389319"
+        }
+      },
+      "defaultVersion": "ts_dev",
+      "storeStructure": ["_shared"],
+      "sparse": {
+        "common": ["include"]
+      }
+    },
+
+    "libflatbuffers": {
+      "type": "mixed",
+      "subtype": "binary",
+      "url": "git@git.inner.truesightai.com:TSPublicBinary/3rdparty/libflatbuffers.git",
+      "description": "序列化库",
+      "sizeApprox": "4.2MB",
+      "versions": {
+        "master": {
+          "branch": "master",
+          "commit": "55c4a7021a5d7bb3fdbd585b6bfa16fb2153bc55"
+        }
+      },
+      "defaultVersion": "master",
+      "platforms": ["macOS", "Win", "android"],
+      "storeStructure": ["_shared", "macOS", "Win", "android"],
+      "sparse": {
+        "mac": ["macOS"],
+        "win": ["Win"],
+        "android": ["android"],
+        "common": ["include"]
+      }
+    }
+  },
+
+  "testScenarios": {
+    "generalLibLink": {
+      "description": "General 库链接测试",
+      "libraries": ["eigen", "virboxprotect"],
+      "verifyPoints": ["_shared 符号链接创建", "Registry 记录正确"]
+    },
+    "platformLibLink": {
+      "description": "多平台库链接测试",
+      "libraries": ["Lz4"],
+      "verifyPoints": ["平台目录符号链接", "_shared 符号链接", "Registry 记录"]
+    },
+    "mixedLibLink": {
+      "description": "混合库链接测试",
+      "libraries": ["libflatbuffers"],
+      "verifyPoints": ["common 目录处理", "平台目录处理"]
+    },
+    "headerOnlyLink": {
+      "description": "头文件库链接测试",
+      "libraries": ["yalantinglibs"],
+      "verifyPoints": ["sparse common/include 处理"]
+    },
+    "versionUpgrade": {
+      "description": "版本升级测试",
+      "library": "eigen",
+      "from": "v3.3",
+      "to": "v3.4",
+      "verifyPoints": ["新版本下载", "符号链接更新", "旧版本保留在 Store"]
+    },
+    "versionDowngrade": {
+      "description": "版本降级测试",
+      "library": "eigen",
+      "from": "v3.4",
+      "to": "v3.3",
+      "verifyPoints": ["旧版本复用", "符号链接更新"]
+    },
+    "branchSwitch": {
+      "description": "分支切换测试",
+      "library": "Lz4",
+      "from": "ts_dev",
+      "to": "master",
+      "verifyPoints": ["不同 commit 处理", "符号链接更新"]
+    },
+    "storeReuse": {
+      "description": "Store 复用测试",
+      "library": "eigen",
+      "projects": ["project1", "project2"],
+      "verifyPoints": ["同一 Store 位置", "多个符号链接"]
+    },
+    "platformNotApplicable": {
+      "description": "平台不适用测试",
+      "library": "pthreads",
+      "platform": "macOS",
+      "verifyPoints": ["空目录处理", "不报错"]
+    },
+    "redownload": {
+      "description": "重新下载测试",
+      "library": "virboxprotect",
+      "steps": ["删除 Store", "重新 link"],
+      "verifyPoints": ["自动下载", "链接成功"]
+    }
+  },
+
+  "codepacTemplates": {
+    "simpleGeneral": {
+      "description": "简单 General 库配置",
+      "template": {
+        "version": "2.0.53",
+        "vars": {},
+        "repos": {
+          "common": [
+            {
+              "url": "{{url}}",
+              "commit": "{{commit}}",
+              "branch": "{{branch}}",
+              "dir": "{{dir}}"
+            }
+          ]
+        }
+      }
+    },
+    "simplePlatform": {
+      "description": "简单多平台库配置",
+      "template": {
+        "version": "2.0.53",
+        "vars": {
+          "ALL_COMMON_SPARSE": "{\"mac\":[\"macOS\"],\"ios\":[\"iOS\"],\"android\":[\"android\"]}"
+        },
+        "repos": {
+          "common": [
+            {
+              "url": "{{url}}",
+              "commit": "{{commit}}",
+              "branch": "{{branch}}",
+              "dir": "{{dir}}",
+              "sparse": "${ALL_COMMON_SPARSE}"
+            }
+          ]
+        }
+      }
+    },
+    "multiLibrary": {
+      "description": "多库配置",
+      "template": {
+        "version": "2.0.53",
+        "vars": {
+          "ALL_COMMON_SPARSE": "{\"mac\":[\"macOS\"],\"ios\":[\"iOS\"],\"android\":[\"android\"]}"
+        },
+        "repos": {
+          "common": "{{libraries}}"
+        }
+      }
+    }
+  }
+}

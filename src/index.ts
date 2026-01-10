@@ -72,8 +72,10 @@ const program = new Command();
 program
   .name('tanmi-dock')
   .description('集中型第三方库链接管理工具')
-  .version(pkg.version)
+  .version(pkg.version, '-V, --version', '显示版本号')
   .option('-v, --verbose', '输出详细信息')
+  .helpOption('-h, --help', '显示帮助信息')
+  .addHelpCommand('help [command]', '显示命令帮助')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.optsWithGlobals();
     if (opts.verbose) {
