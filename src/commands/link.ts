@@ -187,22 +187,24 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   // 记录 General 类型库（用于最后生成 dependencies 时使用正确的 platform）
   const generalLibs = new Set<string>();
 
-  // 预扫描 ABSORB 依赖的额外平台，让用户选择要链接的平台
+  // 预扫描所有本地存在的依赖的额外平台，让用户选择要链接的平台
   let finalLinkPlatforms: string[] = platforms; // 默认为用户请求的平台
   if (!options.yes && process.stdout.isTTY) {
     const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
-    const absorbItems = classified.filter(c => c.status === DependencyStatus.ABSORB);
 
-    // 收集所有本地存在的平台（去重）
+    // 收集所有本地存在的平台（去重）- 扫描所有有本地目录的依赖
     const allLocalPlatforms = new Set<string>();
-    for (const item of absorbItems) {
+    for (const item of classified) {
       try {
+        const stat = await fs.stat(item.localPath);
+        if (!stat.isDirectory()) continue;
+
         const entries = await fs.readdir(item.localPath, { withFileTypes: true });
         entries
           .filter(e => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name))
           .forEach(e => allLocalPlatforms.add(e.name));
       } catch {
-        // 读取失败，跳过
+        // 读取失败，跳过（目录不存在等情况）
       }
     }
 
