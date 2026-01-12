@@ -122,12 +122,12 @@ export function extractDependencies(config: CodepacDep): ParsedDependency[] {
 /**
  * 解析项目依赖（便捷方法）
  * @param projectPath 项目路径
- * @returns 依赖列表和配置路径
+ * @returns 依赖列表、配置路径和变量定义
  * @throws 找不到配置文件或解析失败时抛出异常
  */
 export async function parseProjectDependencies(
   projectPath: string
-): Promise<{ dependencies: ParsedDependency[]; configPath: string }> {
+): Promise<{ dependencies: ParsedDependency[]; configPath: string; vars?: Record<string, string> }> {
   const configPath = await findCodepacConfig(projectPath);
 
   if (!configPath) {
@@ -137,7 +137,7 @@ export async function parseProjectDependencies(
   const config = await parseCodepacDep(configPath);
   const dependencies = extractDependencies(config);
 
-  return { dependencies, configPath };
+  return { dependencies, configPath, vars: config.vars };
 }
 
 /**

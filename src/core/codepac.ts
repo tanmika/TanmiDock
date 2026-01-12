@@ -285,6 +285,8 @@ export interface DownloadOptions {
   platforms: string[];
   /** sparse checkout 配置 */
   sparse?: object | string;
+  /** codepac 变量定义（用于解析 sparse 中的变量引用） */
+  vars?: Record<string, string>;
   /** 进度回调 */
   onProgress?: (msg: string) => void;
   /** 临时目录创建后回调（用于启动进度监控） */
@@ -324,7 +326,7 @@ function generateTempDirName(): string {
  * @deprecated installSingle 已被本函数替代
  */
 export async function downloadToTemp(options: DownloadOptions): Promise<DownloadResult> {
-  const { url, commit, branch, libName, platforms, sparse, onProgress, onTempDirCreated } = options;
+  const { url, commit, branch, libName, platforms, sparse, vars, onProgress, onTempDirCreated } = options;
 
   // 检查 codepac 是否安装
   if (!(await isCodepacInstalled())) {
@@ -346,8 +348,8 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
     // 通知调用方临时目录已创建（用于启动进度监控）
     onTempDirCreated?.(tempDir, libDir);
 
-    // 生成临时 codepac 配置文件
-    const tempConfig = {
+    // 生成临时 codepac 配置文件（包含变量定义以支持 sparse 变量引用）
+    const tempConfig: Record<string, unknown> = {
       version: '1.0.0',
       repos: {
         common: [
@@ -361,6 +363,11 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
         ],
       },
     };
+
+    // 如果有变量定义，添加到配置中
+    if (vars && Object.keys(vars).length > 0) {
+      tempConfig.vars = vars;
+    }
 
     await fs.writeFile(configPath, JSON.stringify(tempConfig, null, 2), 'utf-8');
 

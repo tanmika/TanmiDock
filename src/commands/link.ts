@@ -103,11 +103,13 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   info(`分析 ${absolutePath}`);
   let dependencies: ParsedDependency[];
   let configPath: string;
+  let configVars: Record<string, string> | undefined;
 
   try {
     const result = await parseProjectDependencies(absolutePath);
     dependencies = result.dependencies;
     configPath = result.configPath;
+    configVars = result.vars;
   } catch (err) {
     error((err as Error).message);
     process.exit(EXIT_CODES.DATAERR);
@@ -252,7 +254,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               dependency,
               platforms,
               registry,
-              tx
+              tx,
+              { vars: configVars }
             );
 
             if (supplementResult.downloaded.length > 0) {
@@ -305,7 +308,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               dependency,
               platforms,
               registry,
-              tx
+              tx,
+              { vars: configVars }
             );
 
             // 获取所有可用平台（原有 + 新下载）
@@ -358,7 +362,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               dependency,
               platforms,
               registry,
-              tx
+              tx,
+              { vars: configVars }
             );
 
             // 获取所有可用平台（原有 + 新下载）
@@ -486,7 +491,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               dependency,
               platforms,
               registry,
-              tx
+              tx,
+              { vars: configVars }
             );
 
             // 合并所有可链接的平台
@@ -613,6 +619,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               libName: dependency.libName,
               platforms: missing,
               sparse: dependency.sparse,
+              vars: configVars,
               onTempDirCreated: (_tempDir, libDir) => {
                 linkNewMonitor.start(libDir);
               },
@@ -843,6 +850,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                 libName: dependency.libName,
                 platforms: missing,
                 sparse: dependency.sparse,
+                vars: configVars,
                 onTempDirCreated: (_tempDir, libDir) => {
                   // 临时目录创建后启动进度监控
                   downloadMonitor.start(libDir);
@@ -1262,6 +1270,8 @@ async function classifyDependencies(
  */
 interface SupplementOptions {
   forceDownload?: boolean;
+  /** codepac 变量定义（用于解析 sparse 中的变量引用） */
+  vars?: Record<string, string>;
 }
 
 interface SupplementResult {
@@ -1319,6 +1329,7 @@ async function supplementMissingPlatforms(
       libName: dependency.libName,
       platforms: toDownload,
       sparse: dependency.sparse,
+      vars: options.vars,
     });
 
     try {
