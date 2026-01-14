@@ -316,6 +316,49 @@ export async function absorbLib(
 }
 
 /**
+ * 吸收 General 库到 Store（整个内容移到 _shared）
+ * 用于没有 sparse 配置的源码库
+ * @param libDir 下载的库目录
+ * @param libName 库名
+ * @param commit commit hash
+ */
+export async function absorbGeneral(
+  libDir: string,
+  libName: string,
+  commit: string
+): Promise<string> {
+  const storePath = await getStorePath();
+  const baseDir = path.join(storePath, libName, commit);
+  const sharedPath = path.join(baseDir, '_shared');
+
+  // 确保基础目录存在
+  await fs.mkdir(baseDir, { recursive: true });
+
+  // 检查 _shared 是否已存在
+  try {
+    await fs.access(sharedPath);
+    // 已存在，跳过
+    return sharedPath;
+  } catch {
+    // 不存在，继续
+  }
+
+  // 直接把整个 libDir 移动到 _shared
+  try {
+    await fs.rename(libDir, sharedPath);
+  } catch (renameErr) {
+    if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+      // 跨文件系统，使用 safeMoveDir
+      await safeMoveDir(libDir, sharedPath);
+    } else {
+      throw renameErr;
+    }
+  }
+
+  return sharedPath;
+}
+
+/**
  * @deprecated 不再需要，使用 absorbLib 替代
  * 复制库到 Store（不删除源目录）
  * 使用文件锁保护检查-创建操作，避免 TOCTOU 竞态条件

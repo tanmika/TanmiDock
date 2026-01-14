@@ -863,10 +863,73 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               await downloadMonitor.stop();
 
               try {
-                // 2. 过滤平台：只保留实际下载的且在 missing 列表中的平台
+                // 2. 检测是否为 General 库（没有 sparse 配置且没有平台目录）
+                const isNewGeneral = !dependency.sparse && downloadResult.platformDirs.length === 0;
+
+                if (isNewGeneral) {
+                  // General 库：把整个下载内容移到 _shared
+                  tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
+                  await store.absorbGeneral(downloadResult.libDir, dependency.libName, dependency.commit);
+
+                  // 创建链接
+                  const sharedPath = path.join(storeCommitPath, '_shared');
+                  tx.recordOp('link', localPath, sharedPath);
+                  await linker.linkGeneral(localPath, sharedPath);
+
+                  // StoreEntry 记录
+                  const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
+                  if (!registry.getStore(storeKey)) {
+                    const sharedSize = await getDirSize(sharedPath);
+                    registry.addStore({
+                      libName: dependency.libName,
+                      commit: dependency.commit,
+                      platform: GENERAL_PLATFORM,
+                      branch: dependency.branch,
+                      url: dependency.url,
+                      size: sharedSize,
+                      usedBy: [],
+                      createdAt: new Date().toISOString(),
+                      lastAccess: new Date().toISOString(),
+                    });
+                  }
+                  registry.addStoreReference(storeKey, projectHash);
+
+                  // LibraryInfo 兼容记录
+                  const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+                  if (!registry.getLibrary(libKey)) {
+                    const sharedSize = await getDirSize(sharedPath);
+                    registry.addLibrary({
+                      libName: dependency.libName,
+                      commit: dependency.commit,
+                      branch: dependency.branch,
+                      url: dependency.url,
+                      platforms: [GENERAL_PLATFORM],
+                      size: sharedSize,
+                      referencedBy: [],
+                      createdAt: new Date().toISOString(),
+                      lastAccess: new Date().toISOString(),
+                    });
+                  }
+                  registry.addReference(libKey, projectHash);
+
+                  // 记录为 General 库
+                  generalLibs.add(dependency.libName);
+
+                  success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，下载完成`);
+
+                  return {
+                    success: true,
+                    name: dependency.libName,
+                    downloadedPlatforms: [GENERAL_PLATFORM],
+                    skippedPlatforms: [],
+                    isGeneral: true,
+                  };
+                }
+
+                // 3. 过滤平台：只保留实际下载的且在 missing 列表中的平台
                 const filteredMissing = downloadResult.platformDirs.filter(p => missing.includes(p));
 
-                // 3. 调用 absorbLib 将临时目录内容移入 Store（如果有下载成功的平台）
+                // 4. 调用 absorbLib 将临时目录内容移入 Store（如果有下载成功的平台）
                 if (filteredMissing.length > 0) {
                   tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
                   await store.absorbLib(
@@ -877,10 +940,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   );
                 }
 
-                // 4. 获取所有可链接的平台（已存在 + 新下载成功的）
+                // 5. 获取所有可链接的平台（已存在 + 新下载成功的）
                 const linkPlatforms = [...existing, ...filteredMissing];
 
-                // 5. 检测是否为 General 库
+                // 6. 检测是否为 General 库（Store 中已有 _shared）
                 const isDownloadGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
 
                 if (isDownloadGeneral) {

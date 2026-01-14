@@ -54,6 +54,15 @@ export function platformKeyToValue(key: string): string | undefined {
 }
 
 /**
+ * value 转换为 key (用于 codepac -p 参数)
+ * 如果找不到映射，返回原值（自定义平台）
+ */
+export function platformValueToKey(value: string): string {
+  const option = getPlatformOptionByValue(value);
+  return option?.key ?? value;
+}
+
+/**
  * 获取所有平台 keys
  */
 export function getAllPlatformKeys(): string[] {

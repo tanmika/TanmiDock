@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
-import { KNOWN_PLATFORM_VALUES } from './platform.js';
+import { KNOWN_PLATFORM_VALUES, platformValueToKey } from './platform.js';
 
 const execAsync = promisify(exec);
 
@@ -372,8 +372,9 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
     await fs.writeFile(configPath, JSON.stringify(tempConfig, null, 2), 'utf-8');
 
     // 构建 codepac 命令参数
-    // 关键: 多平台参数使用 -p platform1 platform2 ... 格式
-    const args = ['install', '-cf', configPath, '-td', tempDir, '-p', ...platforms];
+    // 关键: codepac -p 需要 CLI key (mac/ios/android)，而非目录 value (macOS/iOS/android)
+    const platformKeys = platforms.map(platformValueToKey);
+    const args = ['install', '-cf', configPath, '-td', tempDir, '-p', ...platformKeys];
 
     // 调用 codepac
     await spawnCodepac(args, tempDir, onProgress);
