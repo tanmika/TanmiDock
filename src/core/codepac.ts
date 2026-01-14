@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
-import { KNOWN_PLATFORM_VALUES, platformValueToKey } from './platform.js';
+import { isPlatformDir, normalizePlatformValue, platformValueToKey } from './platform.js';
 
 const execAsync = promisify(exec);
 
@@ -387,8 +387,9 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
 
     for (const entry of entries) {
       const name = entry.name;
-      if (KNOWN_PLATFORM_VALUES.includes(name)) {
-        platformDirs.push(name);
+      if (isPlatformDir(name)) {
+        // 标准化平台目录名（例如 "macos" -> "macOS"）
+        platformDirs.push(normalizePlatformValue(name));
       } else {
         sharedFiles.push(name);
       }

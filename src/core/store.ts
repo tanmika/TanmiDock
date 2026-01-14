@@ -7,7 +7,7 @@ import path from 'path';
 import * as config from './config.js';
 import { withFileLock } from '../utils/lock.js';
 import { copyDir, getDirSize, copyDirWithProgress, removeDir } from '../utils/fs-utils.js';
-import { KNOWN_PLATFORM_VALUES, GENERAL_PLATFORM } from './platform.js';
+import { KNOWN_PLATFORM_VALUES, GENERAL_PLATFORM, isPlatformDir, normalizePlatformValue } from './platform.js';
 
 /**
  * Store 版本类型
@@ -225,16 +225,18 @@ export async function absorbLib(
     for (const entry of entries) {
       const sourcePath = path.join(libDir, entry.name);
 
-      if (entry.isDirectory() && KNOWN_PLATFORM_VALUES.includes(entry.name)) {
-        // 平台目录: 只移动用户选择的平台
-        if (platforms.includes(entry.name)) {
-          const targetPath = path.join(baseDir, entry.name);
+      if (entry.isDirectory() && isPlatformDir(entry.name)) {
+        // 平台目录: 标准化名称后检查是否在用户选择的平台列表中
+        const normalizedName = normalizePlatformValue(entry.name);
+        if (platforms.includes(normalizedName)) {
+          // 目标目录使用标准化名称（如 "macOS" 而非 "macos"）
+          const targetPath = path.join(baseDir, normalizedName);
 
           // 检查目标目录是否已存在
           try {
             await fs.access(targetPath);
             // 已存在，跳过移动
-            skippedPlatforms.push(entry.name);
+            skippedPlatforms.push(normalizedName);
             continue;
           } catch {
             // 不存在，继续移动
@@ -244,25 +246,47 @@ export async function absorbLib(
             // 使用 safeMoveDir 处理跨文件系统情况
             await safeMoveDir(sourcePath, targetPath, {
               onProgress: progressOptions?.onProgress
-                ? (copied, total) => progressOptions.onProgress!(copied, total, entry.name)
+                ? (copied, total) => progressOptions.onProgress!(copied, total, normalizedName)
                 : undefined,
               totalSize: progressOptions?.totalSize,
             });
-            platformPaths[entry.name] = targetPath;
+            platformPaths[normalizedName] = targetPath;
             movedFiles.push({ source: sourcePath, target: targetPath });
           } catch (err) {
             const code = (err as NodeJS.ErrnoException).code;
             if (code === 'ENOTEMPTY' || code === 'EEXIST') {
               // 竞态条件：检查时不存在，移动时已存在，跳过
-              skippedPlatforms.push(entry.name);
+              skippedPlatforms.push(normalizedName);
+              continue;
+            }
+            throw err;
+          }
+        } else {
+          // 非选择的平台目录：也移到 Store 的平台目录级别（保留供以后使用）
+          const targetPath = path.join(baseDir, normalizedName);
+
+          // 检查目标目录是否已存在
+          try {
+            await fs.access(targetPath);
+            // 已存在，跳过移动
+            continue;
+          } catch {
+            // 不存在，继续移动
+          }
+
+          try {
+            await safeMoveDir(sourcePath, targetPath);
+            movedFiles.push({ source: sourcePath, target: targetPath });
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ENOTEMPTY' || code === 'EEXIST') {
               continue;
             }
             throw err;
           }
         }
-        // 非选择的平台目录不移动，保留在原位置
       } else {
-        // 共享文件/目录: 移动到 _shared
+        // 非平台目录/文件: 移动到 _shared
         const targetPath = path.join(sharedPath, entry.name);
 
         // 检查目标是否已存在

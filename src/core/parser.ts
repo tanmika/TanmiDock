@@ -3,7 +3,7 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
-import type { CodepacDep, ParsedDependency } from '../types/index.js';
+import type { CodepacDep, ParsedDependency, ActionConfig, ParsedAction } from '../types/index.js';
 
 /**
  * codepac 配置文件名
@@ -120,6 +120,102 @@ export function extractDependencies(config: CodepacDep): ParsedDependency[] {
 }
 
 /**
+ * 从配置中提取 actions 列表
+ * @param config 配置对象
+ * @returns actions 列表，如果没有则返回空数组
+ */
+export function extractActions(config: CodepacDep): ActionConfig[] {
+  return config.actions?.common ?? [];
+}
+
+/**
+ * 解析 action 命令字符串
+ * 格式: codepac install lib1 lib2 --configdir xxx --targetdir . [--disable_action]
+ * @param command 命令字符串
+ * @returns 解析后的 action 对象
+ */
+export function parseActionCommand(command: string): ParsedAction {
+  // 检查是否以 codepac install 开头
+  if (!command.startsWith('codepac install ')) {
+    throw new Error(`无法解析 action 命令，期望 'codepac install' 开头: ${command}`);
+  }
+
+  // 提取 --configdir 参数
+  const configDirMatch = command.match(/--configdir\s+(\S+)/);
+  if (!configDirMatch) {
+    throw new Error(`无法解析 action 命令，缺少 --configdir 参数: ${command}`);
+  }
+  const configDir = configDirMatch[1];
+
+  // 提取 --targetdir 参数
+  const targetDirMatch = command.match(/--targetdir\s+(\S+)/);
+  if (!targetDirMatch) {
+    throw new Error(`无法解析 action 命令，缺少 --targetdir 参数: ${command}`);
+  }
+  const targetDir = targetDirMatch[1];
+
+  // 检查 --disable_action 标志
+  const disableAction = command.includes('--disable_action');
+
+  // 提取库名列表（在 'codepac install ' 后，--configdir 前的部分）
+  const afterInstall = command.slice('codepac install '.length);
+  const beforeConfigDir = afterInstall.split('--configdir')[0].trim();
+
+  // 过滤掉任何以 -- 开头的参数
+  const libraries = beforeConfigDir
+    .split(/\s+/)
+    .filter(lib => lib && !lib.startsWith('--'));
+
+  if (libraries.length === 0) {
+    throw new Error(`无法解析 action 命令，没有指定库名: ${command}`);
+  }
+
+  return {
+    libraries,
+    configDir,
+    targetDir,
+    disableAction,
+  };
+}
+
+/**
+ * 从嵌套配置中提取指定库的依赖
+ * @param nestedConfigPath 嵌套配置文件路径
+ * @param libraries 需要提取的库名列表
+ * @returns 依赖列表、变量定义和嵌套 actions
+ */
+export async function extractNestedDependencies(
+  nestedConfigPath: string,
+  libraries: string[]
+): Promise<{
+  dependencies: ParsedDependency[];
+  vars?: Record<string, string>;
+  nestedActions: ActionConfig[];
+}> {
+  const config = await parseCodepacDep(nestedConfigPath);
+
+  // 只提取指定的库
+  const dependencies = config.repos.common
+    .filter(repo => libraries.includes(repo.dir))
+    .map(repo => ({
+      libName: repo.dir,
+      commit: repo.commit,
+      branch: repo.branch,
+      url: repo.url,
+      sparse: repo.sparse,
+    }));
+
+  // 提取嵌套的 actions（用于递归处理）
+  const nestedActions = extractActions(config);
+
+  return {
+    dependencies,
+    vars: config.vars,
+    nestedActions,
+  };
+}
+
+/**
  * 解析项目依赖（便捷方法）
  * @param projectPath 项目路径
  * @returns 依赖列表、配置路径和变量定义
@@ -151,6 +247,9 @@ export default {
   findCodepacConfig,
   parseCodepacDep,
   extractDependencies,
+  extractActions,
+  parseActionCommand,
+  extractNestedDependencies,
   parseProjectDependencies,
   getRelativeConfigPath,
 };

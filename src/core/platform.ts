@@ -97,6 +97,50 @@ export const KNOWN_PLATFORM_VALUES: string[] = [
   'ohos',
 ];
 
+// 平台名别名映射（小写 -> 标准形式）
+// 用于处理不同仓库中使用的不同命名风格
+const PLATFORM_ALIASES: Record<string, string> = {
+  // macOS 变体
+  'macos': 'macOS',
+  'macos-asan': 'macOS-asan',
+  // Windows 变体
+  'win': 'Win',
+  'windows': 'Win',
+  // iOS 变体
+  'ios': 'iOS',
+  'ios-asan': 'iOS-asan',
+  // Android 变体（已经是小写）
+  'android': 'android',
+  'android-asan': 'android-asan',
+  'android-hwasan': 'android-hwasan',
+  // Linux 变体
+  'ubuntu': 'ubuntu',
+  'linux': 'ubuntu',
+  // 其他
+  'wasm': 'wasm',
+  'ohos': 'ohos',
+};
+
+// 构建小写到标准形式的映射表
+const PLATFORM_VALUE_MAP: Map<string, string> = new Map(
+  Object.entries(PLATFORM_ALIASES)
+);
+
+/**
+ * 检查目录名是否为已知平台目录（大小写不敏感）
+ */
+export function isPlatformDir(name: string): boolean {
+  return PLATFORM_VALUE_MAP.has(name.toLowerCase());
+}
+
+/**
+ * 标准化平台目录名（例如 "macos" -> "macOS"）
+ * 如果不是已知平台，返回原值
+ */
+export function normalizePlatformValue(name: string): string {
+  return PLATFORM_VALUE_MAP.get(name.toLowerCase()) ?? name;
+}
+
 /**
  * General 类型库的平台标识
  * 用于只有 _shared 目录、无平台目录的库（如 eigen、header-only 库）

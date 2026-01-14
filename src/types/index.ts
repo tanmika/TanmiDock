@@ -219,3 +219,34 @@ export interface InitStatus {
   storePathExists: boolean;
   storePath?: string;
 }
+
+// ============ 嵌套依赖处理 ============
+
+/**
+ * 解析后的 action 命令
+ * 格式: codepac install lib1 lib2 --configdir xxx --targetdir . [--disable_action]
+ */
+export interface ParsedAction {
+  /** 需要安装的库名列表 */
+  libraries: string[];
+  /** 配置目录（相对于当前 3rdparty 目录） */
+  configDir: string;
+  /** 目标目录 */
+  targetDir: string;
+  /** 是否禁用嵌套 actions 的递归处理 */
+  disableAction: boolean;
+}
+
+/**
+ * 嵌套依赖处理上下文
+ */
+export interface NestedContext {
+  /** 嵌套深度（用于日志缩进和循环检测） */
+  depth: number;
+  /** 已处理的配置路径集合（防止循环依赖） */
+  processedConfigs: Set<string>;
+  /** 平台列表 */
+  platforms: string[];
+  /** 配置变量 */
+  vars?: Record<string, string>;
+}
