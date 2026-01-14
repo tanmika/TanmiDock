@@ -1171,6 +1171,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     const topLevelConfig = await parseCodepacDep(configPath);
     const actions = extractActions(topLevelConfig);
 
+    // 嵌套依赖记录（用于 registry）
+    const nestedLinkedDeps: Array<{
+      libName: string;
+      commit: string;
+      platform: string;
+      linkedPath: string;
+    }> = [];
+
     if (actions.length > 0) {
       blank();
       separator();
@@ -1196,6 +1204,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           yes: options.yes,
           generalLibs,
           downloadedLibs,
+          nestedLinkedDeps,
         });
       }
     }
@@ -1207,7 +1216,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     const relConfigPath = getRelativeConfigPath(absolutePath, configPath);
     // 使用主平台作为依赖的 platform 字段（兼容旧结构）
     const primaryPlatform = platforms[0];
-    const newDependencies = classified
+    const topLevelDeps = classified
       .filter((c) => {
         if (c.status === DependencyStatus.MISSING) {
           // 只包含成功下载的库
@@ -1222,6 +1231,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
         platform: generalLibs.has(c.dependency.libName) ? GENERAL_PLATFORM : primaryPlatform,
         linkedPath: path.relative(absolutePath, c.localPath),
       }));
+
+    // 合并顶层依赖和嵌套依赖
+    const newDependencies = [...topLevelDeps, ...nestedLinkedDeps];
 
     registry.addProject({
       path: absolutePath,
@@ -1633,6 +1645,16 @@ async function syncCacheFile(configPath: string): Promise<void> {
 /**
  * processAction 的选项
  */
+/**
+ * 嵌套依赖记录
+ */
+interface NestedLinkedDep {
+  libName: string;
+  commit: string;
+  platform: string;
+  linkedPath: string;
+}
+
 interface ProcessActionOptions {
   tx: Transaction;
   registry: ReturnType<typeof getRegistry>;
@@ -1642,6 +1664,7 @@ interface ProcessActionOptions {
   yes: boolean;
   generalLibs: Set<string>;
   downloadedLibs: string[];
+  nestedLinkedDeps: NestedLinkedDep[];
 }
 
 /**
@@ -1748,8 +1771,9 @@ async function linkNestedDependencies(
   }
 ): Promise<void> {
   const { thirdPartyDir, nestedConfigPath, context, options, indent } = params;
-  const { tx, registry, projectHash, dryRun, download, generalLibs, downloadedLibs } = options;
+  const { tx, registry, projectHash, dryRun, download, generalLibs, downloadedLibs, nestedLinkedDeps } = options;
   const { platforms, vars } = context;
+  const primaryPlatform = platforms[0];
 
   for (const dep of dependencies) {
     const localPath = path.join(thirdPartyDir, dep.libName);
@@ -1781,6 +1805,13 @@ async function linkNestedDependencies(
       // 已经是符号链接，检查是否正确
       const target = await linker.readLink(localPath);
       if (target && target.startsWith(storePath)) {
+        // 记录到 nestedLinkedDeps
+        nestedLinkedDeps.push({
+          libName: dep.libName,
+          commit: dep.commit,
+          platform: isGeneral ? GENERAL_PLATFORM : primaryPlatform,
+          linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+        });
         success(`${indent}  ${dep.libName} - 已链接`);
         continue;
       }
@@ -1803,10 +1834,24 @@ async function linkNestedDependencies(
         tx.recordOp('link', localPath, sharedPath);
         await linker.linkGeneral(localPath, sharedPath);
         generalLibs.add(dep.libName);
+        // 记录到 nestedLinkedDeps
+        nestedLinkedDeps.push({
+          libName: dep.libName,
+          commit: dep.commit,
+          platform: GENERAL_PLATFORM,
+          linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+        });
         success(`${indent}  ${dep.libName} - 链接完成 (General)`);
       } else {
         tx.recordOp('link', localPath, storeCommitPath);
         await linker.linkLib(localPath, storeCommitPath, platforms);
+        // 记录到 nestedLinkedDeps
+        nestedLinkedDeps.push({
+          libName: dep.libName,
+          commit: dep.commit,
+          platform: primaryPlatform,
+          linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+        });
         success(`${indent}  ${dep.libName} - 链接完成 [${platforms.join(', ')}]`);
       }
     } else if (download) {
@@ -1842,6 +1887,13 @@ async function linkNestedDependencies(
           await linker.linkGeneral(localPath, sharedPath);
           generalLibs.add(dep.libName);
           downloadedLibs.push(dep.libName);
+          // 记录到 nestedLinkedDeps
+          nestedLinkedDeps.push({
+            libName: dep.libName,
+            commit: dep.commit,
+            platform: GENERAL_PLATFORM,
+            linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+          });
           success(`${indent}  ${dep.libName} - 下载完成 (General)`);
         } else if (downloadResult.platformDirs.length > 0) {
           // 平台库处理
@@ -1856,6 +1908,13 @@ async function linkNestedDependencies(
           tx.recordOp('link', localPath, storeCommitPath);
           await linker.linkLib(localPath, storeCommitPath, downloadResult.platformDirs);
           downloadedLibs.push(dep.libName);
+          // 记录到 nestedLinkedDeps
+          nestedLinkedDeps.push({
+            libName: dep.libName,
+            commit: dep.commit,
+            platform: primaryPlatform,
+            linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+          });
           success(`${indent}  ${dep.libName} - 下载完成 [${downloadResult.platformDirs.join(', ')}]`);
         } else {
           warn(`${indent}  ${dep.libName} - 下载成功但无可用平台`);
