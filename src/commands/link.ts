@@ -1271,13 +1271,20 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     // 显示统计
     blank();
     separator();
-    const totalLinked =
+    const topLevelLinked =
+      stats.linked +
       stats.relink +
       stats.replace +
       stats.absorb +
       stats.linkNew +
       downloadedLibs.length;
-    info(`完成: 链接 ${totalLinked} 个库`);
+    const nestedLinked = nestedLinkedDeps.length;
+    const totalLinked = topLevelLinked + nestedLinked;
+    if (nestedLinked > 0) {
+      info(`完成: 链接 ${totalLinked} 个库 (顶层 ${topLevelLinked}, 嵌套 ${nestedLinked})`);
+    } else {
+      info(`完成: 链接 ${totalLinked} 个库`);
+    }
     if (savedBytes > 0) {
       info(`本次节省: ${formatSize(savedBytes)}`);
     }
@@ -1691,7 +1698,8 @@ async function processAction(
     return;
   }
 
-  info(`${indent}处理嵌套依赖: ${parsed.configDir} → [${parsed.libraries.join(', ')}]`);
+  const libsDisplay = parsed.libraries.length > 0 ? parsed.libraries.join(', ') : '全部依赖';
+  info(`${indent}处理嵌套依赖: ${parsed.configDir} → [${libsDisplay}]`);
 
   // 2. 构建嵌套配置路径
   const nestedConfigPath = path.join(thirdPartyDir, parsed.configDir, 'codepac-dep.json');
@@ -1733,9 +1741,10 @@ async function processAction(
   // 6. 合并变量
   const mergedVars = { ...context.vars, ...vars };
 
-  // 7. 处理这些依赖
+  // 7. 处理这些依赖（targetDir 指定嵌套依赖的目标目录）
   await linkNestedDependencies(dependencies, {
     thirdPartyDir,
+    targetDir: parsed.targetDir,
     nestedConfigPath,
     context: { ...context, vars: mergedVars },
     options,
@@ -1743,6 +1752,7 @@ async function processAction(
   });
 
   // 8. 递归处理嵌套 actions（如果没有 disable_action）
+  // 注意：递归时 thirdPartyDir 应该更新为当前嵌套依赖的目标目录
   if (!parsed.disableAction && nestedActions.length > 0) {
     const nestedContext: NestedContext = {
       depth: context.depth + 1,
@@ -1750,9 +1760,10 @@ async function processAction(
       platforms: context.platforms,
       vars: mergedVars,
     };
+    const nestedThirdPartyDir = path.join(thirdPartyDir, parsed.targetDir);
 
     for (const nestedAction of nestedActions) {
-      await processAction(nestedAction, nestedContext, thirdPartyDir, options);
+      await processAction(nestedAction, nestedContext, nestedThirdPartyDir, options);
     }
   }
 }
@@ -1764,19 +1775,22 @@ async function linkNestedDependencies(
   dependencies: ParsedDependency[],
   params: {
     thirdPartyDir: string;
+    targetDir: string;
     nestedConfigPath: string;
     context: NestedContext;
     options: ProcessActionOptions;
     indent: string;
   }
 ): Promise<void> {
-  const { thirdPartyDir, nestedConfigPath, context, options, indent } = params;
+  const { thirdPartyDir, targetDir, nestedConfigPath, context, options, indent } = params;
+  // 计算嵌套依赖的实际目标目录
+  const nestedTargetDir = path.join(thirdPartyDir, targetDir);
   const { tx, registry, projectHash, dryRun, download, generalLibs, downloadedLibs, nestedLinkedDeps } = options;
   const { platforms, vars } = context;
   const primaryPlatform = platforms[0];
 
   for (const dep of dependencies) {
-    const localPath = path.join(thirdPartyDir, dep.libName);
+    const localPath = path.join(nestedTargetDir, dep.libName);
     const storePath = await store.getStorePath();
     const storeCommitPath = path.join(storePath, dep.libName, dep.commit);
 

@@ -130,7 +130,9 @@ export function extractActions(config: CodepacDep): ActionConfig[] {
 
 /**
  * 解析 action 命令字符串
- * 格式: codepac install lib1 lib2 --configdir xxx --targetdir . [--disable_action]
+ * 支持两种格式:
+ * - 新格式: codepac install lib1 lib2 --configdir xxx --targetdir . [--disable_action]
+ * - 旧格式: codepac install --configdir xxx (targetdir 默认为 configdir，libraries 从配置文件读取)
  * @param command 命令字符串
  * @returns 解析后的 action 对象
  */
@@ -147,12 +149,9 @@ export function parseActionCommand(command: string): ParsedAction {
   }
   const configDir = configDirMatch[1];
 
-  // 提取 --targetdir 参数
+  // 提取 --targetdir 参数（可选，默认为 configdir）
   const targetDirMatch = command.match(/--targetdir\s+(\S+)/);
-  if (!targetDirMatch) {
-    throw new Error(`无法解析 action 命令，缺少 --targetdir 参数: ${command}`);
-  }
-  const targetDir = targetDirMatch[1];
+  const targetDir = targetDirMatch ? targetDirMatch[1] : configDir;
 
   // 检查 --disable_action 标志
   const disableAction = command.includes('--disable_action');
@@ -166,10 +165,8 @@ export function parseActionCommand(command: string): ParsedAction {
     .split(/\s+/)
     .filter(lib => lib && !lib.startsWith('--'));
 
-  if (libraries.length === 0) {
-    throw new Error(`无法解析 action 命令，没有指定库名: ${command}`);
-  }
-
+  // 旧格式兼容：如果没有指定库名，libraries 为空数组
+  // 调用方需要从 configDir 中读取 codepac-dep.json 来获取所有库
   return {
     libraries,
     configDir,
@@ -194,9 +191,9 @@ export async function extractNestedDependencies(
 }> {
   const config = await parseCodepacDep(nestedConfigPath);
 
-  // 只提取指定的库
+  // 提取库：如果指定了 libraries 则只提取指定的库，否则提取所有库（旧格式兼容）
   const dependencies = config.repos.common
-    .filter(repo => libraries.includes(repo.dir))
+    .filter(repo => libraries.length === 0 || libraries.includes(repo.dir))
     .map(repo => ({
       libName: repo.dir,
       commit: repo.commit,
