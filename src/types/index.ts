@@ -22,9 +22,23 @@ export interface DockConfig {
   unusedDays: number;           // unused 策略的天数阈值
   maxStoreSize?: number;
   autoDownload: boolean;
+  // 新增配置项
+  concurrency: number;          // 并发下载数，默认 5
+  logLevel: LogLevel;           // 日志级别，默认 'info'
+  proxy?: ProxyConfig;          // 代理配置，可选
 }
 
 export type CleanStrategy = 'unreferenced' | 'unused' | 'manual';
+export type LogLevel = 'debug' | 'verbose' | 'info' | 'warn' | 'error';
+
+/**
+ * 代理配置
+ */
+export interface ProxyConfig {
+  http?: string;                // HTTP 代理，如 http://127.0.0.1:7890
+  https?: string;               // HTTPS 代理，如 http://127.0.0.1:7890
+  noProxy?: string[];           // 不走代理的域名列表
+}
 
 /**
  * 默认配置
@@ -35,6 +49,8 @@ export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
   cleanStrategy: 'unreferenced',
   unusedDays: 30,
   autoDownload: true,
+  concurrency: 5,
+  logLevel: 'info',
 };
 
 // ============ 注册表相关 ============

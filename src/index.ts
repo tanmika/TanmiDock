@@ -4,7 +4,6 @@ import { createRequire } from 'module';
 import { createInitCommand } from './commands/init.js';
 import { createLinkCommand } from './commands/link.js';
 import { createStatusCommand } from './commands/status.js';
-import { createProjectsCommand } from './commands/projects.js';
 import { createCleanCommand } from './commands/clean.js';
 import { createUnlinkCommand } from './commands/unlink.js';
 import { createConfigCommand } from './commands/config.js';
@@ -76,6 +75,18 @@ program
   .option('-v, --verbose', '输出详细信息')
   .helpOption('-h, --help', '显示帮助信息')
   .addHelpCommand('help [command]', '显示命令帮助')
+  .addHelpText(
+    'after',
+    `
+快速上手:
+  td init                 首次使用，初始化配置
+  td link                 链接当前项目的依赖
+  td link -p mac android  只链接指定平台
+  td status               查看链接状态
+  td config               交互式修改配置
+
+别名: td = tanmi-dock`
+  )
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.optsWithGlobals();
     if (opts.verbose) {
@@ -87,7 +98,6 @@ program
 program.addCommand(createInitCommand());
 program.addCommand(createLinkCommand());
 program.addCommand(createStatusCommand());
-program.addCommand(createProjectsCommand());
 program.addCommand(createCleanCommand());
 program.addCommand(createUnlinkCommand());
 program.addCommand(createConfigCommand());

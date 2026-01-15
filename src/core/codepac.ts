@@ -8,8 +8,46 @@ import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
 import { isPlatformDir, normalizePlatformValue, platformValueToKey } from './platform.js';
+import type { ProxyConfig } from '../types/index.js';
 
 const execAsync = promisify(exec);
+
+// 代理配置缓存
+let cachedProxyEnv: Record<string, string> | null = null;
+
+/**
+ * 设置代理配置（由外部调用）
+ */
+export function setProxyConfig(proxy: ProxyConfig | undefined): void {
+  if (!proxy) {
+    cachedProxyEnv = null;
+    return;
+  }
+
+  cachedProxyEnv = {};
+  if (proxy.http) {
+    cachedProxyEnv['HTTP_PROXY'] = proxy.http;
+    cachedProxyEnv['http_proxy'] = proxy.http;
+  }
+  if (proxy.https) {
+    cachedProxyEnv['HTTPS_PROXY'] = proxy.https;
+    cachedProxyEnv['https_proxy'] = proxy.https;
+  }
+  if (proxy.noProxy && proxy.noProxy.length > 0) {
+    cachedProxyEnv['NO_PROXY'] = proxy.noProxy.join(',');
+    cachedProxyEnv['no_proxy'] = proxy.noProxy.join(',');
+  }
+}
+
+/**
+ * 获取带代理配置的环境变量
+ */
+function getEnvWithProxy(): NodeJS.ProcessEnv {
+  if (!cachedProxyEnv) {
+    return process.env;
+  }
+  return { ...process.env, ...cachedProxyEnv };
+}
 
 /**
  * codepac 命令名称
@@ -83,6 +121,7 @@ export async function install(options: InstallOptions): Promise<void> {
     const proc = spawn(CODEPAC_CMD, args, {
       cwd: configDir,
       stdio: silent ? 'ignore' : 'pipe',
+      env: getEnvWithProxy(),
     });
 
     let stderr = '';
@@ -233,6 +272,7 @@ export async function update(options: UpdateOptions): Promise<void> {
     const proc = spawn(CODEPAC_CMD, args, {
       cwd: configDir,
       stdio: 'pipe',
+      env: getEnvWithProxy(),
     });
 
     let stderr = '';
@@ -427,6 +467,7 @@ function spawnCodepac(
     const proc = spawn(CODEPAC_CMD, args, {
       cwd,
       stdio: 'pipe',
+      env: getEnvWithProxy(),
     });
 
     let stderr = '';

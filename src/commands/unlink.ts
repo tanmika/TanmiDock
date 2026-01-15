@@ -18,6 +18,17 @@ export function createUnlinkCommand(): Command {
     .description('取消项目的链接')
     .argument('[path]', '项目路径', '.')
     .option('--remove', '同时从 Store 删除无其他引用的库')
+    .addHelpText(
+      'after',
+      `
+将项目的符号链接还原为普通目录，取消与中央存储的关联。
+库文件会保留在 Store 中供其他项目使用。
+
+示例:
+  td unlink                取消当前项目的链接
+  td unlink ~/MyProject    取消指定项目的链接
+  td unlink --remove       取消链接并删除无引用的库`
+    )
     .action(async (projectPath: string, options) => {
       await ensureInitialized();
       await unlinkProject(projectPath, options);

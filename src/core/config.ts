@@ -6,7 +6,7 @@ import fs from 'fs/promises';
 import semver from 'semver';
 import { getConfigPath, getConfigDir, expandHome } from './platform.js';
 import { withFileLock } from '../utils/lock.js';
-import type { DockConfig, CleanStrategy } from '../types/index.js';
+import type { DockConfig, CleanStrategy, LogLevel } from '../types/index.js';
 import { DEFAULT_CONFIG, CURRENT_CONFIG_VERSION, MIN_SUPPORTED_VERSION } from '../types/index.js';
 
 /**
@@ -195,6 +195,9 @@ export function isValidConfigKey(key: string): key is keyof DockConfig {
     'cleanStrategy',
     'maxStoreSize',
     'autoDownload',
+    'concurrency',
+    'logLevel',
+    'proxy',
   ];
   return validKeys.includes(key as keyof DockConfig);
 }
@@ -203,7 +206,14 @@ export function isValidConfigKey(key: string): key is keyof DockConfig {
  * 验证 cleanStrategy 值是否有效
  */
 export function isValidCleanStrategy(value: string): value is CleanStrategy {
-  return ['unreferenced', 'lru', 'manual'].includes(value);
+  return ['unreferenced', 'unused', 'manual'].includes(value);
+}
+
+/**
+ * 验证 logLevel 值是否有效
+ */
+export function isValidLogLevel(value: string): value is LogLevel {
+  return ['debug', 'verbose', 'info', 'warn', 'error'].includes(value);
 }
 
 /**
@@ -218,12 +228,32 @@ export function parseConfigValue(
     case 'initialized':
       return value === 'true';
     case 'maxStoreSize':
-      return parseInt(value, 10);
+    case 'concurrency':
+      const num = parseInt(value, 10);
+      if (key === 'concurrency') {
+        const validValues = [1, 2, 3, 5, 99];
+        if (!validValues.includes(num)) {
+          throw new Error(`无效的 concurrency 值: ${value}，有效值: 1, 2, 3, 5, 99(不限制)`);
+        }
+      }
+      return num;
     case 'cleanStrategy':
       if (!isValidCleanStrategy(value)) {
-        throw new Error(`无效的 cleanStrategy 值: ${value}，有效值: unreferenced, lru, manual`);
+        throw new Error(`无效的 cleanStrategy 值: ${value}，有效值: unreferenced, unused, manual`);
       }
       return value;
+    case 'logLevel':
+      if (!isValidLogLevel(value)) {
+        throw new Error(`无效的 logLevel 值: ${value}，有效值: debug, verbose, info, warn, error`);
+      }
+      return value;
+    case 'proxy':
+      // proxy 需要 JSON 格式
+      try {
+        return JSON.parse(value);
+      } catch {
+        throw new Error(`无效的 proxy 值，需要 JSON 格式，如: {"http":"http://127.0.0.1:7890"}`);
+      }
     default:
       return value;
   }
@@ -240,5 +270,6 @@ export default {
   setStorePath,
   isValidConfigKey,
   isValidCleanStrategy,
+  isValidLogLevel,
   parseConfigValue,
 };

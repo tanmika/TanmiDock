@@ -5,6 +5,8 @@ import path from 'path';
 import fs from 'fs/promises';
 import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
+import * as config from '../core/config.js';
+import { setLogLevel } from '../utils/logger.js';
 import {
   parseProjectDependencies,
   getRelativeConfigPath,
@@ -17,6 +19,7 @@ import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
+import { setProxyConfig } from '../core/codepac.js';
 import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
@@ -41,7 +44,18 @@ export function createLinkCommand(): Command {
     .option('-y, --yes', '跳过确认提示')
     .option('--no-download', '不自动下载缺失库')
     .option('--dry-run', '只显示将要执行的操作')
-    .addHelpText('after', getPlatformHelpText())
+    .addHelpText(
+      'after',
+      `${getPlatformHelpText()}
+
+示例:
+  td link                       链接当前目录项目
+  td link ~/MyProject           链接指定路径项目
+  td link -p mac                只链接 macOS 平台
+  td link -p mac android        链接多个平台
+  td link --dry-run             预览操作，不实际执行
+  td link -y                    跳过确认，自动执行`
+    )
     .action(async (projectPath: string, options) => {
       await ensureInitialized();
       try {
@@ -68,6 +82,16 @@ interface LinkOptions {
  */
 export async function linkProject(projectPath: string, options: LinkOptions): Promise<void> {
   const absolutePath = resolvePath(projectPath);
+
+  // 读取配置并应用
+  const cfg = await config.load();
+  if (cfg?.logLevel) {
+    setLogLevel(cfg.logLevel);
+  }
+  if (cfg?.proxy) {
+    setProxyConfig(cfg.proxy);
+  }
+  const concurrency = cfg?.concurrency ?? 5;
 
   // 获取项目之前的平台选择（用于记忆）
   const registry = getRegistry();
@@ -759,11 +783,11 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       }
 
       if (toDownload.length > 0) {
-        info(`开始并行下载 ${toDownload.length} 个库 (最多 3 个并发)...`);
+        info(`开始并行下载 ${toDownload.length} 个库 (最多 ${concurrency} 个并发)...`);
         blank();
 
-        // 并行控制器，最多同时 3 个下载
-        const downloadLimit = pLimit(3);
+        // 并行控制器
+        const downloadLimit = pLimit(concurrency);
 
         // 为每个库下载所有选中的平台（使用 downloadToTemp + absorbLib + linkLib 新流程）
         const downloadTasks = toDownload.map((item) =>

@@ -5,6 +5,44 @@
  * - 状态标记：[ok] [warn] [err] [info]
  */
 
+import type { LogLevel } from '../types/index.js';
+
+// 日志级别优先级
+const LOG_LEVELS: Record<LogLevel, number> = {
+  debug: 0,
+  verbose: 1,
+  info: 2,
+  warn: 3,
+  error: 4,
+};
+
+// 当前日志级别（可通过 setLogLevel 修改）
+let currentLogLevel: LogLevel = 'info';
+
+/**
+ * 设置日志级别
+ */
+export function setLogLevel(level: LogLevel): void {
+  currentLogLevel = level;
+}
+
+/**
+ * 获取当前日志级别
+ */
+export function getLogLevel(): LogLevel {
+  return currentLogLevel;
+}
+
+/**
+ * 检查是否应该输出该级别的日志
+ */
+function shouldLog(level: LogLevel): boolean {
+  // 环境变量优先
+  if (process.env.DEBUG === '1') return true;
+  if (process.env.VERBOSE === '1' && LOG_LEVELS[level] >= LOG_LEVELS.verbose) return true;
+  return LOG_LEVELS[level] >= LOG_LEVELS[currentLogLevel];
+}
+
 // ANSI 颜色码
 const colors = {
   reset: '\x1b[0m',
@@ -31,7 +69,7 @@ function supportsColor(): boolean {
 
 const useColor = supportsColor();
 
-function colorize(text: string, color: keyof typeof colors): string {
+export function colorize(text: string, color: keyof typeof colors): string {
   if (!useColor) return text;
   return `${colors[color]}${text}${colors.reset}`;
 }
@@ -65,19 +103,19 @@ export function error(message: string): void {
 }
 
 /**
- * 调试信息 - 灰色，仅在 DEBUG 环境变量时输出
+ * 调试信息 - 灰色，根据日志级别输出
  */
 export function debug(message: string): void {
-  if (process.env.DEBUG) {
+  if (shouldLog('debug')) {
     console.log(`${colorize('[debug]', 'gray')} ${message}`);
   }
 }
 
 /**
- * 详细信息 - 灰色，仅在 VERBOSE 或 DEBUG 环境变量时输出
+ * 详细信息 - 灰色，根据日志级别输出
  */
 export function verbose(message: string): void {
-  if (process.env.VERBOSE === '1' || process.env.DEBUG === '1') {
+  if (shouldLog('verbose')) {
     console.log(`${colorize('[verbose]', 'gray')} ${message}`);
   }
 }
@@ -86,7 +124,7 @@ export function verbose(message: string): void {
  * 详细 JSON 输出
  */
 export function verboseJson(label: string, data: unknown): void {
-  if (process.env.VERBOSE === '1' || process.env.DEBUG === '1') {
+  if (shouldLog('verbose')) {
     console.log(`${colorize('[verbose]', 'gray')} ${label}:`);
     console.log(JSON.stringify(data, null, 2));
   }
@@ -96,7 +134,7 @@ export function verboseJson(label: string, data: unknown): void {
  * 检查是否启用 verbose 模式
  */
 export function isVerbose(): boolean {
-  return process.env.VERBOSE === '1' || process.env.DEBUG === '1';
+  return shouldLog('verbose');
 }
 
 /**
@@ -217,4 +255,7 @@ export default {
   separator,
   blank,
   title,
+  setLogLevel,
+  getLogLevel,
+  colorize,
 };
