@@ -131,14 +131,7 @@ async function showProjectStatus(projectPath: string, options: StatusOptions): P
     process.exit(1);
   }
 
-  // 加载注册表
-  const registry = getRegistry();
-  await registry.load();
-
-  const projectHash = registry.hashPath(absolutePath);
-  const projectInfo = registry.getProject(projectHash);
-
-  // 解析依赖
+  // 解析依赖（先解析，获取 configPath）
   let dependencies: ParsedDependency[];
   let configPath: string;
 
@@ -151,10 +144,30 @@ async function showProjectStatus(projectPath: string, options: StatusOptions): P
     process.exit(1);
   }
 
+  // 加载注册表
+  const registry = getRegistry();
+  await registry.load();
+
+  // 查找项目信息：优先当前路径，其次 3rdparty 目录
+  const thirdPartyDir = path.dirname(configPath);
+  let projectInfo = registry.getProject(registry.hashPath(absolutePath));
+  let registeredPath = absolutePath;
+
+  if (!projectInfo && thirdPartyDir !== absolutePath) {
+    // 当前路径未注册，尝试查找 3rdparty 目录
+    projectInfo = registry.getProject(registry.hashPath(thirdPartyDir));
+    if (projectInfo) {
+      registeredPath = thirdPartyDir;
+    }
+  }
+
   // 显示项目信息
   title(`项目: ${shrinkHome(absolutePath)}`);
 
   if (projectInfo) {
+    if (registeredPath !== absolutePath) {
+      info(`注册路径: ${shrinkHome(registeredPath)}`);
+    }
     info(`最后链接: ${formatDate(projectInfo.lastLinked)}`);
     info(`平台: ${projectInfo.platforms.join(', ') || '未指定'}`);
   } else {
@@ -164,8 +177,6 @@ async function showProjectStatus(projectPath: string, options: StatusOptions): P
   blank();
 
   // 分析依赖状态
-  const thirdPartyDir = path.dirname(configPath);
-
   let linked = 0;
   let broken = 0;
   let unlinked = 0;

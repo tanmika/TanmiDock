@@ -26,6 +26,7 @@ import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize } from '../utils/fs-utils.js';
 import { ProgressTracker, DownloadMonitor } from '../utils/progress.js';
 import { success, warn, error, info, hint, blank, separator } from '../utils/logger.js';
+import { verifyLocalCommit } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext } from '../types/index.js';
 import { withGlobalLock } from '../utils/global-lock.js';
@@ -1438,7 +1439,36 @@ async function classifyDependencies(
             // 本地平台目录是符号链接，说明是之前链接过的，新 commit 需要下载
             status = DependencyStatus.MISSING;
           } else {
-            status = DependencyStatus.ABSORB;
+            // 验证本地库的 commit 是否与预期一致
+            const verifyResult = await verifyLocalCommit(localPath, dep.commit);
+
+            switch (verifyResult.reason) {
+              case 'match':
+                // commit 匹配，正常吸收
+                status = DependencyStatus.ABSORB;
+                break;
+              case 'mismatch':
+                // commit 不匹配，输出警告并走下载流程
+                warn(
+                  `${dep.libName}: 本地 commit (${verifyResult.actualCommit?.slice(0, 7)}) 与预期 (${dep.commit.slice(0, 7)}) 不匹配，将重新下载`
+                );
+                status = DependencyStatus.MISSING;
+                break;
+              case 'no_git':
+                // 无 .git 目录，根据配置决定策略
+                const cfg = await config.load();
+                const strategy = cfg?.unverifiedLocalStrategy ?? 'download';
+
+                if (strategy === 'absorb') {
+                  // 配置为 absorb，继续吸收
+                  status = DependencyStatus.ABSORB;
+                } else {
+                  // 配置为 download（默认），走下载流程
+                  warn(`${dep.libName}: 本地无 .git 目录，无法验证 commit，将重新下载`);
+                  status = DependencyStatus.MISSING;
+                }
+                break;
+            }
           }
           break;
         }

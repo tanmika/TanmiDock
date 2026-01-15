@@ -6,7 +6,7 @@ import fs from 'fs/promises';
 import semver from 'semver';
 import { getConfigPath, getConfigDir, expandHome } from './platform.js';
 import { withFileLock } from '../utils/lock.js';
-import type { DockConfig, CleanStrategy, LogLevel } from '../types/index.js';
+import type { DockConfig, CleanStrategy, LogLevel, UnverifiedLocalStrategy } from '../types/index.js';
 import { DEFAULT_CONFIG, CURRENT_CONFIG_VERSION, MIN_SUPPORTED_VERSION } from '../types/index.js';
 
 /**
@@ -198,6 +198,7 @@ export function isValidConfigKey(key: string): key is keyof DockConfig {
     'concurrency',
     'logLevel',
     'proxy',
+    'unverifiedLocalStrategy',
   ];
   return validKeys.includes(key as keyof DockConfig);
 }
@@ -214,6 +215,13 @@ export function isValidCleanStrategy(value: string): value is CleanStrategy {
  */
 export function isValidLogLevel(value: string): value is LogLevel {
   return ['debug', 'verbose', 'info', 'warn', 'error'].includes(value);
+}
+
+/**
+ * 验证 unverifiedLocalStrategy 值是否有效
+ */
+export function isValidUnverifiedLocalStrategy(value: string): value is UnverifiedLocalStrategy {
+  return ['download', 'absorb'].includes(value);
 }
 
 /**
@@ -247,6 +255,11 @@ export function parseConfigValue(
         throw new Error(`无效的 logLevel 值: ${value}，有效值: debug, verbose, info, warn, error`);
       }
       return value;
+    case 'unverifiedLocalStrategy':
+      if (!isValidUnverifiedLocalStrategy(value)) {
+        throw new Error(`无效的 unverifiedLocalStrategy 值: ${value}，有效值: download, absorb`);
+      }
+      return value;
     case 'proxy':
       // proxy 需要 JSON 格式
       try {
@@ -271,5 +284,6 @@ export default {
   isValidConfigKey,
   isValidCleanStrategy,
   isValidLogLevel,
+  isValidUnverifiedLocalStrategy,
   parseConfigValue,
 };

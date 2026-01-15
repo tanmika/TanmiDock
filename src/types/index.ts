@@ -26,10 +26,12 @@ export interface DockConfig {
   concurrency: number;          // 并发下载数，默认 5
   logLevel: LogLevel;           // 日志级别，默认 'info'
   proxy?: ProxyConfig;          // 代理配置，可选
+  unverifiedLocalStrategy: UnverifiedLocalStrategy;  // 无法验证commit的本地库处理策略
 }
 
 export type CleanStrategy = 'unreferenced' | 'unused' | 'manual';
 export type LogLevel = 'debug' | 'verbose' | 'info' | 'warn' | 'error';
+export type UnverifiedLocalStrategy = 'download' | 'absorb';
 
 /**
  * 代理配置
@@ -51,6 +53,7 @@ export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
   autoDownload: true,
   concurrency: 5,
   logLevel: 'info',
+  unverifiedLocalStrategy: 'download',
 };
 
 // ============ 注册表相关 ============

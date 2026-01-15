@@ -7,7 +7,7 @@ import { ensureInitialized } from '../core/guard.js';
 import * as config from '../core/config.js';
 import { shrinkHome, expandHome } from '../core/platform.js';
 import { info, error, success, title, blank, colorize } from '../utils/logger.js';
-import type { DockConfig, CleanStrategy, LogLevel, ProxyConfig } from '../types/index.js';
+import type { DockConfig, CleanStrategy, LogLevel, ProxyConfig, UnverifiedLocalStrategy } from '../types/index.js';
 
 /**
  * 创建 config 命令
@@ -21,13 +21,14 @@ export function createConfigCommand(): Command {
 无参数时进入交互式配置界面，可视化查看和修改所有配置项。
 
 配置项:
-  storePath      存储路径，依赖库存放目录
-  cleanStrategy  清理策略: unreferenced/unused/manual
-  unusedDays     未使用天数阈值 (unused 策略时生效)
-  autoDownload   缺失依赖时是否自动下载: true/false
-  concurrency    并发下载数: 1/2/3/5/99(不限制)
-  logLevel       日志级别: debug/verbose/info/warn/error
-  proxy          代理地址，JSON 格式: {"http":"...","https":"..."}
+  storePath                存储路径，依赖库存放目录
+  cleanStrategy            清理策略: unreferenced/unused/manual
+  unusedDays               未使用天数阈值 (unused 策略时生效)
+  autoDownload             缺失依赖时是否自动下载: true/false
+  concurrency              并发下载数: 1/2/3/5/99(不限制)
+  logLevel                 日志级别: debug/verbose/info/warn/error
+  proxy                    代理地址，JSON 格式: {"http":"...","https":"..."}
+  unverifiedLocalStrategy  本地库 commit 未验证时策略: skip/warn/error
 
 示例:
   td config                              交互式配置
@@ -129,6 +130,17 @@ const CONFIG_META: ConfigMeta[] = [
     ],
   },
   { key: 'proxy', label: '代理设置', description: 'HTTP/HTTPS 代理配置', editable: true, type: 'proxy' },
+  {
+    key: 'unverifiedLocalStrategy',
+    label: '未验证本地库策略',
+    description: '本地库 commit 无法验证时的处理策略',
+    editable: true,
+    type: 'select',
+    options: [
+      { value: 'download', label: '重新下载' },
+      { value: 'absorb', label: '自动吸收' },
+    ],
+  },
 ];
 
 /**
@@ -152,6 +164,14 @@ const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
 };
 
 /**
+ * 未验证本地库策略汉化映射
+ */
+const UNVERIFIED_LOCAL_STRATEGY_LABELS: Record<UnverifiedLocalStrategy, string> = {
+  download: '重新下载',
+  absorb: '自动吸收',
+};
+
+/**
  * 格式化配置值用于显示
  */
 function formatValue(key: keyof DockConfig, value: unknown): string {
@@ -168,6 +188,10 @@ function formatValue(key: keyof DockConfig, value: unknown): string {
   if (key === 'logLevel') {
     const level = value as LogLevel;
     return LOG_LEVEL_LABELS[level] || level;
+  }
+  if (key === 'unverifiedLocalStrategy') {
+    const strategy = value as UnverifiedLocalStrategy;
+    return UNVERIFIED_LOCAL_STRATEGY_LABELS[strategy] || strategy;
   }
   if (key === 'concurrency') {
     const num = value as number;
