@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-01-16
+
+### Changed
+
+- **commit 验证优化**: 优先从 `.git/commit_hash` 文件读取 commit hash，避免依赖 git 命令（适用于 CI/CD 等场景）
+
+### Fixed
+
+- **平台不支持时的错误处理**: 当库不支持请求的平台时，正确警告并跳过，不再复制无用的 `_shared` 数据
+  - 修复 LINK_NEW/ABSORB/REPLACE/RELINK 四种状态的处理
+  - 避免 Store 有库但无请求平台时浪费磁盘空间
+
 ## [0.6.0] - 2026-01-16
 
 ### Added
