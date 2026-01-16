@@ -275,33 +275,8 @@ export async function absorbLib(
             }
             throw err;
           }
-        } else {
-          // 非选择的平台目录：也移到 Store 的平台目录级别（保留供以后使用）
-          const targetPath = path.join(baseDir, normalizedName);
-
-          // 检查目标目录是否已存在
-          try {
-            await fs.access(targetPath);
-            // 已存在，跳过移动
-            continue;
-          } catch {
-            // 不存在，继续移动
-          }
-
-          try {
-            const result = await safeMoveDir(sourcePath, targetPath);
-            movedFiles.push({ source: sourcePath, target: targetPath, crossFs: result.crossFs });
-            if (result.crossFs && result.sourcePath) {
-              crossFsSources.push(result.sourcePath);
-            }
-          } catch (err) {
-            const code = (err as NodeJS.ErrnoException).code;
-            if (code === 'ENOTEMPTY' || code === 'EEXIST') {
-              continue;
-            }
-            throw err;
-          }
         }
+        // 非选中的平台目录：跳过，不吸收（会随本地目录删除而消失）
       } else {
         // 非平台目录/文件: 移动到 _shared
         const targetPath = path.join(sharedPath, entry.name);

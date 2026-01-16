@@ -81,6 +81,7 @@ export async function createTestEnv(): Promise<TestEnv> {
     cleanStrategy: 'unreferenced',
     unusedDays: 30,
     autoDownload: true,
+    unverifiedLocalStrategy: 'absorb', // 测试中默认吸收无 .git 的本地目录
   };
   await fs.writeFile(
     path.join(homeDir, 'config.json'),

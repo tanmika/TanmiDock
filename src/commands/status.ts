@@ -53,7 +53,7 @@ export function createStatusCommand(): Command {
         if (options.all) {
           await showAllProjects(options);
         } else {
-          await showProjectStatus(projectPath!, options);
+          await showStatus(projectPath!, options);
         }
         return;
       }
@@ -107,7 +107,7 @@ async function interactiveStatus(): Promise<void> {
   blank();
 
   if (selected === 'current') {
-    await showProjectStatus('.', {});
+    await showStatus('.', {});
   } else {
     await showAllProjects({});
   }
@@ -116,7 +116,7 @@ async function interactiveStatus(): Promise<void> {
 /**
  * 显示单个项目状态
  */
-async function showProjectStatus(projectPath: string, options: StatusOptions): Promise<void> {
+export async function showStatus(projectPath: string, options: StatusOptions): Promise<void> {
   const absolutePath = resolvePath(projectPath);
 
   // 检查项目路径

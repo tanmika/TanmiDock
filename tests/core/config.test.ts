@@ -44,7 +44,7 @@ describe('config', () => {
   describe('isValidCleanStrategy', () => {
     it('should return true for valid strategies', () => {
       expect(isValidCleanStrategy('unreferenced')).toBe(true);
-      expect(isValidCleanStrategy('lru')).toBe(true);
+      expect(isValidCleanStrategy('unused')).toBe(true);
       expect(isValidCleanStrategy('manual')).toBe(true);
     });
 
@@ -68,7 +68,7 @@ describe('config', () => {
     });
 
     it('should parse cleanStrategy correctly', () => {
-      expect(parseConfigValue('cleanStrategy', 'lru')).toBe('lru');
+      expect(parseConfigValue('cleanStrategy', 'unused')).toBe('unused');
       expect(parseConfigValue('cleanStrategy', 'unreferenced')).toBe('unreferenced');
     });
 
@@ -221,11 +221,11 @@ describe('config with fs mock', () => {
       fsMock.writeFile.mockResolvedValue(undefined);
 
       const { set } = await import('../../src/core/config.js');
-      await set('cleanStrategy', 'lru');
+      await set('cleanStrategy', 'unused');
 
       expect(fsMock.writeFile).toHaveBeenCalled();
       const writtenContent = JSON.parse(fsMock.writeFile.mock.calls[0][1]);
-      expect(writtenContent.cleanStrategy).toBe('lru');
+      expect(writtenContent.cleanStrategy).toBe('unused');
     });
 
     it('should throw when config not exists', async () => {

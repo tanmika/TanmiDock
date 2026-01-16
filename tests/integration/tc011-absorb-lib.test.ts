@@ -198,15 +198,15 @@ describe('TC-011: absorbLib 集成测试', () => {
     // When: 只选择 2 个平台吸收
     const result = await absorbLib(localLibDir, selectedPlatforms, libName, commit);
 
-    // Then: 只有选中的平台被移动
+    // Then: 只有选中的平台被移动到 Store
     const storePath = await getStorePath();
     const storeLibDir = path.join(storePath, libName, commit);
 
     await expect(fs.access(path.join(storeLibDir, 'macOS'))).resolves.toBeUndefined();
     await expect(fs.access(path.join(storeLibDir, 'android'))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(storeLibDir, 'Win'))).rejects.toThrow();
+    await expect(fs.access(path.join(storeLibDir, 'Win'))).rejects.toThrow(); // 未选中，不吸收
 
-    // 未选中的平台仍在本地
+    // 未选中的平台仍在本地（会随本地目录删除而消失）
     await expect(fs.access(path.join(localLibDir, 'Win'))).resolves.toBeUndefined();
 
     // 验证返回值
@@ -234,11 +234,11 @@ describe('TC-011: absorbLib 集成测试', () => {
     // When: 传入空平台数组
     const result = await absorbLib(localLibDir, [], libName, commit);
 
-    // Then: 只移动共享文件，不移动平台
+    // Then: 不吸收任何平台，只移动共享文件
     expect(Object.keys(result.platformPaths)).toHaveLength(0);
     expect(result.skippedPlatforms).toHaveLength(0);
 
-    // 平台目录仍在本地
+    // 平台目录仍在本地（未被吸收）
     await expect(fs.access(path.join(localLibDir, 'macOS'))).resolves.toBeUndefined();
 
     // 共享文件已移动

@@ -260,7 +260,7 @@ describe('store', () => {
       );
     });
 
-    it('should only move selected platforms', async () => {
+    it('should only absorb selected platforms', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.rename.mockResolvedValue(undefined);
@@ -278,17 +278,17 @@ describe('store', () => {
       const { absorbLib } = await import('../../src/core/store.js');
       const result = await absorbLib('/tmp/libtest', ['macOS'], 'libtest', 'abc123');
 
-      // 验证只有选择的平台被移动
+      // 验证只有选择的平台被吸收
       expect(result.platformPaths['macOS']).toBeDefined();
       expect(result.platformPaths['Win']).toBeUndefined();
       expect(result.platformPaths['iOS']).toBeUndefined();
       expect(result.platformPaths['macOS-asan']).toBeUndefined();
 
-      // 验证只调用了一次平台 rename（macOS）
-      const renameCalls = fsMock.rename.mock.calls.filter(
-        (call: string[]) => call[0].includes('macOS') && !call[0].includes('_shared')
+      // 验证只有选中的平台被移动（macOS）
+      const platformRenameCalls = fsMock.rename.mock.calls.filter(
+        (call: string[]) => !call[0].includes('_shared') && !call[1].includes('_shared')
       );
-      expect(renameCalls).toHaveLength(1);
+      expect(platformRenameCalls).toHaveLength(1);
     });
 
     it('should skip platform directory when already exists', async () => {
