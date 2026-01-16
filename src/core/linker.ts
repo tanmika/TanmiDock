@@ -373,12 +373,29 @@ export async function linkLib(
       await fs.symlink(storePlatformPath, localPlatformPath, type);
     }
 
-    // 4. 复制共享文件（非链接）
+    // 4. 处理共享内容（_shared 目录）
     const sharedPath = path.join(storeCommitPath, '_shared');
     try {
       await fs.access(sharedPath);
-      // _shared 目录存在，复制其内容到 localPath
-      await copyDir(sharedPath, localPath, { preserveSymlinks: true });
+      // _shared 目录存在，处理其内容
+      const sharedEntries = await fs.readdir(sharedPath, { withFileTypes: true });
+      const type = isWindows() ? 'junction' : 'dir';
+
+      for (const entry of sharedEntries) {
+        const sourcePath = path.join(sharedPath, entry.name);
+        const destPath = path.join(localPath, entry.name);
+
+        if (entry.name === '.git' && entry.isDirectory()) {
+          // .git 目录：创建符号链接
+          await fs.symlink(sourcePath, destPath, type);
+        } else if (entry.isDirectory()) {
+          // 其他目录：复制
+          await copyDir(sourcePath, destPath, { preserveSymlinks: true });
+        } else {
+          // 文件：复制
+          await fs.copyFile(sourcePath, destPath);
+        }
+      }
     } catch {
       // _shared 目录不存在，跳过
     }
