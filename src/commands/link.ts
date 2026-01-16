@@ -1868,7 +1868,95 @@ async function linkNestedDependencies(
         break;
       }
     }
-    const isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
+    let isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
+
+    // Store 没有，但本地是目录时，验证 commit 并尝试 absorb
+    if (!storeHas && !isGeneral && localExists && !localIsSymlink) {
+      const { verifyLocalCommit } = await import('../utils/git.js');
+      const verifyResult = await verifyLocalCommit(localPath, dep.commit);
+
+      switch (verifyResult.reason) {
+        case 'match': {
+          // commit 匹配，absorb 到 Store
+          info(`${indent}  ${dep.libName} - 本地 commit 匹配，吸收到 Store`);
+          if (!dryRun) {
+            // 检测是否为 General 库（无平台目录）
+            const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
+            const localEntries = await fs.readdir(localPath, { withFileTypes: true });
+            const hasPlatformDir = localEntries.some(
+              (e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name)
+            );
+
+            if (!hasPlatformDir) {
+              // General 库
+              tx.recordOp('absorb', storeCommitPath, localPath);
+              await store.absorbGeneral(localPath, dep.libName, dep.commit);
+              isGeneral = true;
+            } else {
+              // 平台库
+              const platformDirs = localEntries
+                .filter((e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name))
+                .map((e) => e.name);
+              tx.recordOp('absorb', storeCommitPath, localPath);
+              await store.absorbLib(localPath, platformDirs, dep.libName, dep.commit);
+            }
+            storeHas = true;
+          }
+          break;
+        }
+        case 'mismatch':
+          // commit 不匹配，删除本地目录，走下载流程
+          warn(
+            `${indent}  ${dep.libName}: 本地 commit (${verifyResult.actualCommit?.slice(0, 7)}) 与预期 (${dep.commit.slice(0, 7)}) 不匹配，将重新下载`
+          );
+          if (!dryRun) {
+            await fs.rm(localPath, { recursive: true, force: true });
+          }
+          break;
+        case 'no_git': {
+          // 无 .git，按配置决定
+          const cfg = await config.load();
+          const strategy = cfg?.unverifiedLocalStrategy ?? 'download';
+
+          if (strategy === 'absorb') {
+            info(`${indent}  ${dep.libName}: 本地无 .git 目录，按配置直接吸收`);
+            if (!dryRun) {
+              const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
+              const localEntries = await fs.readdir(localPath, { withFileTypes: true });
+              const hasPlatformDir = localEntries.some(
+                (e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name)
+              );
+
+              if (!hasPlatformDir) {
+                tx.recordOp('absorb', storeCommitPath, localPath);
+                await store.absorbGeneral(localPath, dep.libName, dep.commit);
+                isGeneral = true;
+              } else {
+                const platformDirs = localEntries
+                  .filter((e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name))
+                  .map((e) => e.name);
+                tx.recordOp('absorb', storeCommitPath, localPath);
+                await store.absorbLib(localPath, platformDirs, dep.libName, dep.commit);
+              }
+              storeHas = true;
+            }
+          } else {
+            warn(`${indent}  ${dep.libName}: 本地无 .git 目录，无法验证 commit，将重新下载`);
+            if (!dryRun) {
+              await fs.rm(localPath, { recursive: true, force: true });
+            }
+          }
+          break;
+        }
+      }
+      // 更新 localExists 状态（可能已被删除或 absorb）
+      try {
+        await fs.lstat(localPath);
+        localExists = true;
+      } catch {
+        localExists = false;
+      }
+    }
 
     if (localExists && localIsSymlink) {
       // 已经是符号链接，检查是否正确

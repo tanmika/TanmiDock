@@ -134,13 +134,13 @@ export async function absorb(sourcePath: string, libName: string, commit: string
 }
 
 /**
- * 跨文件系统安全移动目录
- * 先尝试 rename，失败时回退到 copy + delete
+ * 跨文件系统安全移动目录（延迟删除模式）
+ * 先尝试 rename，失败时回退到 copy（不删除源目录）
  *
  * @param sourcePath 源路径
  * @param targetPath 目标路径
  * @param progressOptions 进度回调选项（用于跨文件系统复制时）
- * @returns 是否使用了复制模式（跨文件系统）
+ * @returns { crossFs: boolean, sourcePath?: string } - crossFs 表示是否跨文件系统，sourcePath 是需要后续删除的源路径
  */
 async function safeMoveDir(
   sourcePath: string,
@@ -149,22 +149,22 @@ async function safeMoveDir(
     onProgress?: (copiedBytes: number, totalBytes: number) => void;
     totalSize?: number;
   }
-): Promise<boolean> {
+): Promise<{ crossFs: boolean; sourcePath?: string }> {
   try {
     await fs.rename(sourcePath, targetPath);
-    return false; // 使用 rename，非跨文件系统
+    return { crossFs: false }; // 使用 rename，非跨文件系统
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'EXDEV') {
-      // 跨文件系统，回退到复制 + 删除
+      // 跨文件系统，只复制不删除（延迟删除以保证可回滚）
       const totalSize = progressOptions?.totalSize ?? 0;
       if (progressOptions?.onProgress && totalSize > 0) {
         await copyDirWithProgress(sourcePath, targetPath, totalSize, progressOptions.onProgress);
       } else {
         await copyDir(sourcePath, targetPath);
       }
-      await removeDir(sourcePath);
-      return true; // 使用了复制模式
+      // 返回源路径，由调用方在全部成功后统一删除
+      return { crossFs: true, sourcePath };
     }
     throw err;
   }
@@ -205,13 +205,24 @@ export async function absorbLib(
   const skippedPlatforms: string[] = [];
 
   // 跟踪已移动的文件，用于失败时回滚
-  const movedFiles: Array<{ source: string; target: string }> = [];
+  // crossFs: true 表示跨文件系统复制（源还在，回滚只需删除目标）
+  // crossFs: false 表示 rename（源已移走，回滚需要 rename 回去）
+  const movedFiles: Array<{ source: string; target: string; crossFs: boolean }> = [];
 
-  // 回滚函数：将已移动的文件移回原位置
+  // 跨文件系统复制的源路径，成功后统一删除
+  const crossFsSources: string[] = [];
+
+  // 回滚函数
   const rollbackMoves = async () => {
-    for (const { source, target } of movedFiles.reverse()) {
+    for (const { source, target, crossFs } of movedFiles.reverse()) {
       try {
-        await fs.rename(target, source);
+        if (crossFs) {
+          // 跨文件系统复制：源还在，只需删除目标
+          await removeDir(target);
+        } else {
+          // rename：需要移回去
+          await fs.rename(target, source);
+        }
       } catch {
         // 回滚失败时忽略，尽力而为
       }
@@ -244,14 +255,17 @@ export async function absorbLib(
 
           try {
             // 使用 safeMoveDir 处理跨文件系统情况
-            await safeMoveDir(sourcePath, targetPath, {
+            const result = await safeMoveDir(sourcePath, targetPath, {
               onProgress: progressOptions?.onProgress
                 ? (copied, total) => progressOptions.onProgress!(copied, total, normalizedName)
                 : undefined,
               totalSize: progressOptions?.totalSize,
             });
             platformPaths[normalizedName] = targetPath;
-            movedFiles.push({ source: sourcePath, target: targetPath });
+            movedFiles.push({ source: sourcePath, target: targetPath, crossFs: result.crossFs });
+            if (result.crossFs && result.sourcePath) {
+              crossFsSources.push(result.sourcePath);
+            }
           } catch (err) {
             const code = (err as NodeJS.ErrnoException).code;
             if (code === 'ENOTEMPTY' || code === 'EEXIST') {
@@ -275,8 +289,11 @@ export async function absorbLib(
           }
 
           try {
-            await safeMoveDir(sourcePath, targetPath);
-            movedFiles.push({ source: sourcePath, target: targetPath });
+            const result = await safeMoveDir(sourcePath, targetPath);
+            movedFiles.push({ source: sourcePath, target: targetPath, crossFs: result.crossFs });
+            if (result.crossFs && result.sourcePath) {
+              crossFsSources.push(result.sourcePath);
+            }
           } catch (err) {
             const code = (err as NodeJS.ErrnoException).code;
             if (code === 'ENOTEMPTY' || code === 'EEXIST') {
@@ -301,21 +318,27 @@ export async function absorbLib(
         try {
           // 使用 safeMoveDir 处理跨文件系统情况（共享内容不传进度回调）
           if (entry.isDirectory()) {
-            await safeMoveDir(sourcePath, targetPath);
+            const result = await safeMoveDir(sourcePath, targetPath);
+            movedFiles.push({ source: sourcePath, target: targetPath, crossFs: result.crossFs });
+            if (result.crossFs && result.sourcePath) {
+              crossFsSources.push(result.sourcePath);
+            }
           } else {
-            // 文件直接 rename，失败时复制+删除
+            // 文件直接 rename，失败时复制（延迟删除）
+            let fileCrossFs = false;
             try {
               await fs.rename(sourcePath, targetPath);
             } catch (renameErr) {
               if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
                 await fs.copyFile(sourcePath, targetPath);
-                await fs.unlink(sourcePath);
+                fileCrossFs = true;
+                crossFsSources.push(sourcePath);
               } else {
                 throw renameErr;
               }
             }
+            movedFiles.push({ source: sourcePath, target: targetPath, crossFs: fileCrossFs });
           }
-          movedFiles.push({ source: sourcePath, target: targetPath });
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code;
           if (code === 'ENOTEMPTY' || code === 'EEXIST') {
@@ -324,6 +347,20 @@ export async function absorbLib(
           }
           throw err;
         }
+      }
+    }
+
+    // 全部成功，删除跨文件系统复制的源
+    for (const src of crossFsSources) {
+      try {
+        const stat = await fs.lstat(src);
+        if (stat.isDirectory()) {
+          await removeDir(src);
+        } else {
+          await fs.unlink(src);
+        }
+      } catch {
+        // 忽略删除失败（源可能已被其他操作删除）
       }
     }
   } catch (err) {
