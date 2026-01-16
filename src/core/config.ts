@@ -194,6 +194,7 @@ export function isValidConfigKey(key: string): key is keyof DockConfig {
     'storePath',
     'cleanStrategy',
     'unusedDays',
+    'unreferencedThreshold',
     'maxStoreSize',
     'autoDownload',
     'concurrency',
@@ -208,7 +209,7 @@ export function isValidConfigKey(key: string): key is keyof DockConfig {
  * 验证 cleanStrategy 值是否有效
  */
 export function isValidCleanStrategy(value: string): value is CleanStrategy {
-  return ['unreferenced', 'unused', 'manual'].includes(value);
+  return ['unreferenced', 'unused', 'manual', 'capacity'].includes(value);
 }
 
 /**
@@ -256,9 +257,23 @@ export function parseConfigValue(
     }
     case 'cleanStrategy':
       if (!isValidCleanStrategy(value)) {
-        throw new Error(`无效的 cleanStrategy 值: ${value}，有效值: unreferenced, unused, manual`);
+        throw new Error(
+          `无效的 cleanStrategy 值: ${value}，有效值: unreferenced, unused, manual, capacity`
+        );
       }
       return value;
+    case 'unreferencedThreshold': {
+      // 支持格式: 10GB, 5GB 等（仅整数 GB）
+      const match = value.match(/^(\d+)\s*GB$/i);
+      if (!match) {
+        throw new Error(`无效的 unreferencedThreshold 值: ${value}，格式: <整数>GB，如: 10GB`);
+      }
+      const gb = parseInt(match[1], 10);
+      if (gb < 1) {
+        throw new Error(`无效的 unreferencedThreshold 值: ${value}，需要至少 1GB`);
+      }
+      return gb * 1024 * 1024 * 1024;
+    }
     case 'logLevel':
       if (!isValidLogLevel(value)) {
         throw new Error(`无效的 logLevel 值: ${value}，有效值: debug, verbose, info, warn, error`);

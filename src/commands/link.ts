@@ -30,7 +30,7 @@ import { verifyLocalCommit } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext } from '../types/index.js';
 import { withGlobalLock } from '../utils/global-lock.js';
-import { confirmAction, selectPlatforms, parsePlatformArgs } from '../utils/prompt.js';
+import { confirmAction, selectPlatforms, parsePlatformArgs, selectOption } from '../utils/prompt.js';
 import pLimit from 'p-limit';
 import { EXIT_CODES } from '../utils/exit-codes.js';
 
@@ -1314,6 +1314,60 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     }
     const totalSize = await store.getTotalSize();
     info(`Store 总计: ${formatSize(totalSize)}`);
+    const unreferencedStores = registry.getUnreferencedStores();
+    if (unreferencedStores.length > 0) {
+      const unreferencedSize = unreferencedStores.reduce((sum, entry) => sum + entry.size, 0);
+      hint(`无引用: ${unreferencedStores.length} 个 (${formatSize(unreferencedSize)}) - 可用 td clean 清理`);
+
+      // capacity 策略：检查是否超过阈值
+      const cleanStrategy = await config.get('cleanStrategy');
+      if (cleanStrategy === 'capacity') {
+        const threshold = (await config.get('unreferencedThreshold')) ?? 10 * 1024 * 1024 * 1024;
+        if (unreferencedSize > threshold) {
+          blank();
+          warn(`无引用库容量 (${formatSize(unreferencedSize)}) 已超过阈值 (${formatSize(threshold)})`);
+
+          if (!options.yes && process.stdout.isTTY) {
+            // 交互模式：提供选项
+            const halfCleanStores = registry.getStoresForHalfClean();
+            const halfCleanSize = halfCleanStores.reduce((sum, e) => sum + e.size, 0);
+
+            const action = await selectOption<'skip' | 'half' | 'all'>('选择清理方式:', [
+              { name: '跳过本次', value: 'skip' },
+              {
+                name: `清理最久未引用的 (释放约 ${formatSize(halfCleanSize)})`,
+                value: 'half',
+              },
+              { name: `全部清理 (释放 ${formatSize(unreferencedSize)})`, value: 'all' },
+            ]);
+
+            if (action !== 'skip') {
+              const toClean = action === 'half' ? halfCleanStores : unreferencedStores;
+              blank();
+              info('正在清理...');
+              let cleaned = 0;
+              let freedSize = 0;
+              for (const entry of toClean) {
+                try {
+                  await store.remove(entry.libName, entry.commit, entry.platform);
+                  const storeKey = registry.getStoreKey(entry.libName, entry.commit, entry.platform);
+                  registry.removeStore(storeKey);
+                  freedSize += entry.size;
+                  cleaned++;
+                } catch (cleanErr) {
+                  warn(`清理 ${entry.libName}/${entry.platform} 失败: ${(cleanErr as Error).message}`);
+                }
+              }
+              await registry.save();
+              success(`清理完成: 删除 ${cleaned} 个库，释放 ${formatSize(freedSize)}`);
+            }
+          } else {
+            // 非交互模式：仅警告
+            hint('使用 td clean 手动清理');
+          }
+        }
+      }
+    }
   } catch (err) {
     // 链接过程出错，回滚事务
     error(`链接失败: ${(err as Error).message}`);

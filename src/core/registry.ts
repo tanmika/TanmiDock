@@ -366,6 +366,37 @@ class RegistryManager {
   }
 
   /**
+   * 获取用于清理一半容量的 Store 条目（LRU 策略）
+   * 按 unlinkedAt 升序排序，累加到总容量的一半
+   */
+  getStoresForHalfClean(): StoreEntry[] {
+    this.ensureLoaded();
+    const unreferenced = this.getUnreferencedStores();
+    if (unreferenced.length === 0) return [];
+
+    const totalSize = unreferenced.reduce((sum, e) => sum + e.size, 0);
+    const targetSize = totalSize / 2;
+
+    // 按 unlinkedAt 升序排序（最早脱引用的优先清理）
+    // 没有 unlinkedAt 的放最后
+    unreferenced.sort((a, b) => {
+      const aTime = a.unlinkedAt ?? Infinity;
+      const bTime = b.unlinkedAt ?? Infinity;
+      return aTime - bTime;
+    });
+
+    // 累加直到达到目标
+    let accumulated = 0;
+    const result: StoreEntry[] = [];
+    for (const entry of unreferenced) {
+      result.push(entry);
+      accumulated += entry.size;
+      if (accumulated >= targetSize) break;
+    }
+    return result;
+  }
+
+  /**
    * 添加 Store 引用（清除 unlinkedAt）
    */
   addStoreReference(storeKey: string, projectHash: string): void {

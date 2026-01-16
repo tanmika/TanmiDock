@@ -22,8 +22,9 @@ export function createConfigCommand(): Command {
 
 配置项:
   storePath                存储路径，依赖库存放目录
-  cleanStrategy            清理策略: unreferenced/unused/manual
+  cleanStrategy            清理策略: unreferenced/unused/capacity/manual
   unusedDays               未使用天数阈值 (unused 策略时生效)
+  unreferencedThreshold    无引用容量阈值 (capacity 策略时生效)，格式: 10GB
   autoDownload             缺失依赖时是否自动下载: true/false
   concurrency              并发下载数: 1/2/3/5/99(不限制)
   logLevel                 日志级别: debug/verbose/info/warn/error
@@ -89,6 +90,7 @@ const CONFIG_META: ConfigMeta[] = [
     options: [
       { value: 'unreferenced', label: '无引用时清理' },
       { value: 'unused', label: '超期未使用时清理' },
+      { value: 'capacity', label: '容量超限时清理' },
       { value: 'manual', label: '仅手动清理' },
     ],
   },
@@ -99,6 +101,14 @@ const CONFIG_META: ConfigMeta[] = [
     editable: true,
     type: 'number',
     showWhen: (cfg) => cfg.cleanStrategy === 'unused',
+  },
+  {
+    key: 'unreferencedThreshold',
+    label: '无引用容量阈值',
+    description: '无引用库超过此容量时触发清理 (GB)',
+    editable: true,
+    type: 'number',
+    showWhen: (cfg) => cfg.cleanStrategy === 'capacity',
   },
   { key: 'autoDownload', label: '自动下载', description: '缺失依赖时自动下载', editable: true, type: 'boolean' },
   {
@@ -149,6 +159,7 @@ const CONFIG_META: ConfigMeta[] = [
 const CLEAN_STRATEGY_LABELS: Record<CleanStrategy, string> = {
   unreferenced: '无引用时清理',
   unused: '超期未使用时清理',
+  capacity: '容量超限时清理',
   manual: '仅手动清理',
 };
 
@@ -196,6 +207,11 @@ function formatValue(key: keyof DockConfig, value: unknown): string {
   if (key === 'concurrency') {
     const num = value as number;
     return num >= 99 ? '不限制' : `${num} 个`;
+  }
+  if (key === 'unreferencedThreshold') {
+    const bytes = value as number;
+    const gb = Math.round(bytes / (1024 * 1024 * 1024));
+    return `${gb} GB`;
   }
   if (key === 'proxy') {
     const proxy = value as ProxyConfig;
@@ -304,9 +320,17 @@ async function editConfigValue(meta: ConfigMeta, currentValue: unknown): Promise
     }
 
     case 'number': {
+      // unreferencedThreshold 使用 GB 单位编辑
+      const isThreshold = meta.key === 'unreferencedThreshold';
+      const defaultValue =
+        currentValue !== undefined
+          ? isThreshold
+            ? String(Math.round((currentValue as number) / (1024 * 1024 * 1024)))
+            : String(currentValue)
+          : '';
       const result = await input({
-        message: `输入新的 ${meta.label}:`,
-        default: currentValue !== undefined ? String(currentValue) : '',
+        message: `输入新的 ${meta.label}${isThreshold ? ' (GB)' : ''}:`,
+        default: defaultValue,
         validate: (val) => {
           if (!val) return true; // 允许清空
           const num = parseInt(val, 10);
@@ -314,7 +338,10 @@ async function editConfigValue(meta: ConfigMeta, currentValue: unknown): Promise
           return true;
         },
       });
-      return result ? parseInt(result, 10) : undefined;
+      if (!result) return undefined;
+      const num = parseInt(result, 10);
+      // unreferencedThreshold 转换为字节存储
+      return isThreshold ? num * 1024 * 1024 * 1024 : num;
     }
 
     case 'boolean': {

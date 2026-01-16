@@ -377,4 +377,252 @@ describe('TC-016: clean 命令测试', () => {
       expect(afterRegistry.libraries[`${libName}:${commit}`]).toBeUndefined();
     });
   });
+
+  describe('S-5.1.4: capacity 策略 - 清理所有无引用库', () => {
+    it('should clean all unreferenced libraries under capacity strategy', async () => {
+      env = await createTestEnv();
+
+      // 创建两个无引用库
+      await createMockStoreDataV2(env, {
+        libName: 'libCapA',
+        commit: 'capacityA123456',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      await createMockStoreDataV2(env, {
+        libName: 'libCapB',
+        commit: 'capacityB123456',
+        platforms: ['iOS'],
+        referencedBy: [],
+      });
+
+      // 修改配置为 capacity 策略
+      const configPath = path.join(env.homeDir, 'config.json');
+      const config = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      config.cleanStrategy = 'capacity';
+      config.unreferencedThreshold = 1024 * 1024 * 1024; // 1GB
+      await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
+      // 调用 clean 命令
+      await runCommand('clean', { force: true }, env);
+
+      // 验证所有无引用库都被清理（capacity 策略等同 unreferenced）
+      await verifyCleanResult(env, {
+        shouldBeDeleted: [
+          { libName: 'libCapA', commit: 'capacityA123456', platforms: ['macOS'] },
+          { libName: 'libCapB', commit: 'capacityB123456', platforms: ['iOS'] },
+        ],
+      });
+    });
+
+    it('should not clean referenced libraries under capacity strategy', async () => {
+      env = await createTestEnv();
+
+      // 创建一个有引用的库和一个无引用的库
+      // 项目目录需要存在，且需要有 codepac-dep.json 才能被识别为有效项目
+      const projectPath = path.join(env.tempDir, 'project');
+      const thirdPartyDir = path.join(projectPath, '3rdparty');
+      await fs.mkdir(thirdPartyDir, { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({ dependencies: { libCapRef: 'capref123456' } }),
+        'utf-8'
+      );
+
+      await createMockStoreDataV2(env, {
+        libName: 'libCapRef',
+        commit: 'capref123456',
+        platforms: ['macOS'],
+        referencedBy: [projectPath],
+      });
+
+      await createMockStoreDataV2(env, {
+        libName: 'libCapUnref',
+        commit: 'capunref123456',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      // 需要在 registry.projects 中注册项目，否则 cleanStaleReferences 会清理掉引用
+      const registry = await loadRegistry(env);
+      const projectHash = hashPath(projectPath);
+      registry.projects[projectHash] = {
+        path: projectPath,
+        configPath: path.join(thirdPartyDir, 'codepac-dep.json'),
+        platforms: ['macOS'],
+        linkedLibraries: [{ libName: 'libCapRef', commit: 'capref123456' }],
+        lastLink: new Date().toISOString(),
+      };
+      await saveRegistry(env, registry);
+
+      // 修改配置为 capacity 策略
+      const configPath = path.join(env.homeDir, 'config.json');
+      const config = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      config.cleanStrategy = 'capacity';
+      config.unreferencedThreshold = 1024 * 1024 * 1024;
+      await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
+      // 调用 clean 命令
+      await runCommand('clean', { force: true }, env);
+
+      // 验证只有无引用库被清理
+      await verifyCleanResult(env, {
+        shouldBeDeleted: [{ libName: 'libCapUnref', commit: 'capunref123456', platforms: ['macOS'] }],
+        shouldRemain: [{ libName: 'libCapRef', commit: 'capref123456', platforms: ['macOS'] }],
+      });
+    });
+  });
+
+  describe('S-5.1.5: getStoresForHalfClean LRU 排序', () => {
+    it('should return older unreferenced stores first based on unlinkedAt', async () => {
+      env = await createTestEnv();
+
+      const now = Date.now();
+
+      // 创建三个无引用库，设置不同的 unlinkedAt
+      await createMockStoreDataV2(env, {
+        libName: 'libOldest',
+        commit: 'oldest123456',
+        platforms: ['macOS'],
+        registerInRegistry: false,
+      });
+
+      await createMockStoreDataV2(env, {
+        libName: 'libMiddle',
+        commit: 'middle123456',
+        platforms: ['macOS'],
+        registerInRegistry: false,
+      });
+
+      await createMockStoreDataV2(env, {
+        libName: 'libNewest',
+        commit: 'newest123456',
+        platforms: ['macOS'],
+        registerInRegistry: false,
+      });
+
+      // 手动设置 stores 记录，带不同的 unlinkedAt
+      const registry = await loadRegistry(env);
+      registry.stores['libOldest:oldest123456:macOS'] = {
+        libName: 'libOldest',
+        commit: 'oldest123456',
+        platform: 'macOS',
+        branch: 'main',
+        url: 'https://github.com/test/libOldest.git',
+        size: 1000,
+        usedBy: [],
+        unlinkedAt: now - 30 * 24 * 60 * 60 * 1000, // 30 天前
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      registry.stores['libMiddle:middle123456:macOS'] = {
+        libName: 'libMiddle',
+        commit: 'middle123456',
+        platform: 'macOS',
+        branch: 'main',
+        url: 'https://github.com/test/libMiddle.git',
+        size: 1000,
+        usedBy: [],
+        unlinkedAt: now - 15 * 24 * 60 * 60 * 1000, // 15 天前
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      registry.stores['libNewest:newest123456:macOS'] = {
+        libName: 'libNewest',
+        commit: 'newest123456',
+        platform: 'macOS',
+        branch: 'main',
+        url: 'https://github.com/test/libNewest.git',
+        size: 1000,
+        usedBy: [],
+        unlinkedAt: now - 5 * 24 * 60 * 60 * 1000, // 5 天前
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      await saveRegistry(env, registry);
+
+      // 直接测试 Registry.getStoresForHalfClean
+      // 需要重置单例以使用新的测试环境路径
+      const { getRegistry, resetRegistry } = await import('../../src/core/registry.js');
+      resetRegistry();
+      const reg = getRegistry();
+      await reg.load();
+
+      const halfCleanStores = reg.getStoresForHalfClean();
+
+      // 总大小 3000，目标 1500，应该选择最老的 2 个（1000 + 1000 = 2000 >= 1500）
+      expect(halfCleanStores.length).toBe(2);
+      expect(halfCleanStores[0].libName).toBe('libOldest'); // 最老的先被选中
+      expect(halfCleanStores[1].libName).toBe('libMiddle'); // 次老的
+
+      // 清理单例，避免影响其他测试
+      resetRegistry();
+    });
+
+    it('should handle stores without unlinkedAt (put them last)', async () => {
+      env = await createTestEnv();
+
+      const now = Date.now();
+
+      // 创建两个库
+      await createMockStoreDataV2(env, {
+        libName: 'libWithTime',
+        commit: 'withtime123456',
+        platforms: ['macOS'],
+        registerInRegistry: false,
+      });
+
+      await createMockStoreDataV2(env, {
+        libName: 'libNoTime',
+        commit: 'notime123456',
+        platforms: ['macOS'],
+        registerInRegistry: false,
+      });
+
+      // 设置 stores 记录，一个有 unlinkedAt，一个没有
+      const registry = await loadRegistry(env);
+      registry.stores['libWithTime:withtime123456:macOS'] = {
+        libName: 'libWithTime',
+        commit: 'withtime123456',
+        platform: 'macOS',
+        branch: 'main',
+        url: 'https://github.com/test/libWithTime.git',
+        size: 1000,
+        usedBy: [],
+        unlinkedAt: now - 10 * 24 * 60 * 60 * 1000,
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      registry.stores['libNoTime:notime123456:macOS'] = {
+        libName: 'libNoTime',
+        commit: 'notime123456',
+        platform: 'macOS',
+        branch: 'main',
+        url: 'https://github.com/test/libNoTime.git',
+        size: 1000,
+        usedBy: [],
+        // 没有 unlinkedAt
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      await saveRegistry(env, registry);
+
+      // 测试排序
+      // 需要重置单例以使用新的测试环境路径
+      const { getRegistry, resetRegistry } = await import('../../src/core/registry.js');
+      resetRegistry();
+      const reg = getRegistry();
+      await reg.load();
+
+      const halfCleanStores = reg.getStoresForHalfClean();
+
+      // 总大小 2000，目标 1000，应该选择有 unlinkedAt 的那个（因为它排在前面）
+      expect(halfCleanStores.length).toBe(1);
+      expect(halfCleanStores[0].libName).toBe('libWithTime');
+
+      // 清理单例，避免影响其他测试
+      resetRegistry();
+    });
+  });
 });

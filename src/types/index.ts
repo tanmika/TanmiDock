@@ -20,6 +20,7 @@ export interface DockConfig {
   storePath: string;
   cleanStrategy: CleanStrategy;
   unusedDays: number;           // unused 策略的天数阈值
+  unreferencedThreshold?: number; // capacity 策略的容量阈值（字节）
   maxStoreSize?: number;
   autoDownload: boolean;
   // 新增配置项
@@ -29,7 +30,7 @@ export interface DockConfig {
   unverifiedLocalStrategy: UnverifiedLocalStrategy;  // 无法验证commit的本地库处理策略
 }
 
-export type CleanStrategy = 'unreferenced' | 'unused' | 'manual';
+export type CleanStrategy = 'unreferenced' | 'unused' | 'manual' | 'capacity';
 export type LogLevel = 'debug' | 'verbose' | 'info' | 'warn' | 'error';
 export type UnverifiedLocalStrategy = 'download' | 'absorb';
 
@@ -50,6 +51,7 @@ export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
   initialized: false,
   cleanStrategy: 'unreferenced',
   unusedDays: 30,
+  unreferencedThreshold: 10 * 1024 * 1024 * 1024, // 默认 10GB
   autoDownload: true,
   concurrency: 5,
   logLevel: 'info',

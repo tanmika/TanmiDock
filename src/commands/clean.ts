@@ -138,9 +138,9 @@ export async function cleanLibraries(options: CleanOptions): Promise<void> {
     }
     strategyName = 'manual';
   } else {
-    // unreferenced 策略（默认）：基于 LibraryInfo
+    // unreferenced 或 capacity 策略：基于 LibraryInfo 清理所有无引用库
     toCleanLibs = registry.getUnreferencedLibraries();
-    strategyName = 'unreferenced';
+    strategyName = cleanStrategy === 'capacity' ? 'capacity' : 'unreferenced';
   }
 
   // 检查是否有需要清理的内容
