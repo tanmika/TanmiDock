@@ -310,10 +310,7 @@ async function editConfigValue(meta: ConfigMeta, currentValue: unknown): Promise
         validate: (val) => {
           if (!val) return true; // 允许清空
           const num = parseInt(val, 10);
-          if (isNaN(num)) return '请输入有效数字';
-          if (meta.key === 'concurrency' && (num < 1 || num > 20)) {
-            return '并发数范围: 1-20';
-          }
+          if (isNaN(num) || num < 1) return '请输入有效的正整数';
           return true;
         },
       });

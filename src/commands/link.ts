@@ -260,7 +260,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       });
 
       if (finalLinkPlatforms.length === 0) {
-        warn('至少需要选择一个平台');
+        error('至少需要选择一个平台');
         process.exit(1);
       }
 
@@ -1347,6 +1347,9 @@ async function classifyDependencies(
   const thirdPartyDir = path.dirname(configPath);
   const storePath = await store.getStorePath();
   const primaryPlatform = platforms[0];
+  // 预加载配置，避免在循环中重复加载
+  const cfg = await config.load();
+  const unverifiedStrategy = cfg?.unverifiedLocalStrategy ?? 'download';
 
   for (const dep of dependencies) {
     const localPath = path.join(thirdPartyDir, dep.libName);
@@ -1456,10 +1459,7 @@ async function classifyDependencies(
                 break;
               case 'no_git':
                 // 无 .git 目录，根据配置决定策略
-                const cfg = await config.load();
-                const strategy = cfg?.unverifiedLocalStrategy ?? 'download';
-
-                if (strategy === 'absorb') {
+                if (unverifiedStrategy === 'absorb') {
                   // 配置为 absorb，继续吸收
                   info(`${dep.libName}: 本地无 .git 目录，按配置直接吸收`);
                   status = DependencyStatus.ABSORB;
