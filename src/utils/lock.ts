@@ -50,7 +50,11 @@ export async function withFileLock<T>(
   try {
     return await fn();
   } finally {
-    await release();
+    try {
+      await release();
+    } catch {
+      // 忽略释放失败（锁可能已过期或被删除）
+    }
   }
 }
 
