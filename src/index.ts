@@ -12,6 +12,7 @@ import { createDoctorCommand } from './commands/doctor.js';
 import { createVerifyCommand } from './commands/verify.js';
 import { createRepairCommand } from './commands/repair.js';
 import { createUpdateCommand } from './commands/update.js';
+import { showDashboard } from './commands/dashboard.js';
 import { Transaction } from './core/transaction.js';
 
 // 读取 package.json 版本
@@ -108,4 +109,12 @@ program.addCommand(createVerifyCommand());
 program.addCommand(createRepairCommand());
 program.addCommand(createUpdateCommand());
 
-program.parse();
+// 无参数时显示工作台
+if (process.argv.length === 2) {
+  showDashboard().catch((err) => {
+    console.error('[err]', err.message);
+    process.exit(1);
+  });
+} else {
+  program.parse();
+}

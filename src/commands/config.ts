@@ -74,7 +74,7 @@ interface ConfigMeta {
   description: string;
   editable: boolean;
   type: 'string' | 'number' | 'boolean' | 'select' | 'proxy';
-  options?: { value: string; label: string }[];
+  options?: { value: string; name: string }[];
   showWhen?: (cfg: DockConfig) => boolean; // 条件显示
 }
 
@@ -88,10 +88,10 @@ const CONFIG_META: ConfigMeta[] = [
     editable: true,
     type: 'select',
     options: [
-      { value: 'unreferenced', label: '无引用时清理' },
-      { value: 'unused', label: '超期未使用时清理' },
-      { value: 'capacity', label: '容量超限时清理' },
-      { value: 'manual', label: '仅手动清理' },
+      { value: 'unreferenced', name: '无项目使用时清理' },
+      { value: 'unused', name: '长期未使用时清理' },
+      { value: 'capacity', name: '占用空间超限时清理' },
+      { value: 'manual', name: '仅手动清理' },
     ],
   },
   {
@@ -118,11 +118,11 @@ const CONFIG_META: ConfigMeta[] = [
     editable: true,
     type: 'select',
     options: [
-      { value: '1', label: '1 个' },
-      { value: '2', label: '2 个' },
-      { value: '3', label: '3 个' },
-      { value: '5', label: '5 个' },
-      { value: '99', label: '不限制' },
+      { value: '1', name: '1' },
+      { value: '2', name: '2' },
+      { value: '3', name: '3' },
+      { value: '5', name: '5' },
+      { value: '99', name: '不限制' },
     ],
   },
   {
@@ -132,23 +132,23 @@ const CONFIG_META: ConfigMeta[] = [
     editable: true,
     type: 'select',
     options: [
-      { value: 'debug', label: '调试' },
-      { value: 'verbose', label: '详细' },
-      { value: 'info', label: '常规' },
-      { value: 'warn', label: '警告' },
-      { value: 'error', label: '错误' },
+      { value: 'debug', name: '调试' },
+      { value: 'verbose', name: '详细' },
+      { value: 'info', name: '常规' },
+      { value: 'warn', name: '警告' },
+      { value: 'error', name: '错误' },
     ],
   },
   { key: 'proxy', label: '代理设置', description: 'HTTP/HTTPS 代理配置', editable: true, type: 'proxy' },
   {
     key: 'unverifiedLocalStrategy',
-    label: '未验证本地库策略',
+    label: '本地库策略',
     description: '本地库 commit 无法验证时的处理策略',
     editable: true,
     type: 'select',
     options: [
-      { value: 'download', label: '重新下载' },
-      { value: 'absorb', label: '自动吸收' },
+      { value: 'download', name: '从远程重新下载' },
+      { value: 'absorb', name: '信任本地版本' },
     ],
   },
 ];
@@ -157,9 +157,9 @@ const CONFIG_META: ConfigMeta[] = [
  * 清理策略汉化映射
  */
 const CLEAN_STRATEGY_LABELS: Record<CleanStrategy, string> = {
-  unreferenced: '无引用时清理',
-  unused: '超期未使用时清理',
-  capacity: '容量超限时清理',
+  unreferenced: '无项目使用时清理',
+  unused: '长期未使用时清理',
+  capacity: '占用空间超限时清理',
   manual: '仅手动清理',
 };
 
@@ -178,8 +178,8 @@ const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
  * 未验证本地库策略汉化映射
  */
 const UNVERIFIED_LOCAL_STRATEGY_LABELS: Record<UnverifiedLocalStrategy, string> = {
-  download: '重新下载',
-  absorb: '自动吸收',
+  download: '从远程重新下载',
+  absorb: '信任本地版本',
 };
 
 /**
@@ -206,7 +206,7 @@ function formatValue(key: keyof DockConfig, value: unknown): string {
   }
   if (key === 'concurrency') {
     const num = value as number;
-    return num >= 99 ? '不限制' : `${num} 个`;
+    return num >= 99 ? '不限制' : `${num}`;
   }
   if (key === 'unreferencedThreshold') {
     const bytes = value as number;
@@ -253,8 +253,7 @@ async function interactiveConfig(cfg: DockConfig): Promise<void> {
     const visibleConfigs = CONFIG_META.filter((m) => !m.showWhen || m.showWhen(cfg));
     for (const meta of visibleConfigs) {
       const value = cfg[meta.key];
-      const editMark = meta.editable ? '' : colorize(' (只读)', 'gray');
-      console.log(`  ${colorize(meta.label.padEnd(10), 'cyan')} ${formatValue(meta.key, value)}${editMark}`);
+      console.log(`  ${colorize(meta.label.padEnd(10), 'cyan')} ${formatValue(meta.key, value)}`);
     }
 
     blank();
