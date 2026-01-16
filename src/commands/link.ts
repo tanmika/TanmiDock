@@ -272,8 +272,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     for (const item of classified) {
       const { dependency, status, localPath } = item;
       const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
-      // 主平台用于 absorb 等单平台操作
-      const _primaryPlatform = platforms[0];
 
       // 检查 Store 版本兼容性（v0.5 旧结构会报错）
       await store.ensureCompatibleStore(storePath, dependency.libName, dependency.commit);
@@ -1961,10 +1959,11 @@ async function linkNestedDependencies(
     }
 
     if (localExists && localIsSymlink) {
-      // 已经是符号链接，检查是否正确
+      // 已经是符号链接，检查是否指向正确的 Store 路径和 commit
       const target = await linker.readLink(localPath);
-      if (target && target.startsWith(storePath)) {
-        // 记录到 nestedLinkedDeps
+      const expectedPrefix = path.join(storePath, dep.libName, dep.commit);
+      if (target && target.startsWith(expectedPrefix)) {
+        // 链接指向正确的 lib/commit，记录到 nestedLinkedDeps
         nestedLinkedDeps.push({
           libName: dep.libName,
           commit: dep.commit,
@@ -1973,6 +1972,10 @@ async function linkNestedDependencies(
         });
         success(`${indent}  ${dep.libName} - 已链接`);
         continue;
+      }
+      // 链接指向错误的 commit 或其他位置，需要重新链接
+      if (target && target.startsWith(storePath)) {
+        warn(`${indent}  ${dep.libName} - 链接指向错误的 commit，将重新链接`);
       }
     }
 
