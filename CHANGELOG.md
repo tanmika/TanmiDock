@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-01-16
+
+### Added
+
+- **`update` 命令**: 支持自动更新到最新版本 (`td update`)
+- **`capacity` 清理策略**: 无引用库超过阈值时自动提示清理
+- **交互式配置界面**: `td config` 无参数时进入可视化配置
+- **本地库 commit 验证**: 检测本地库是否与配置匹配，避免链接错误版本
+- **嵌套依赖支持**: 自动处理 actions 定义的子依赖
+- **平台记忆功能**: 记住上次选择的平台，下次自动应用
+- **自动补充缺失平台**: 检测 Store 中已有但未链接的平台，询问是否补充
+- **断链检测**: 自动检测失效的符号链接并提示修复
+- **进度条**: link 命令显示下载和链接进度
+- **配置项扩展**:
+  - `unreferencedThreshold`: 无引用容量阈值 (capacity 策略)
+  - `concurrency`: 并发下载数 (1/2/3/5/99)
+  - `logLevel`: 日志级别 (debug/verbose/info/warn/error)
+  - `proxy`: 代理地址 (JSON 格式)
+  - `unverifiedLocalStrategy`: 本地库无法验证时的策略
+- **link 完成统计**: 显示无引用库总大小，方便决定是否清理
+- **动态版本号**: 从 package.json 读取版本，避免硬编码
+
+### Changed
+
+- **命令别名**: `td` = `tanmidock` = `tanmi-dock`
+- **config 命令重构**: 改为子命令模式 (`config get/set`)
+- **status 命令改进**: 支持直接指定项目路径查看状态
+- **帮助信息全中文化**: 所有命令帮助信息改为中文
+- **link 后自动同步 cache**: 更新 Registry 中的 lastAccess 时间
+
+### Fixed
+
+- 嵌套依赖链接目录计算修复
+- 嵌套依赖 commit 验证逻辑修复
+- unlink 正确处理嵌套依赖
+- codepac 平台参数转换修复 (CLI key → 目录名)
+- General 库（无平台目录）下载处理修复
+- 跨文件系统回滚安全性改进
+- 进度条显示问题修复
+- 重复 link 不再显示虚假节省空间
+- 切换分支后平台库被错误识别为 General 库
+- downloadToTemp 传递 vars 变量解决 sparse 解析失败
+- General 库空 _shared 目录静默成功的问题
+- 事务回滚 absorb 参数顺序修复
+
 ## [0.5.0-beta.3] - 2026-01-07
 
 ### Fixed

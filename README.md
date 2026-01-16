@@ -2,317 +2,186 @@
 
 集中型第三方库链接管理工具 - 通过符号链接统一管理多项目共享的第三方依赖库。
 
+## 为什么使用 TanmiDock？
+
+当你有多个项目共享相同的第三方库（如 OpenCV、FFmpeg、Boost 等）时：
+
+```
+项目A/3rdparty/opencv/     →  500MB
+项目B/3rdparty/opencv/     →  500MB  （相同内容！）
+项目C/3rdparty/opencv/     →  500MB  （又重复了！）
+```
+
+使用 TanmiDock 后：
+
+```
+Store/opencv/abc123/       →  500MB  （唯一存储）
+项目A/3rdparty/opencv/     →  符号链接
+项目B/3rdparty/opencv/     →  符号链接
+项目C/3rdparty/opencv/     →  符号链接
+```
+
+**节省磁盘空间 + 统一管理 + 快速切换**
+
 ## 特性
 
-- **集中存储**: 所有第三方库统一存储在一个 Store 目录，避免重复下载
-- **符号链接**: 通过 symlink 将 Store 中的库链接到项目目录，节省磁盘空间
-- **多平台支持**: 支持 macOS/iOS/Android/Windows/Linux/WASM/OHOS 等平台，可同时选择多个平台
-- **按平台下载**: 仅下载所需平台的内容，节省带宽和存储空间
-- **智能识别**: 自动识别已有库，支持吸收本地库到 Store
-- **事务安全**: link 操作支持事务回滚，中断后可恢复
-- **文件锁**: 防止并发操作导致数据损坏
+- **集中存储**: 所有第三方库统一存储在 Store 目录，避免重复下载
+- **符号链接**: 通过 symlink 链接到项目，节省磁盘空间
+- **多平台支持**: macOS / iOS / Android / Windows / Linux / WASM / OHOS
+- **按平台下载**: 仅下载所需平台，节省带宽和存储
+- **嵌套依赖**: 自动处理库的嵌套依赖
+- **智能识别**: 自动识别本地已有库，支持吸收到 Store
+- **平台记忆**: 记住上次选择的平台，下次自动应用
+- **断链检测**: 自动检测并修复失效的符号链接
+- **事务安全**: 操作支持回滚，中断后可恢复
+- **自动清理**: 多种清理策略，容量超限时自动提示
 
 ## 安装
 
 ```bash
-# 克隆仓库
-git clone <repo-url>
-cd tanmi-dock
+# npm 安装
+npm install -g tanmi-dock
 
-# 安装依赖
-npm install
-
-# 构建
-npm run build
-
-# 全局安装（可选）
-npm link
+# 或从源码
+git clone https://github.com/tanmika/TanmiDock.git
+cd tanmi-dock && npm install && npm run build && npm link
 ```
 
 ## 快速开始
 
 ```bash
 # 1. 初始化（首次使用）
-tanmi-dock init
+td init
 
 # 2. 在项目目录执行链接
 cd your-project
-tanmi-dock link
+td link
 
 # 3. 查看状态
-tanmi-dock status
+td status
 ```
 
-## 命令
+## 命令速查
 
-### `init` - 初始化
+| 命令 | 说明 |
+|------|------|
+| `td init` | 初始化，设置 Store 路径 |
+| `td link` | 链接项目依赖 |
+| `td link -p mac ios` | 指定平台链接 |
+| `td status` | 查看当前项目状态 |
+| `td status -s` | 查看 Store 状态 |
+| `td projects` | 列出所有已链接项目 |
+| `td clean` | 清理无引用的库 |
+| `td unlink` | 解除链接，恢复为目录 |
+| `td config` | 交互式配置 |
+| `td doctor` | 环境诊断 |
+| `td verify` | 完整性验证 |
+| `td repair` | 修复问题 |
+| `td update` | 更新到最新版本 |
+| `td migrate <path>` | 迁移 Store 位置 |
 
-首次使用前初始化 TanmiDock，设置 Store 存储路径。
+**别名**: `td` = `tanmidock` = `tanmi-dock`
+
+## 平台参数
 
 ```bash
-tanmi-dock init [options]
-
-选项:
-  --store-path <path>  直接指定存储路径（跳过交互）
-  -y, --yes            使用默认设置
+td link -p mac              # 仅 macOS
+td link -p mac ios          # macOS + iOS
+td link -p mac ios android  # 多平台
 ```
 
-### `link` - 链接依赖
+| 参数 | 平台 | ASAN 变体 |
+|------|------|-----------|
+| `mac` | macOS | macOS-asan |
+| `win` | Windows | - |
+| `ios` | iOS | iOS-asan |
+| `android` | Android | android-asan, android-hwasan |
+| `linux` | Linux/Ubuntu | - |
+| `wasm` | WebAssembly | - |
+| `ohos` | OpenHarmony | - |
 
-解析项目的 `codepac-dep.json` 配置，将依赖库链接到项目。
+## 配置
 
 ```bash
-tanmi-dock link [path] [options]
-
-参数:
-  path                       项目路径（默认当前目录）
-
-选项:
-  -p, --platform <platforms...>  指定平台，可多选 (mac/ios/android/win/linux/wasm/ohos)
-  -y, --yes                      跳过确认提示
-  --no-download                  不自动下载缺失库
-  --dry-run                      只显示将要执行的操作
-
-示例:
-  tanmi-dock link                    # 交互式选择平台
-  tanmi-dock link -p mac             # 仅 macOS
-  tanmi-dock link -p mac ios         # macOS + iOS
-  tanmi-dock link -p mac ios android # 多平台
+td config                    # 交互式配置界面
+td config get <key>          # 获取配置
+td config set <key> <value>  # 设置配置
 ```
 
-依赖状态处理:
-- **LINKED**: 已正确链接，跳过
-- **RELINK**: 链接目标错误，重建链接
-- **REPLACE**: 本地是目录但 Store 已有，替换为链接
-- **ABSORB**: 本地有目录但 Store 没有，移入 Store 并创建链接
-- **MISSING**: 本地和 Store 都没有，需要下载
-- **LINK_NEW**: Store 有但本地没有，创建链接
+### 配置项
 
-### `status` - 查看状态
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `storePath` | Store 存储路径 | `~/.tanmi-dock/store` |
+| `cleanStrategy` | 清理策略 | `unreferenced` |
+| `unreferencedThreshold` | 容量阈值 (capacity 策略) | `10GB` |
+| `unusedDays` | 未使用天数 (unused 策略) | `30` |
+| `autoDownload` | 自动下载缺失库 | `true` |
+| `concurrency` | 并发下载数 | `3` |
+| `logLevel` | 日志级别 | `info` |
+| `proxy` | 代理设置 | - |
 
-显示当前项目或 Store 的状态信息。
+### 清理策略
 
-```bash
-tanmi-dock status [options]
+| 策略 | 说明 |
+|------|------|
+| `unreferenced` | 清理无项目引用的库（默认） |
+| `unused` | 清理超过 N 天未使用的库 |
+| `capacity` | 无引用库超过阈值时提示清理 |
+| `manual` | 不自动清理 |
 
-选项:
-  -s, --store   显示 Store 状态
-  -a, --all     显示所有详细信息
-```
-
-### `projects` - 项目管理
-
-列出所有已注册的项目。
-
-```bash
-tanmi-dock projects [options]
-
-选项:
-  -a, --all     显示详细信息
-```
-
-### `clean` - 清理
-
-清理未被引用的库，释放磁盘空间。
-
-```bash
-tanmi-dock clean [options]
-
-选项:
-  -y, --yes     跳过确认提示
-  --dry-run     只显示将要清理的内容
-```
-
-### `unlink` - 解除链接
-
-解除项目依赖的符号链接，恢复为普通目录。
-
-```bash
-tanmi-dock unlink [path] [options]
-
-参数:
-  path          项目路径（默认当前目录）
-
-选项:
-  -y, --yes     跳过确认提示
-```
-
-### `config` - 配置管理
-
-查看或修改配置。
-
-```bash
-tanmi-dock config [key] [value]
-
-参数:
-  key           配置项名称
-  value         配置值（不提供则显示当前值）
-
-示例:
-  tanmi-dock config              # 显示所有配置
-  tanmi-dock config storePath    # 显示 storePath
-  tanmi-dock config autoDownload false  # 设置 autoDownload
-```
-
-### `migrate` - 迁移 Store
-
-将 Store 迁移到新位置。
-
-```bash
-tanmi-dock migrate <newPath> [options]
-
-参数:
-  newPath       新的 Store 路径
-
-选项:
-  --force       跳过确认提示
-  --keep-old    保留旧目录（默认删除）
-```
-
-### `doctor` - 环境诊断
-
-检测运行环境问题。
-
-```bash
-tanmi-dock doctor [options]
-
-选项:
-  --json        输出 JSON 格式
-```
-
-检测内容:
-- codepac 是否已安装
-- 配置文件是否存在
-- Store 目录是否可访问
-- 磁盘空间是否充足
-
-### `verify` - 完整性验证
-
-验证 Store 和 Registry 的完整性。
-
-```bash
-tanmi-dock verify
-```
-
-检测内容:
-- **悬挂链接**: 符号链接指向的目标不存在
-- **孤立库**: Store 中存在但 Registry 未记录的库
-- **缺失库**: Registry 记录但 Store 中不存在的库
-- **无效项目**: 已注册但路径不存在的项目
-
-### `repair` - 修复问题
-
-修复 verify 检测到的问题。
-
-```bash
-tanmi-dock repair [options]
-
-选项:
-  --dry-run     只显示将执行的操作
-  --prune       删除孤立库（默认登记到 Registry）
-  --force       跳过确认提示
-```
-
-修复操作:
-- 清理过期项目记录
-- 移除悬挂的符号链接
-- 登记或删除孤立库
-
-## 配置文件
-
-### codepac-dep.json
-
-项目依赖配置文件，定义需要链接的第三方库。
-
-```json
-{
-  "version": "1.0.0",
-  "vars": {
-    "LIBS_ROOT": "../3rdparty"
-  },
-  "repos": {
-    "common": [
-      {
-        "url": "https://github.com/user/repo.git",
-        "commit": "abc1234",
-        "branch": "main",
-        "dir": "${LIBS_ROOT}/repo"
-      }
-    ]
-  }
-}
-```
-
-### 全局配置
-
-配置文件位置:
-- macOS/Linux: `~/.tanmi-dock/config.json`
-- Windows: `%USERPROFILE%\.tanmi-dock\config.json`
-
-配置项:
-- `storePath`: Store 存储路径
-- `cleanStrategy`: 清理策略 (`unreferenced` | `lru` | `manual`)
-- `autoDownload`: 是否自动下载缺失库
-
-## 目录结构
-
-### Store 结构 (v0.6.0+)
+## 工作原理
 
 ```
-Store/
-└── libImageCodec/
-    └── 38648c31/
-        ├── macOS/        # 平台特定内容
-        ├── iOS/
-        ├── android/
-        └── _shared/      # 共享文件
-            ├── codepac-dep.json
-            ├── *.cmake
-            └── README.md
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│   项目 A                    Store                           │
+│   └── 3rdparty/            └── opencv/abc123/              │
+│       └── opencv/ ─────────────→ macOS/                    │
+│                                  iOS/                       │
+│   项目 B                         _shared/                   │
+│   └── 3rdparty/                                            │
+│       └── opencv/ ─────────────→ (同上)                    │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**平台目录识别规则**: macOS, macOS-asan, Win, iOS, iOS-asan, android, android-asan, android-hwasan, ubuntu, wasm, ohos
-
-其他文件/目录都归入 `_shared/`。
-
-### 链接后的项目结构
-
-```
-3rdParty/libImageCodec/
-├── macOS/      → Store/.../macOS/  (符号链接)
-├── iOS/        → Store/.../iOS/    (符号链接)
-├── codepac-dep.json                (复制)
-└── *.cmake                         (复制)
-```
-
+- **Store**: 中央存储，库的实际文件存放处
 - **平台目录**: 符号链接到 Store，节省空间
-- **共享文件**: 物理复制，避免多项目冲突
+- **_shared**: 共享文件（cmake、README 等）物理复制到项目
 
-## 开发
+## 常见问题
+
+### Store 占用太大？
 
 ```bash
-# 开发模式运行
-npm run dev
-
-# 运行测试
-npm test
-
-# 测试覆盖率
-npm run test:coverage
-
-# 代码检查
-npm run lint
-
-# 代码格式化
-npm run format
+td clean                     # 清理无引用的库
+td config set cleanStrategy capacity
+td config set unreferencedThreshold 5GB  # 设置阈值
 ```
 
-## 技术栈
+### 切换分支后链接失效？
 
-- TypeScript
-- Commander.js (CLI 框架)
-- Vitest (测试框架)
-- ESLint + Prettier (代码质量)
+```bash
+td link                      # 重新链接会自动修复
+```
+
+### 如何查看哪些库没被引用？
+
+```bash
+td projects --tree           # 树状显示库引用关系
+```
+
+### 如何迁移 Store 到其他磁盘？
+
+```bash
+td migrate /Volumes/Data/.tanmi-dock/store
+```
+
+## 更多文档
+
+- [CLI 完整文档](docs/CLI.md) - 所有命令的详细参数和示例
+- [API 文档](docs/API.md) - 开发者接口文档
 
 ## 许可
 
