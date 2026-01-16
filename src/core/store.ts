@@ -4,10 +4,15 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import * as config from './config.js';
 import { withFileLock } from '../utils/lock.js';
 import { copyDir, getDirSize, copyDirWithProgress, removeDir } from '../utils/fs-utils.js';
 import { KNOWN_PLATFORM_VALUES, GENERAL_PLATFORM, isPlatformDir, normalizePlatformValue } from './platform.js';
+import * as logger from '../utils/logger.js';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Store 版本类型
@@ -295,16 +300,24 @@ export async function absorbLib(
             if (depEntry.isDirectory()) {
               // 子目录是嵌套依赖库，尝试吸收到各自的 Store 位置
               try {
-                // 读取 commit hash
-                const commitHashPath = path.join(depSourcePath, '.git', 'commit_hash');
+                // 读取 commit hash：优先 commit_hash 文件，回退到 git 命令
                 let nestedCommit: string | null = null;
+                const commitHashPath = path.join(depSourcePath, '.git', 'commit_hash');
                 try {
                   nestedCommit = (await fs.readFile(commitHashPath, 'utf-8')).trim();
                 } catch {
-                  // 没有 commit_hash 文件，跳过这个子目录
+                  // 没有 commit_hash 文件，尝试 git rev-parse HEAD
+                  try {
+                    const { stdout } = await execFileAsync('git', ['-C', depSourcePath, 'rev-parse', 'HEAD'], {
+                      timeout: 5000,
+                    });
+                    nestedCommit = stdout.trim();
+                  } catch {
+                    // git 命令也失败，跳过这个子目录
+                  }
                 }
 
-                if (nestedCommit) {
+                if (nestedCommit && nestedCommit.length >= 7) {
                   // 检测平台目录
                   const nestedEntries = await fs.readdir(depSourcePath, { withFileTypes: true });
                   const nestedPlatformDirs = nestedEntries
@@ -320,8 +333,9 @@ export async function absorbLib(
                   }
                 }
                 // 吸收完成后，子目录内容已移走，不需要再处理
-              } catch {
-                // 吸收失败，忽略这个子目录
+              } catch (err) {
+                // 吸收失败，记录警告并继续
+                logger.warn(`嵌套依赖 ${depEntry.name} 吸收失败: ${(err as Error).message}`);
               }
             } else {
               // 配置文件，移动到 _shared/dependencies/

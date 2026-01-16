@@ -165,7 +165,10 @@ describe('linker', () => {
 
       fsMock.rm.mockResolvedValue(undefined);
       fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.access.mockResolvedValue(undefined);
+      fsMock.access
+        .mockResolvedValueOnce(undefined) // macOS exists
+        .mockResolvedValueOnce(undefined) // Win exists
+        .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
       fsMock.symlink.mockResolvedValue(undefined);
       copyDirMock.mockResolvedValue(undefined);
 
@@ -199,9 +202,9 @@ describe('linker', () => {
       copyDirMock.mockResolvedValue(undefined);
       // Mock readdir for _shared: 返回 .git 目录、其他目录和文件
       fsMock.readdir.mockResolvedValue([
-        { name: '.git', isDirectory: () => true },
-        { name: 'cmake', isDirectory: () => true },
-        { name: 'config.json', isDirectory: () => false },
+        { name: '.git', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+        { name: 'cmake', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+        { name: 'config.json', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
       ]);
 
       await linkLib(
@@ -238,7 +241,7 @@ describe('linker', () => {
       fsMock.access
         .mockResolvedValueOnce(undefined) // macOS exists
         .mockRejectedValueOnce({ code: 'ENOENT' }) // Win doesn't exist
-        .mockResolvedValueOnce(undefined); // _shared exists
+        .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
       fsMock.symlink.mockResolvedValue(undefined);
       copyDirMock.mockResolvedValue(undefined);
 
@@ -287,7 +290,9 @@ describe('linker', () => {
 
       fsMock.rm.mockResolvedValue(undefined);
       fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.access.mockResolvedValue(undefined);
+      fsMock.access
+        .mockResolvedValueOnce(undefined) // macOS exists
+        .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
       fsMock.symlink.mockResolvedValue(undefined);
       copyDirMock.mockResolvedValue(undefined);
 
@@ -313,7 +318,9 @@ describe('linker', () => {
 
       fsMock.rm.mockResolvedValue(undefined);
       fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.access.mockResolvedValue(undefined);
+      fsMock.access
+        .mockResolvedValueOnce(undefined) // macOS exists
+        .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
       fsMock.symlink.mockRejectedValue(new Error('symlink failed'));
       copyDirMock.mockResolvedValue(undefined);
 
@@ -344,7 +351,7 @@ describe('linker', () => {
       copyDirMock.mockResolvedValue(undefined);
       // Mock readdir for _shared
       fsMock.readdir.mockResolvedValue([
-        { name: 'config.json', isDirectory: () => false },
+        { name: 'config.json', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
       ]);
 
       // 空平台列表应该正常执行（只处理 _shared）

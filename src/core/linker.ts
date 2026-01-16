@@ -7,6 +7,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { isWindows, KNOWN_PLATFORM_VALUES } from './platform.js';
 import { copyDir } from '../utils/fs-utils.js';
+import * as logger from '../utils/logger.js';
 
 /**
  * 创建符号链接
@@ -375,9 +376,15 @@ export async function linkLib(
 
     // 4. 处理共享内容（_shared 目录）
     const sharedPath = path.join(storeCommitPath, '_shared');
+    let sharedExists = false;
     try {
       await fs.access(sharedPath);
-      // _shared 目录存在，处理其内容
+      sharedExists = true;
+    } catch {
+      // _shared 目录不存在，跳过
+    }
+
+    if (sharedExists) {
       const sharedEntries = await fs.readdir(sharedPath, { withFileTypes: true });
       const type = isWindows() ? 'junction' : 'dir';
 
@@ -385,19 +392,28 @@ export async function linkLib(
         const sourcePath = path.join(sharedPath, entry.name);
         const destPath = path.join(localPath, entry.name);
 
-        if (entry.name === '.git' && entry.isDirectory()) {
-          // .git 目录：创建符号链接
-          await fs.symlink(sourcePath, destPath, type);
+        if (entry.name === '.git') {
+          if (entry.isDirectory()) {
+            // .git 目录：创建符号链接
+            await fs.symlink(sourcePath, destPath, type);
+          } else if (entry.isFile()) {
+            // .git 是文件（worktree/submodule 场景）：复制并警告
+            logger.warn(`${path.basename(localPath)}: .git 是文件（可能是 worktree/submodule），git 验证可能失败`);
+            await fs.copyFile(sourcePath, destPath);
+          }
+          // 符号链接的 .git 忽略（异常情况）
         } else if (entry.isDirectory()) {
           // 其他目录：复制
           await copyDir(sourcePath, destPath, { preserveSymlinks: true });
+        } else if (entry.isSymbolicLink()) {
+          // 符号链接：保留
+          const linkTarget = await fs.readlink(sourcePath);
+          await fs.symlink(linkTarget, destPath);
         } else {
-          // 文件：复制
+          // 普通文件：复制
           await fs.copyFile(sourcePath, destPath);
         }
       }
-    } catch {
-      // _shared 目录不存在，跳过
     }
   } catch (err) {
     // 链接失败时清理已创建的内容

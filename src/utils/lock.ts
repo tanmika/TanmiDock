@@ -5,6 +5,7 @@
 import lockfile from 'proper-lockfile';
 import fs from 'fs/promises';
 import path from 'path';
+import * as logger from './logger.js';
 
 export interface LockOptions {
   /** 获取锁失败时的重试次数 (默认 3) */
@@ -52,8 +53,12 @@ export async function withFileLock<T>(
   } finally {
     try {
       await release();
-    } catch {
-      // 忽略释放失败（锁可能已过期或被删除）
+    } catch (err) {
+      // 只忽略 ENOENT（锁文件已删除），其他错误记录警告
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        logger.debug(`锁释放失败: ${(err as Error).message}`);
+      }
     }
   }
 }
