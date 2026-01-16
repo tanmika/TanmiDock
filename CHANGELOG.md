@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-01-16
+
+### Changed
+
+- **_shared 中 .git 目录改为符号链接**: 减少磁盘占用，保持 git 历史可访问
+
+### Fixed
+
+- **嵌套依赖重复存储问题**: `absorbLib` 递归处理 `dependencies` 目录中的嵌套依赖库，先吸收到各自的 Store 位置，避免 14GB+ 的重复存储
+  - 读取 `.git/commit_hash` 获取嵌套库 commit
+  - 配置文件（`codepac-dep.json` 等）正常移到 `_shared/dependencies/`
+  - 子库由 actions 机制直接 link，不重复下载
+
 ## [0.6.2] - 2026-01-16
 
 > 注: 0.6.1 发布时遗漏了 build 步骤，此版本为修正发布
