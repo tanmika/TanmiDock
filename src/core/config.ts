@@ -193,6 +193,7 @@ export function isValidConfigKey(key: string): key is keyof DockConfig {
     'initialized',
     'storePath',
     'cleanStrategy',
+    'unusedDays',
     'maxStoreSize',
     'autoDownload',
     'concurrency',
@@ -235,16 +236,24 @@ export function parseConfigValue(
     case 'autoDownload':
     case 'initialized':
       return value === 'true';
+    case 'unusedDays':
     case 'maxStoreSize':
-    case 'concurrency':
+    case 'concurrency': {
       const num = parseInt(value, 10);
+      if (isNaN(num) || num < 0) {
+        throw new Error(`无效的 ${key} 值: ${value}，需要非负整数`);
+      }
       if (key === 'concurrency') {
         const validValues = [1, 2, 3, 5, 99];
         if (!validValues.includes(num)) {
           throw new Error(`无效的 concurrency 值: ${value}，有效值: 1, 2, 3, 5, 99(不限制)`);
         }
       }
+      if (key === 'unusedDays' && num < 1) {
+        throw new Error(`无效的 unusedDays 值: ${value}，需要正整数`);
+      }
       return num;
+    }
     case 'cleanStrategy':
       if (!isValidCleanStrategy(value)) {
         throw new Error(`无效的 cleanStrategy 值: ${value}，有效值: unreferenced, unused, manual`);

@@ -28,7 +28,7 @@ export function createConfigCommand(): Command {
   concurrency              并发下载数: 1/2/3/5/99(不限制)
   logLevel                 日志级别: debug/verbose/info/warn/error
   proxy                    代理地址，JSON 格式: {"http":"...","https":"..."}
-  unverifiedLocalStrategy  本地库 commit 未验证时策略: skip/warn/error
+  unverifiedLocalStrategy  本地库无法验证 commit 时的策略: download/absorb
 
 示例:
   td config                              交互式配置
@@ -395,7 +395,7 @@ function sleep(ms: number): Promise<void> {
 async function getConfigValue(key: string): Promise<void> {
   if (!config.isValidConfigKey(key)) {
     error(`无效的配置项: ${key}`);
-    info('有效的配置项: version, storePath, cleanStrategy, maxStoreSize, autoDownload, concurrency, logLevel, proxy');
+    info('有效的配置项: storePath, cleanStrategy, unusedDays, autoDownload, concurrency, logLevel, proxy, unverifiedLocalStrategy');
     process.exit(1);
   }
 
@@ -419,7 +419,7 @@ async function getConfigValue(key: string): Promise<void> {
 async function setConfigValue(key: string, value: string): Promise<void> {
   if (!config.isValidConfigKey(key)) {
     error(`无效的配置项: ${key}`);
-    info('有效的配置项: version, storePath, cleanStrategy, maxStoreSize, autoDownload, concurrency, logLevel, proxy');
+    info('有效的配置项: storePath, cleanStrategy, unusedDays, autoDownload, concurrency, logLevel, proxy, unverifiedLocalStrategy');
     process.exit(1);
   }
 

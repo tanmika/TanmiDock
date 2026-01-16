@@ -1461,6 +1461,7 @@ async function classifyDependencies(
 
                 if (strategy === 'absorb') {
                   // 配置为 absorb，继续吸收
+                  info(`${dep.libName}: 本地无 .git 目录，按配置直接吸收`);
                   status = DependencyStatus.ABSORB;
                 } else {
                   // 配置为 download（默认），走下载流程
