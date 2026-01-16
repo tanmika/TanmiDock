@@ -281,6 +281,75 @@ export async function absorbLib(
         // 非平台目录/文件: 移动到 _shared
         const targetPath = path.join(sharedPath, entry.name);
 
+        // 特殊处理 dependencies 目录：先吸收子目录（嵌套依赖），再保留配置文件
+        if (entry.isDirectory() && entry.name === 'dependencies') {
+          // 确保 _shared/dependencies 目录存在
+          await fs.mkdir(targetPath, { recursive: true });
+
+          // 遍历 dependencies 目录
+          const depEntries = await fs.readdir(sourcePath, { withFileTypes: true });
+          for (const depEntry of depEntries) {
+            const depSourcePath = path.join(sourcePath, depEntry.name);
+            const depTargetPath = path.join(targetPath, depEntry.name);
+
+            if (depEntry.isDirectory()) {
+              // 子目录是嵌套依赖库，尝试吸收到各自的 Store 位置
+              try {
+                // 读取 commit hash
+                const commitHashPath = path.join(depSourcePath, '.git', 'commit_hash');
+                let nestedCommit: string | null = null;
+                try {
+                  nestedCommit = (await fs.readFile(commitHashPath, 'utf-8')).trim();
+                } catch {
+                  // 没有 commit_hash 文件，跳过这个子目录
+                }
+
+                if (nestedCommit) {
+                  // 检测平台目录
+                  const nestedEntries = await fs.readdir(depSourcePath, { withFileTypes: true });
+                  const nestedPlatformDirs = nestedEntries
+                    .filter((e) => e.isDirectory() && isPlatformDir(e.name))
+                    .map((e) => normalizePlatformValue(e.name));
+
+                  if (nestedPlatformDirs.length > 0) {
+                    // 有平台目录，递归吸收到 Store
+                    await absorbLib(depSourcePath, nestedPlatformDirs, depEntry.name, nestedCommit);
+                  } else {
+                    // 没有平台目录，可能是 General 库，吸收到 _shared
+                    await absorbGeneral(depSourcePath, depEntry.name, nestedCommit);
+                  }
+                }
+                // 吸收完成后，子目录内容已移走，不需要再处理
+              } catch {
+                // 吸收失败，忽略这个子目录
+              }
+            } else {
+              // 配置文件，移动到 _shared/dependencies/
+              try {
+                await fs.access(depTargetPath);
+                continue; // 已存在，跳过
+              } catch {
+                // 不存在，继续移动
+              }
+
+              let fileCrossFs = false;
+              try {
+                await fs.rename(depSourcePath, depTargetPath);
+              } catch (renameErr) {
+                if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+                  await fs.copyFile(depSourcePath, depTargetPath);
+                  fileCrossFs = true;
+                  crossFsSources.push(depSourcePath);
+                } else {
+                  throw renameErr;
+                }
+              }
+              movedFiles.push({ source: depSourcePath, target: depTargetPath, crossFs: fileCrossFs });
+            }
+          }
+          continue;
+        }
+
         // 检查目标是否已存在
         try {
           await fs.access(targetPath);
