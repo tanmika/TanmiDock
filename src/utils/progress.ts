@@ -8,10 +8,11 @@ import cliProgress from 'cli-progress';
  * 格式化字节大小为人类可读格式
  */
 export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
   if (bytes === 0) return '0 B';
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
@@ -103,6 +104,12 @@ export class ProgressTracker {
    * 开始进度条
    */
   start(): void {
+    // 重置时间戳，确保速度计算正确
+    this.startTime = Date.now();
+    this.lastUpdate = this.startTime;
+    this.lastBytes = 0;
+    this.currentSpeed = 0;
+
     if (this.hasTotal) {
       this.bar.start(100, 0, {
         current: formatBytes(0),
