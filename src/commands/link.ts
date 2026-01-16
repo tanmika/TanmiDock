@@ -1224,6 +1224,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           tx,
           registry,
           projectHash,
+          projectRoot: absolutePath,
           dryRun: options.dryRun,
           download: options.download,
           yes: options.yes,
@@ -1721,6 +1722,7 @@ interface ProcessActionOptions {
   tx: Transaction;
   registry: ReturnType<typeof getRegistry>;
   projectHash: string;
+  projectRoot: string;  // 项目根目录，用于计算 linkedPath
   dryRun: boolean;
   download: boolean;
   yes: boolean;
@@ -1840,7 +1842,7 @@ async function linkNestedDependencies(
   const { thirdPartyDir, targetDir, nestedConfigPath, context, options, indent } = params;
   // 计算嵌套依赖的实际目标目录
   const nestedTargetDir = path.join(thirdPartyDir, targetDir);
-  const { tx, registry, projectHash, dryRun, download, generalLibs, downloadedLibs, nestedLinkedDeps } = options;
+  const { tx, registry, projectHash, projectRoot, dryRun, download, generalLibs, downloadedLibs, nestedLinkedDeps } = options;
   const { platforms, vars } = context;
   const primaryPlatform = platforms[0];
 
@@ -1967,7 +1969,7 @@ async function linkNestedDependencies(
           libName: dep.libName,
           commit: dep.commit,
           platform: isGeneral ? GENERAL_PLATFORM : primaryPlatform,
-          linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+          linkedPath: path.relative(projectRoot, localPath),
         });
         success(`${indent}  ${dep.libName} - 已链接`);
         continue;
@@ -1996,7 +1998,7 @@ async function linkNestedDependencies(
           libName: dep.libName,
           commit: dep.commit,
           platform: GENERAL_PLATFORM,
-          linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+          linkedPath: path.relative(projectRoot, localPath),
         });
         success(`${indent}  ${dep.libName} - 链接完成 (General)`);
       } else {
@@ -2007,7 +2009,7 @@ async function linkNestedDependencies(
           libName: dep.libName,
           commit: dep.commit,
           platform: primaryPlatform,
-          linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+          linkedPath: path.relative(projectRoot, localPath),
         });
         success(`${indent}  ${dep.libName} - 链接完成 [${platforms.join(', ')}]`);
       }
@@ -2049,7 +2051,7 @@ async function linkNestedDependencies(
             libName: dep.libName,
             commit: dep.commit,
             platform: GENERAL_PLATFORM,
-            linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+            linkedPath: path.relative(projectRoot, localPath),
           });
           success(`${indent}  ${dep.libName} - 下载完成 (General)`);
         } else if (downloadResult.platformDirs.length > 0) {
@@ -2070,7 +2072,7 @@ async function linkNestedDependencies(
             libName: dep.libName,
             commit: dep.commit,
             platform: primaryPlatform,
-            linkedPath: path.relative(thirdPartyDir.replace(/\/3rdparty$/, ''), localPath),
+            linkedPath: path.relative(projectRoot, localPath),
           });
           success(`${indent}  ${dep.libName} - 下载完成 [${downloadResult.platformDirs.join(', ')}]`);
         } else {
