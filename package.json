@@ -38,7 +38,8 @@
     "test:unit": "vitest run tests/core/ tests/utils/",
     "test:integration": "vitest run tests/integration/",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
     "symlink",
