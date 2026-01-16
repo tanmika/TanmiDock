@@ -14,6 +14,7 @@ vi.mock('fs/promises', () => ({
     rename: vi.fn(),
     readdir: vi.fn(),
     access: vi.fn(),
+    copyFile: vi.fn(),
   },
 }));
 
@@ -40,6 +41,7 @@ describe('linker', () => {
     rename: ReturnType<typeof vi.fn>;
     readdir: ReturnType<typeof vi.fn>;
     access: ReturnType<typeof vi.fn>;
+    copyFile: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -186,14 +188,21 @@ describe('linker', () => {
       );
     });
 
-    it('should copy shared files (not symlink)', async () => {
+    it('should copy shared files (not symlink) and symlink .git', async () => {
       const { linkLib } = await import('../../src/core/linker.js');
 
       fsMock.rm.mockResolvedValue(undefined);
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.access.mockResolvedValue(undefined);
       fsMock.symlink.mockResolvedValue(undefined);
+      fsMock.copyFile.mockResolvedValue(undefined);
       copyDirMock.mockResolvedValue(undefined);
+      // Mock readdir for _shared: 返回 .git 目录、其他目录和文件
+      fsMock.readdir.mockResolvedValue([
+        { name: '.git', isDirectory: () => true },
+        { name: 'cmake', isDirectory: () => true },
+        { name: 'config.json', isDirectory: () => false },
+      ]);
 
       await linkLib(
         '/project/3rdParty/libtest',
@@ -201,11 +210,22 @@ describe('linker', () => {
         ['macOS']
       );
 
-      // 验证 _shared 目录被复制（非符号链接）
+      // 验证 .git 目录被符号链接
+      expect(fsMock.symlink).toHaveBeenCalledWith(
+        path.join('/store/libtest/abc123', '_shared', '.git'),
+        path.join('/project/3rdParty/libtest', '.git'),
+        'dir'
+      );
+      // 验证其他目录被复制
       expect(copyDirMock).toHaveBeenCalledWith(
-        path.join('/store/libtest/abc123', '_shared'),
-        '/project/3rdParty/libtest',
+        path.join('/store/libtest/abc123', '_shared', 'cmake'),
+        path.join('/project/3rdParty/libtest', 'cmake'),
         { preserveSymlinks: true }
+      );
+      // 验证文件被复制
+      expect(fsMock.copyFile).toHaveBeenCalledWith(
+        path.join('/store/libtest/abc123', '_shared', 'config.json'),
+        path.join('/project/3rdParty/libtest', 'config.json')
       );
     });
 
@@ -320,9 +340,14 @@ describe('linker', () => {
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.access.mockResolvedValue(undefined);
       fsMock.symlink.mockResolvedValue(undefined);
+      fsMock.copyFile.mockResolvedValue(undefined);
       copyDirMock.mockResolvedValue(undefined);
+      // Mock readdir for _shared
+      fsMock.readdir.mockResolvedValue([
+        { name: 'config.json', isDirectory: () => false },
+      ]);
 
-      // 空平台列表应该正常执行（只复制 _shared）
+      // 空平台列表应该正常执行（只处理 _shared）
       await expect(
         linkLib(
           '/project/3rdParty/libtest',
@@ -331,10 +356,9 @@ describe('linker', () => {
         )
       ).resolves.not.toThrow();
 
-      // 无平台，不创建符号链接
-      expect(fsMock.symlink).not.toHaveBeenCalled();
-      // 仍然复制 _shared
-      expect(copyDirMock).toHaveBeenCalled();
+      // 无平台，不创建平台符号链接（但 _shared 中的 .git 可能会创建）
+      // 仍然处理 _shared 文件
+      expect(fsMock.copyFile).toHaveBeenCalled();
     });
   });
 
