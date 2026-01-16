@@ -321,10 +321,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           // 检查是否为 General 库
           const isRelinkGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
 
-          tx.recordOp('unlink', localPath);
-          await linker.unlink(localPath);
-
           if (isRelinkGeneral) {
+            tx.recordOp('unlink', localPath);
+            await linker.unlink(localPath);
+
             // General 库：整目录链接到 _shared
             const sharedPath = path.join(relinkCommitPath, '_shared');
             tx.recordOp('link', localPath, sharedPath);
@@ -350,6 +350,34 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               dependency.commit,
               platforms
             );
+
+            // 检查：没有可用平台时警告并跳过（保持原链接状态）
+            if (relinkExisting.length === 0) {
+              const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
+              const relinkCommitEntries = await fs.readdir(relinkCommitPath, { withFileTypes: true });
+              const relinkAvailablePlatforms = relinkCommitEntries
+                .filter(e => e.isDirectory() && e.name !== '_shared' && KNOWN_PLATFORM_VALUES.includes(e.name))
+                .map(e => e.name);
+
+              warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 不支持 ${platforms.join('/')} 平台 [可用: ${relinkAvailablePlatforms.join(', ')}]`);
+
+              // 记录到 unavailablePlatforms
+              const relinkLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+              const relinkLib = registry.getLibrary(relinkLibKey);
+              if (relinkLib) {
+                const unavailable = relinkLib.unavailablePlatforms || [];
+                for (const p of platforms) {
+                  if (!unavailable.includes(p) && !relinkAvailablePlatforms.includes(p)) {
+                    unavailable.push(p);
+                  }
+                }
+                registry.updateLibrary(relinkLibKey, { unavailablePlatforms: unavailable });
+              }
+              break;
+            }
+
+            tx.recordOp('unlink', localPath);
+            await linker.unlink(localPath);
 
             tx.recordOp('link', localPath, relinkCommitPath);
             await linker.linkLib(localPath, relinkCommitPath, relinkExisting);
@@ -405,6 +433,31 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               platforms
             );
 
+            // 检查：没有可用平台时警告并跳过
+            if (replaceExisting.length === 0) {
+              const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
+              const replaceCommitEntries = await fs.readdir(replaceCommitPath, { withFileTypes: true });
+              const replaceAvailablePlatforms = replaceCommitEntries
+                .filter(e => e.isDirectory() && e.name !== '_shared' && KNOWN_PLATFORM_VALUES.includes(e.name))
+                .map(e => e.name);
+
+              warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 不支持 ${platforms.join('/')} 平台 [可用: ${replaceAvailablePlatforms.join(', ')}]`);
+
+              // 记录到 unavailablePlatforms
+              const replaceLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+              const replaceLib = registry.getLibrary(replaceLibKey);
+              if (replaceLib) {
+                const unavailable = replaceLib.unavailablePlatforms || [];
+                for (const p of platforms) {
+                  if (!unavailable.includes(p) && !replaceAvailablePlatforms.includes(p)) {
+                    unavailable.push(p);
+                  }
+                }
+                registry.updateLibrary(replaceLibKey, { unavailablePlatforms: unavailable });
+              }
+              break;
+            }
+
             tx.recordOp('replace', localPath, replaceCommitPath);
             await linker.linkLib(localPath, replaceCommitPath, replaceExisting);
             savedBytes += replaceSize;
@@ -441,6 +494,25 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 
           // 2. 确定最终要吸收的平台（取本地存在的 ∩ 用户选择的）
           const finalPlatforms = localPlatforms.filter(p => finalLinkPlatforms.includes(p));
+
+          // 2.5. 检查：本地有平台目录但没有用户请求的平台 → 警告并跳过
+          if (finalPlatforms.length === 0 && localPlatforms.length > 0) {
+            warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 不支持 ${platforms.join('/')} 平台 [本地有: ${localPlatforms.join(', ')}]`);
+
+            // 记录到 unavailablePlatforms
+            const absorbLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+            const absorbLib = registry.getLibrary(absorbLibKey);
+            if (absorbLib) {
+              const unavailable = absorbLib.unavailablePlatforms || [];
+              for (const p of platforms) {
+                if (!unavailable.includes(p) && !localPlatforms.includes(p)) {
+                  unavailable.push(p);
+                }
+              }
+              registry.updateLibrary(absorbLibKey, { unavailablePlatforms: unavailable });
+            }
+            break;
+          }
 
           // 3. 计算大小并显示进度（只计算一次，用于进度条和 registry）
           info(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 正在分析...`);
@@ -716,6 +788,30 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
             generalLibs.add(dependency.libName);
 
             success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，创建链接`);
+          } else if (linkNewExisting.length === 0) {
+            // 非 General 库但没有请求的平台可用 - 警告并跳过
+            // 获取 Store 中该库的所有可用平台
+            const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
+            const commitEntries = await fs.readdir(linkNewCommitPath, { withFileTypes: true });
+            const availablePlatforms = commitEntries
+              .filter(e => e.isDirectory() && e.name !== '_shared' && KNOWN_PLATFORM_VALUES.includes(e.name))
+              .map(e => e.name);
+
+            warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 不支持 ${platforms.join('/')} 平台 [可用: ${availablePlatforms.join(', ')}]`);
+
+            // 记录到 unavailablePlatforms
+            const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+            const lib = registry.getLibrary(libKey);
+            if (lib) {
+              const unavailable = lib.unavailablePlatforms || [];
+              for (const p of platforms) {
+                if (!unavailable.includes(p) && !availablePlatforms.includes(p)) {
+                  unavailable.push(p);
+                }
+              }
+              registry.updateLibrary(libKey, { unavailablePlatforms: unavailable });
+            }
+            break;
           } else {
             // 普通库：linkLib 实际存在的平台
             tx.recordOp('link', localPath, linkNewCommitPath);
