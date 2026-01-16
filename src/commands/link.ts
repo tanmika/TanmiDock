@@ -1464,6 +1464,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
         }
       }
     }
+
+    // 检查更新
+    const { checkForUpdates } = await import('../utils/update-check.js');
+    await checkForUpdates();
   } catch (err) {
     // 链接过程出错，回滚事务
     error(`链接失败: ${(err as Error).message}`);

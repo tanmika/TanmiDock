@@ -85,6 +85,10 @@ export async function showDashboard(): Promise<void> {
   blank();
   showQuickCommands();
   blank();
+
+  // 检查更新
+  const { checkForUpdates } = await import('../utils/update-check.js');
+  await checkForUpdates();
 }
 
 /**
