@@ -8,3 +8,4 @@ coverage/
 CLAUDE.md
 .claude/
 .tanmi-workspace-dev/
+*.tgz

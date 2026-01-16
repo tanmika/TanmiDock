@@ -11,6 +11,7 @@ import { createMigrateCommand } from './commands/migrate.js';
 import { createDoctorCommand } from './commands/doctor.js';
 import { createVerifyCommand } from './commands/verify.js';
 import { createRepairCommand } from './commands/repair.js';
+import { createUpdateCommand } from './commands/update.js';
 import { Transaction } from './core/transaction.js';
 
 // 读取 package.json 版本
@@ -105,5 +106,6 @@ program.addCommand(createMigrateCommand());
 program.addCommand(createDoctorCommand());
 program.addCommand(createVerifyCommand());
 program.addCommand(createRepairCommand());
+program.addCommand(createUpdateCommand());
 
 program.parse();
