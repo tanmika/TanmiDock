@@ -59,20 +59,37 @@ export async function verifyLocalCommit(
     return { verified: false, reason: 'no_git' };
   }
 
-  // Step 2: 执行 git rev-parse HEAD 获取当前 commit（使用 execFile 防止命令注入）
-  let actualCommit: string;
+  // Step 2: 获取当前 commit
+  // 优先检查 .git/commit_hash 文件（某些场景下会预存 commit hash）
+  let actualCommit: string | undefined;
+  const commitHashFile = path.join(gitPath, 'commit_hash');
   try {
-    const { stdout } = await execFileAsync('git', ['-C', localPath, 'rev-parse', 'HEAD'], {
-      timeout: 5000, // 5 秒超时
-    });
-    actualCommit = stdout.trim();
-    logger.debug(`verifyLocalCommit: ${localPath} 当前 commit = ${actualCommit}`);
-  } catch (error) {
-    // git 命令执行失败，视为 no_git
-    logger.debug(
-      `verifyLocalCommit: git rev-parse 失败 - ${error instanceof Error ? error.message : String(error)}`
-    );
-    return { verified: false, reason: 'no_git' };
+    const content = await fs.readFile(commitHashFile, 'utf-8');
+    actualCommit = content.trim();
+    if (actualCommit && actualCommit.length >= MIN_COMMIT_LENGTH) {
+      logger.debug(`verifyLocalCommit: ${localPath} 从 commit_hash 文件获取 commit = ${actualCommit}`);
+    } else {
+      actualCommit = undefined;
+    }
+  } catch {
+    // commit_hash 文件不存在或读取失败，继续尝试 git 命令
+  }
+
+  // 如果 commit_hash 文件没有有效内容，执行 git rev-parse HEAD
+  if (!actualCommit) {
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', localPath, 'rev-parse', 'HEAD'], {
+        timeout: 5000, // 5 秒超时
+      });
+      actualCommit = stdout.trim();
+      logger.debug(`verifyLocalCommit: ${localPath} 当前 commit = ${actualCommit}`);
+    } catch (error) {
+      // git 命令执行失败，视为 no_git
+      logger.debug(
+        `verifyLocalCommit: git rev-parse 失败 - ${error instanceof Error ? error.message : String(error)}`
+      );
+      return { verified: false, reason: 'no_git' };
+    }
   }
 
   // Step 3: 比较 commit（单向前缀匹配：actual 以 expected 开头）
