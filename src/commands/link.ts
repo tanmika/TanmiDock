@@ -1860,15 +1860,29 @@ async function linkNestedDependencies(
       // 不存在
     }
 
-    // 检查 Store 状态
+    // 检查 Store 状态和历史记录
+    const libKey = registry.getLibraryKey(dep.libName, dep.commit);
+    const historyLib = registry.getLibrary(libKey);
+    const unavailablePlatforms = historyLib?.unavailablePlatforms || [];
+
+    // 过滤掉已知不可用的平台
+    const availablePlatforms = platforms.filter(p => !unavailablePlatforms.includes(p));
+    const knownUnavailable = platforms.filter(p => unavailablePlatforms.includes(p));
+
     let storeHas = false;
-    for (const p of platforms) {
+    for (const p of availablePlatforms) {
       if (await store.exists(dep.libName, dep.commit, p)) {
         storeHas = true;
         break;
       }
     }
     let isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
+
+    // 如果所有平台都已知不可用，跳过
+    if (availablePlatforms.length === 0 && knownUnavailable.length > 0 && !isGeneral) {
+      warn(`${indent}  ${dep.libName} - 平台 [${knownUnavailable.join(', ')}] 不支持（远程不存在）`);
+      continue;
+    }
 
     // Store 没有，但本地是目录时，验证 commit 并尝试 absorb
     if (!storeHas && !isGeneral && localExists && !localIsSymlink) {
@@ -2006,7 +2020,7 @@ async function linkNestedDependencies(
         success(`${indent}  ${dep.libName} - 链接完成 (General)`);
       } else {
         tx.recordOp('link', localPath, storeCommitPath);
-        await linker.linkLib(localPath, storeCommitPath, platforms);
+        await linker.linkLib(localPath, storeCommitPath, availablePlatforms);
         // 记录到 nestedLinkedDeps
         nestedLinkedDeps.push({
           libName: dep.libName,
@@ -2014,7 +2028,7 @@ async function linkNestedDependencies(
           platform: primaryPlatform,
           linkedPath: path.relative(projectRoot, localPath),
         });
-        success(`${indent}  ${dep.libName} - 链接完成 [${platforms.join(', ')}]`);
+        success(`${indent}  ${dep.libName} - 链接完成 [${availablePlatforms.join(', ')}]`);
       }
     } else if (download) {
       // Store 没有，需要下载
@@ -2031,7 +2045,7 @@ async function linkNestedDependencies(
           commit: dep.commit,
           branch: dep.branch,
           libName: dep.libName,
-          platforms,
+          platforms: availablePlatforms,
           sparse: dep.sparse,
           vars,
         });
@@ -2077,9 +2091,51 @@ async function linkNestedDependencies(
             platform: primaryPlatform,
             linkedPath: path.relative(projectRoot, localPath),
           });
+
+          // 检查并记录新发现的不可用平台
+          const newUnavailable = availablePlatforms.filter(p => !downloadResult.platformDirs.includes(p));
+          if (newUnavailable.length > 0) {
+            const updatedUnavailable = [...new Set([...unavailablePlatforms, ...newUnavailable])];
+            if (historyLib) {
+              registry.updateLibrary(libKey, { unavailablePlatforms: updatedUnavailable });
+            } else {
+              registry.addLibrary({
+                libName: dep.libName,
+                commit: dep.commit,
+                branch: dep.branch,
+                url: dep.url,
+                platforms: downloadResult.platformDirs,
+                size: 0,
+                referencedBy: [],
+                unavailablePlatforms: newUnavailable,
+                createdAt: new Date().toISOString(),
+                lastAccess: new Date().toISOString(),
+              });
+            }
+            warn(`${indent}  ${dep.libName} 平台 [${newUnavailable.join(', ')}] 远程不存在，已记录`);
+          }
+
           success(`${indent}  ${dep.libName} - 下载完成 [${downloadResult.platformDirs.join(', ')}]`);
         } else {
-          warn(`${indent}  ${dep.libName} - 下载成功但无可用平台`);
+          // 所有请求的平台都不可用，记录到 registry
+          const newUnavailable = [...new Set([...unavailablePlatforms, ...availablePlatforms])];
+          if (historyLib) {
+            registry.updateLibrary(libKey, { unavailablePlatforms: newUnavailable });
+          } else {
+            registry.addLibrary({
+              libName: dep.libName,
+              commit: dep.commit,
+              branch: dep.branch,
+              url: dep.url,
+              platforms: [],
+              size: 0,
+              referencedBy: [],
+              unavailablePlatforms: newUnavailable,
+              createdAt: new Date().toISOString(),
+              lastAccess: new Date().toISOString(),
+            });
+          }
+          warn(`${indent}  ${dep.libName} - 下载成功但平台 [${availablePlatforms.join(', ')}] 不可用，已记录`);
         }
 
         // 清理临时目录
