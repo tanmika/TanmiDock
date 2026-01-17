@@ -131,21 +131,59 @@ export async function selectPlatforms(remembered?: string[]): Promise<string[]> 
 
 /**
  * 解析 CLI -p 参数为平台 values
- * @param keys CLI 参数 keys (如 ['mac', 'ios'])
- * @returns 平台 values (如 ['macOS', 'iOS'])
+ * 支持多种输入格式：
+ *   - 基础 key: mac → macOS (同时包含 asan 变体，由 codepac 下载后清理)
+ *   - asan key: mac-asan → macOS-asan
+ *   - hwasan key: android-hwasan → android-hwasan
+ *   - 直接 value: macOS / macOS-asan → 直通
+ *
+ * @param keys CLI 参数 (如 ['mac', 'mac-asan', 'ios'])
+ * @returns 平台 values (如 ['macOS', 'macOS-asan', 'iOS'])
  */
 export function parsePlatformArgs(keys: string[]): string[] {
   const result: string[] = [];
 
   for (const key of keys) {
-    // 查找匹配的平台
-    const platform = PLATFORM_OPTIONS.find((p) => p.key === key);
+    const lowerKey = key.toLowerCase();
+
+    // 1. 检查是否为 asan/hwasan 后缀格式 (如 mac-asan, android-hwasan)
+    if (lowerKey.endsWith('-asan')) {
+      const baseKey = lowerKey.slice(0, -5); // 去掉 -asan
+      const platform = PLATFORM_OPTIONS.find((p) => p.key === baseKey);
+      if (platform?.asan) {
+        result.push(platform.asan);
+        continue;
+      }
+    }
+
+    if (lowerKey.endsWith('-hwasan')) {
+      const baseKey = lowerKey.slice(0, -7); // 去掉 -hwasan
+      const platform = PLATFORM_OPTIONS.find((p) => p.key === baseKey);
+      if (platform?.hwasan) {
+        result.push(platform.hwasan);
+        continue;
+      }
+    }
+
+    // 2. 检查是否为基础 key (如 mac, ios)
+    const platform = PLATFORM_OPTIONS.find((p) => p.key === lowerKey);
     if (platform) {
       result.push(platform.value);
-    } else {
-      // 不认识的 key 直接作为 value 使用 (自定义平台)
-      result.push(key);
+      continue;
     }
+
+    // 3. 检查是否为直接 value (如 macOS, macOS-asan)
+    const directMatch = PLATFORM_OPTIONS.find(
+      (p) => p.value === key || p.asan === key || p.hwasan === key
+    );
+    if (directMatch) {
+      // 直接使用输入的 value
+      result.push(key);
+      continue;
+    }
+
+    // 4. 不认识的 key 直接作为 value 使用 (自定义平台)
+    result.push(key);
   }
 
   return result;

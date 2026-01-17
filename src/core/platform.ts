@@ -63,6 +63,16 @@ export function platformValueToKey(value: string): string {
 }
 
 /**
+ * 获取平台的基础 key（用于传给 codepac）
+ * 无论是 macOS 还是 macOS-asan，都返回 mac
+ * 这样 codepac 会下载所有变体，之后再做清理
+ */
+export function getBaseKeyForCodepac(value: string): string {
+  const option = getPlatformOptionByValue(value);
+  return option?.key ?? value;
+}
+
+/**
  * 获取所有平台 keys
  */
 export function getAllPlatformKeys(): string[] {
@@ -71,15 +81,21 @@ export function getAllPlatformKeys(): string[] {
 
 /**
  * 生成平台帮助文本
- * 格式: key.padEnd(10) + ' -> ' + value (包含 asan/hwasan 变体)
+ * 显示可用的平台参数及其变体
  */
 export function getPlatformHelpText(): string {
   const lines = ['\nPlatforms:'];
   for (const opt of PLATFORM_OPTIONS) {
-    const values = [opt.value];
-    if (opt.asan) values.push(opt.asan);
-    if (opt.hwasan) values.push(opt.hwasan);
-    lines.push(`  ${opt.key.padEnd(10)} -> ${values.join(', ')}`);
+    // 基础平台
+    lines.push(`  ${opt.key.padEnd(12)} -> ${opt.value}`);
+    // asan 变体
+    if (opt.asan) {
+      lines.push(`  ${(opt.key + '-asan').padEnd(12)} -> ${opt.asan}`);
+    }
+    // hwasan 变体
+    if (opt.hwasan) {
+      lines.push(`  ${(opt.key + '-hwasan').padEnd(12)} -> ${opt.hwasan}`);
+    }
   }
   return lines.join('\n');
 }

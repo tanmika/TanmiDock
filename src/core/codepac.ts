@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
-import { isPlatformDir, normalizePlatformValue, platformValueToKey } from './platform.js';
+import { isPlatformDir, normalizePlatformValue, getBaseKeyForCodepac } from './platform.js';
 import type { ProxyConfig } from '../types/index.js';
 
 const execAsync = promisify(exec);
@@ -341,10 +341,12 @@ export interface DownloadResult {
   tempDir: string;
   /** 库目录: tempDir/libName */
   libDir: string;
-  /** 实际下载的平台目录名 ["macOS", "macOS-asan", "android"] */
+  /** 实际保留的平台目录名（用户请求的） */
   platformDirs: string[];
   /** 共享文件列表 */
   sharedFiles: string[];
+  /** 被清理的平台目录名（codepac 下载了但用户未请求的） */
+  cleanedPlatforms: string[];
 }
 
 /**
@@ -412,9 +414,11 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
     await fs.writeFile(configPath, JSON.stringify(tempConfig, null, 2), 'utf-8');
 
     // 构建 codepac 命令参数
-    // 关键: codepac -p 需要 CLI key (mac/ios/android)，而非目录 value (macOS/iOS/android)
-    const platformKeys = platforms.map(platformValueToKey);
-    const args = ['install', '-cf', configPath, '-td', tempDir, '-p', ...platformKeys];
+    // 关键: codepac -p 需要基础 CLI key (mac/ios/android)
+    // 无论用户请求 macOS 还是 macOS-asan，都传 mac 给 codepac
+    // codepac 会下载所有变体，之后我们做清理
+    const baseKeys = [...new Set(platforms.map(getBaseKeyForCodepac))];
+    const args = ['install', '-cf', configPath, '-td', tempDir, '-p', ...baseKeys];
 
     // 调用 codepac
     await spawnCodepac(args, tempDir, onProgress);
@@ -422,16 +426,34 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
     // 分析下载结果，区分平台目录和共享文件
     const entries = await fs.readdir(libDir, { withFileTypes: true });
 
-    const platformDirs: string[] = [];
+    const downloadedPlatforms: string[] = [];
     const sharedFiles: string[] = [];
 
     for (const entry of entries) {
       const name = entry.name;
       if (isPlatformDir(name)) {
         // 标准化平台目录名（例如 "macos" -> "macOS"）
-        platformDirs.push(normalizePlatformValue(name));
+        downloadedPlatforms.push(normalizePlatformValue(name));
       } else {
         sharedFiles.push(name);
+      }
+    }
+
+    // 后处理：清理用户未请求的平台目录
+    // 例如用户只请求 macOS，但 codepac 下载了 macOS 和 macOS-asan
+    const requestedSet = new Set(platforms);
+    const platformDirs: string[] = [];
+    const cleanedPlatforms: string[] = [];
+
+    for (const platform of downloadedPlatforms) {
+      if (requestedSet.has(platform)) {
+        // 用户请求的平台，保留
+        platformDirs.push(platform);
+      } else {
+        // 用户未请求的平台，删除
+        const platformPath = path.join(libDir, platform);
+        await fs.rm(platformPath, { recursive: true, force: true });
+        cleanedPlatforms.push(platform);
       }
     }
 
@@ -440,6 +462,7 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
       libDir,
       platformDirs,
       sharedFiles,
+      cleanedPlatforms,
     };
   } catch (error) {
     // 清理临时目录

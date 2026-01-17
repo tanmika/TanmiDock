@@ -644,15 +644,16 @@ describe('codepac', () => {
 
       mockSpawn.mockReturnValue(createMockProcess(0));
 
+      // 传入 value 形式（link.ts 会先用 parsePlatformArgs 转换）
       const result = await codepac.downloadToTemp({
         url: 'git@example.com:repo/lib.git',
         commit: 'abc123',
         branch: 'main',
         libName: 'libtest',
-        platforms: ['mac', 'win'],
+        platforms: ['macOS', 'macOS-asan', 'Win'],
       });
 
-      // 验证平台目录识别
+      // 验证平台目录识别（保留用户请求的）
       expect(result.platformDirs).toContain('macOS');
       expect(result.platformDirs).toContain('macOS-asan');
       expect(result.platformDirs).toContain('Win');
@@ -665,6 +666,42 @@ describe('codepac', () => {
       // 验证平台目录不在共享文件中
       expect(result.sharedFiles).not.toContain('macOS');
       expect(result.sharedFiles).not.toContain('Win');
+
+      // 没有被清理的平台
+      expect(result.cleanedPlatforms).toHaveLength(0);
+    });
+
+    it('should clean unrequested platform directories', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+
+      // Mock readdir 返回多个平台（codepac 会下载所有变体）
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'macOS-asan', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockReturnValue(createMockProcess(0));
+
+      // 只请求 macOS，不要 asan
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: 'abc123',
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      // 验证只保留请求的平台
+      expect(result.platformDirs).toContain('macOS');
+      expect(result.platformDirs).not.toContain('macOS-asan');
+
+      // 验证清理了未请求的平台
+      expect(result.cleanedPlatforms).toContain('macOS-asan');
+
+      // 验证 fs.rm 被调用来清理目录
+      expect(mockRm).toHaveBeenCalled();
     });
 
     it('should pass multiple platforms to codepac with -p flag', async () => {
