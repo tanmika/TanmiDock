@@ -291,11 +291,14 @@ async function showAllProjects(options: StatusOptions): Promise<void> {
   for (const project of projects) {
     const displayPath = shrinkHome(project.path);
     const pathExists = await checkPathExists(project.path);
+    const projectHash = registry.hashPath(project.path);
+    const projectSize = registry.getProjectSize(projectHash);
 
     info(`  ${index}. ${displayPath}`);
     info(`     最后链接: ${formatDate(project.lastLinked)}`);
     info(`     平台: ${project.platforms?.join(', ') || '未指定'}`);
     info(`     依赖: ${project.dependencies.length} 个`);
+    info(`     占用空间: ${formatSize(projectSize)}`);
 
     if (!pathExists) {
       warn(`     [warn] 路径不存在（项目可能已删除）`);
@@ -303,6 +306,14 @@ async function showAllProjects(options: StatusOptions): Promise<void> {
 
     blank();
     index++;
+  }
+
+  // 显示空间统计
+  const spaceStats = registry.getSpaceStats();
+  separator();
+  info(`总占用: ${formatSize(spaceStats.actualSize)}`);
+  if (spaceStats.savedSize > 0) {
+    success(`节省空间: ${formatSize(spaceStats.savedSize)}`);
   }
 }
 

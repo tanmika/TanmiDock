@@ -470,6 +470,52 @@ class RegistryManager {
     return this.registry.libraries[libKey]?.referencedBy ?? [];
   }
 
+  // ========== 统计方法 ==========
+
+  /**
+   * 获取空间统计信息
+   * 计算实际占用、理论占用和节省的空间
+   */
+  getSpaceStats(): { actualSize: number; theoreticalSize: number; savedSize: number } {
+    this.ensureLoaded();
+    let actualSize = 0;
+    let theoreticalSize = 0;
+
+    for (const entry of Object.values(this.registry.stores)) {
+      actualSize += entry.size;
+      const refCount = entry.usedBy.length;
+      // 理论空间：每个引用都存一份，无引用的也算一份
+      theoreticalSize += entry.size * Math.max(refCount, 1);
+    }
+
+    return {
+      actualSize,
+      theoreticalSize,
+      savedSize: theoreticalSize - actualSize,
+    };
+  }
+
+  /**
+   * 获取项目占用空间
+   * @param projectHash 项目 hash
+   * @returns 项目所有依赖的总大小
+   */
+  getProjectSize(projectHash: string): number {
+    this.ensureLoaded();
+    const project = this.registry.projects[projectHash];
+    if (!project) return 0;
+
+    let totalSize = 0;
+    for (const dep of project.dependencies) {
+      const storeKey = this.getStoreKey(dep.libName, dep.commit, dep.platform);
+      const entry = this.registry.stores[storeKey];
+      if (entry) {
+        totalSize += entry.size;
+      }
+    }
+    return totalSize;
+  }
+
   // ========== 工具方法 ==========
 
   /**

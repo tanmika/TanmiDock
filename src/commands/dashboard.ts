@@ -103,8 +103,12 @@ async function showStoreStatus(cfg: DockConfig, registry: RegistryManager | null
   if (registry) {
     const stores = registry.listStores();
     const totalSize = await store.getTotalSize();
+    const spaceStats = registry.getSpaceStats();
     console.log(`   库数量      ${colorize(String(stores.length), 'cyan')}`);
     console.log(`   占用空间    ${colorize(formatBytes(totalSize), 'cyan')}`);
+    if (spaceStats.savedSize > 0) {
+      console.log(`   节省空间    ${colorize(formatBytes(spaceStats.savedSize), 'green')}`);
+    }
   } else {
     console.log(`   库数量      ${colorize('-', 'gray')}`);
     console.log(`   占用空间    ${colorize('-', 'gray')}`);
