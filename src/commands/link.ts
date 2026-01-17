@@ -14,6 +14,7 @@ import {
   extractActions,
   parseActionCommand,
   extractNestedDependencies,
+  normalizeProjectRoot,
 } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
@@ -147,11 +148,44 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     process.exit(EXIT_CODES.DATAERR);
   }
 
+  // 规范化项目根目录：确保始终登记在包含 3rdparty 的目录
+  const normalizedRoot = normalizeProjectRoot(absolutePath, configPath);
+  const wasNormalized = normalizedRoot !== absolutePath;
+
+  // 如果路径被规范化了（用户在 3rdparty 目录运行），需要处理迁移
+  if (wasNormalized) {
+    info(`项目根目录规范化: ${absolutePath} → ${normalizedRoot}`);
+
+    // 检查旧路径是否在 registry 中
+    const oldHash = registry.hashPath(absolutePath);
+    const oldProject = registry.getProject(oldHash);
+    if (oldProject) {
+      // 迁移旧登记到新路径
+      info('迁移旧的项目登记...');
+      registry.removeProject(oldHash);
+    }
+  }
+
+  // 检查是否存在指向同一配置文件的其他登记（清理历史脏数据）
+  const absConfigPath = path.resolve(normalizedRoot, getRelativeConfigPath(normalizedRoot, configPath));
+  const allProjects = registry.listProjects();
+  for (const proj of allProjects) {
+    if (proj.path === normalizedRoot) continue;
+    const projAbsConfig = path.resolve(proj.path, proj.configPath);
+    if (projAbsConfig === absConfigPath) {
+      info(`清理重复登记: ${proj.path}`);
+      registry.removeProject(registry.hashPath(proj.path));
+    }
+  }
+
+  // 使用规范化后的路径继续
+  const finalPath = normalizedRoot;
+
   info(`找到 ${dependencies.length} 个依赖，平台: ${platforms.join(', ')}`);
   blank();
 
   // 分类依赖（检查所有请求的平台）
-  const classified = await classifyDependencies(dependencies, absolutePath, configPath, platforms);
+  const classified = await classifyDependencies(dependencies, finalPath, configPath, platforms);
 
   // 显示分类结果
   const stats = {
@@ -210,10 +244,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 
   let savedBytes = 0;
   const storePath = await store.getStorePath();
-  const projectHash = registry.hashPath(absolutePath);
+  const projectHash = registry.hashPath(finalPath);
 
   // 创建事务
-  const tx = new Transaction(`link:${absolutePath}`);
+  const tx = new Transaction(`link:${finalPath}`);
   await tx.begin();
 
   // 记录 General 类型库（用于最后生成 dependencies 时使用正确的 platform）
@@ -1328,7 +1362,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           tx,
           registry,
           projectHash,
-          projectRoot: absolutePath,
+          projectRoot: finalPath,
           dryRun: options.dryRun,
           download: options.download,
           yes: options.yes,
@@ -1343,7 +1377,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     const oldStoreKeys = registry.getProjectStoreKeys(projectHash);
 
     // 更新项目信息
-    const relConfigPath = getRelativeConfigPath(absolutePath, configPath);
+    const relConfigPath = getRelativeConfigPath(finalPath, configPath);
     // 使用主平台作为依赖的 platform 字段（兼容旧结构）
     const primaryPlatform = platforms[0];
     const topLevelDeps = classified
@@ -1359,14 +1393,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
         commit: c.dependency.commit,
         // General 库使用 'general' 平台，普通库使用主平台
         platform: generalLibs.has(c.dependency.libName) ? GENERAL_PLATFORM : primaryPlatform,
-        linkedPath: path.relative(absolutePath, c.localPath),
+        linkedPath: path.relative(finalPath, c.localPath),
       }));
 
     // 合并顶层依赖和嵌套依赖
     const newDependencies = [...topLevelDeps, ...nestedLinkedDeps];
 
     registry.addProject({
-      path: absolutePath,
+      path: finalPath,
       configPath: relConfigPath,
       lastLinked: new Date().toISOString(),
       platforms: finalLinkPlatforms, // 记录实际链接的平台（包括用户选择的额外平台）
@@ -1382,12 +1416,21 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     for (const key of oldStoreKeys) {
       if (!newStoreKeys.includes(key)) {
         registry.removeStoreReference(key, projectHash);
+        // 同时移除 LibraryInfo 的引用
+        // storeKey 格式: libName:commit:platform
+        const [libName, commit] = key.split(':');
+        const libKey = registry.getLibraryKey(libName, commit);
+        registry.removeReference(libKey, projectHash);
       }
     }
 
     // 添加新引用（清除 unlinkedAt）
     for (const key of newStoreKeys) {
       registry.addStoreReference(key, projectHash);
+      // 同时添加 LibraryInfo 的引用
+      const [libName, commit] = key.split(':');
+      const libKey = registry.getLibraryKey(libName, commit);
+      registry.addReference(libKey, projectHash);
     }
 
     await registry.save();

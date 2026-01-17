@@ -34,6 +34,23 @@ export async function findCodepacConfig(projectPath: string): Promise<string | n
 }
 
 /**
+ * 规范化项目根目录
+ * 确保项目始终登记在包含 3rdparty 的目录，而非 3rdparty 目录本身
+ * @param inputPath 用户输入的项目路径
+ * @param configPath 找到的配置文件路径
+ * @returns 规范化后的项目根目录
+ */
+export function normalizeProjectRoot(inputPath: string, configPath: string): string {
+  const configDir = path.dirname(configPath);
+
+  // 如果配置文件在 3rdparty 目录下，项目根目录应该是其父目录
+  if (path.basename(configDir) === '3rdparty') {
+    return path.dirname(configDir);
+  }
+  return inputPath;
+}
+
+/**
  * 解析 codepac-dep.json 配置文件
  * @param configPath 配置文件路径
  * @returns 解析后的配置对象
@@ -242,6 +259,7 @@ export function getRelativeConfigPath(projectPath: string, configPath: string): 
 
 export default {
   findCodepacConfig,
+  normalizeProjectRoot,
   parseCodepacDep,
   extractDependencies,
   extractActions,

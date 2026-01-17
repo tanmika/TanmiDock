@@ -15,6 +15,7 @@ interface RepairResult {
   danglingLinksRemoved: number;
   orphanLibrariesFixed: number;
   staleProjectsCleaned: number;
+  staleReferencesFixed: number;
 }
 
 /**
@@ -53,6 +54,7 @@ export async function repairIssues(options: RepairOptions): Promise<void> {
     danglingLinksRemoved: 0,
     orphanLibrariesFixed: 0,
     staleProjectsCleaned: 0,
+    staleReferencesFixed: 0,
   };
 
   // 收集问题
@@ -60,10 +62,12 @@ export async function repairIssues(options: RepairOptions): Promise<void> {
     danglingLinks: { path: string; projectHash: string; dep: { libName: string; commit: string } }[];
     orphanLibraries: { libName: string; commit: string; size: number; path: string }[];
     staleProjects: { hash: string; path: string }[];
+    staleReferences: { libKey: string; projectHash: string; projectPath: string }[];
   } = {
     danglingLinks: [],
     orphanLibraries: [],
     staleProjects: [],
+    staleReferences: [],
   };
 
   // 1. 检查过期项目和悬挂链接
@@ -137,9 +141,76 @@ export async function repairIssues(options: RepairOptions): Promise<void> {
     // Store 目录不存在或无法读取
   }
 
+  // 3. 检查失效引用（Registry 中 referencedBy 指向的项目没有实际符号链接）
+  const libraries = registry.listLibraries();
+
+  for (const lib of libraries) {
+    const libKey = registry.getLibraryKey(lib.libName, lib.commit);
+
+    for (const projectHash of lib.referencedBy) {
+      const project = registry.getProject(projectHash);
+      if (!project) {
+        // 项目不存在于 registry
+        issues.staleReferences.push({
+          libKey,
+          projectHash,
+          projectPath: '(项目已删除)',
+        });
+        continue;
+      }
+
+      // 检查项目中是否有符号链接指向此库版本
+      let hasValidLink = false;
+      const libStorePath = path.join(storePath, lib.libName, lib.commit);
+
+      for (const dep of project.dependencies) {
+        if (dep.libName === lib.libName && dep.commit === lib.commit) {
+          const linkPath = path.join(project.path, dep.linkedPath);
+          try {
+            const stat = await fs.lstat(linkPath);
+            if (stat.isSymbolicLink()) {
+              const target = await fs.readlink(linkPath);
+              const resolvedTarget = path.resolve(path.dirname(linkPath), target);
+              // 检查链接是否指向此库版本
+              if (resolvedTarget.startsWith(libStorePath)) {
+                hasValidLink = true;
+                break;
+              }
+            } else if (stat.isDirectory()) {
+              // 多平台模式：检查内部是否有符号链接指向此库
+              const entries = await fs.readdir(linkPath, { withFileTypes: true });
+              for (const entry of entries) {
+                if (entry.isSymbolicLink()) {
+                  const subLinkPath = path.join(linkPath, entry.name);
+                  const subTarget = await fs.readlink(subLinkPath);
+                  const resolvedSubTarget = path.resolve(linkPath, subTarget);
+                  if (resolvedSubTarget.startsWith(libStorePath)) {
+                    hasValidLink = true;
+                    break;
+                  }
+                }
+              }
+              if (hasValidLink) break;
+            }
+          } catch {
+            // 链接不存在或无法读取
+          }
+        }
+      }
+
+      if (!hasValidLink) {
+        issues.staleReferences.push({
+          libKey,
+          projectHash,
+          projectPath: project.path,
+        });
+      }
+    }
+  }
+
   // 显示问题汇总
   const totalIssues =
-    issues.danglingLinks.length + issues.orphanLibraries.length + issues.staleProjects.length;
+    issues.danglingLinks.length + issues.orphanLibraries.length + issues.staleProjects.length + issues.staleReferences.length;
 
   if (totalIssues === 0) {
     success('没有发现需要修复的问题');
@@ -158,6 +229,9 @@ export async function repairIssues(options: RepairOptions): Promise<void> {
   if (issues.orphanLibraries.length > 0) {
     const totalSize = issues.orphanLibraries.reduce((sum, lib) => sum + lib.size, 0);
     info(`  - ${issues.orphanLibraries.length} 个孤立库 (${formatSize(totalSize)})`);
+  }
+  if (issues.staleReferences.length > 0) {
+    info(`  - ${issues.staleReferences.length} 个失效引用`);
   }
 
   // dry-run 模式
@@ -179,6 +253,9 @@ export async function repairIssues(options: RepairOptions): Promise<void> {
       } else {
         info(`  登记孤立库: ${lib.libName}/${lib.commit.slice(0, 7)}`);
       }
+    }
+    for (const ref of issues.staleReferences) {
+      info(`  移除失效引用: ${ref.libKey} <- ${ref.projectPath}`);
     }
 
     blank();
@@ -240,7 +317,7 @@ export async function repairIssues(options: RepairOptions): Promise<void> {
         await fs.rm(lib.path, { recursive: true, force: true });
         success(`[ok] 删除孤立库: ${lib.libName}/${lib.commit.slice(0, 7)}`);
       } else {
-        // 登记到 Registry
+        // 登记到 Registry - LibraryInfo
         registry.addLibrary({
           libName: lib.libName,
           commit: lib.commit,
@@ -252,11 +329,48 @@ export async function repairIssues(options: RepairOptions): Promise<void> {
           createdAt: new Date().toISOString(),
           lastAccess: new Date().toISOString(),
         });
+
+        // 扫描平台子目录并登记 StoreEntry
+        try {
+          const entries = await fs.readdir(lib.path, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== '_shared') {
+              const platform = entry.name;
+              const platformPath = path.join(lib.path, platform);
+              const platformSize = await getDirSizeRecursive(platformPath);
+              registry.addStore({
+                libName: lib.libName,
+                commit: lib.commit,
+                platform,
+                branch: 'unknown',
+                url: 'unknown',
+                size: platformSize,
+                usedBy: [],
+                createdAt: new Date().toISOString(),
+                lastAccess: new Date().toISOString(),
+              });
+            }
+          }
+        } catch {
+          // 无法读取目录，跳过 StoreEntry 登记
+        }
+
         success(`[ok] 登记孤立库: ${lib.libName}/${lib.commit.slice(0, 7)}`);
       }
       result.orphanLibrariesFixed++;
     } catch (err) {
       error(`[err] 处理孤立库失败: ${lib.libName}/${lib.commit.slice(0, 7)} - ${(err as Error).message}`);
+    }
+  }
+
+  // 3.4 修复失效引用
+  for (const ref of issues.staleReferences) {
+    try {
+      registry.removeReference(ref.libKey, ref.projectHash);
+      success(`[ok] 移除失效引用: ${ref.libKey} <- ${ref.projectPath}`);
+      result.staleReferencesFixed++;
+    } catch (err) {
+      error(`[err] 移除引用失败: ${ref.libKey} - ${(err as Error).message}`);
     }
   }
 
@@ -267,7 +381,7 @@ export async function repairIssues(options: RepairOptions): Promise<void> {
   blank();
   separator();
   const totalFixed =
-    result.danglingLinksRemoved + result.orphanLibrariesFixed + result.staleProjectsCleaned;
+    result.danglingLinksRemoved + result.orphanLibrariesFixed + result.staleProjectsCleaned + result.staleReferencesFixed;
   success(`修复完成: ${totalFixed} 个问题已解决`);
 }
 

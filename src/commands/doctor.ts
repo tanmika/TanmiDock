@@ -6,6 +6,7 @@ import { Command } from 'commander';
 import { isCodepacInstalled } from '../core/codepac.js';
 import { getDiskInfo, formatSize } from '../utils/disk.js';
 import * as config from '../core/config.js';
+import { getRegistry } from '../core/registry.js';
 import { warn, error, success, blank, title } from '../utils/logger.js';
 
 interface CheckResult {
@@ -93,6 +94,58 @@ async function runDiagnostics(options: DoctorOptions): Promise<void> {
       name: '磁盘空间',
       status: lowSpace ? 'warn' : 'ok',
       message: `${formatSize(systemDisk.free)} 可用${lowSpace ? ' (建议 > 5GB)' : ''}`,
+    });
+  }
+
+  // 5. 检查 Registry 一致性（快速检查）
+  try {
+    const registry = getRegistry();
+    await registry.load();
+
+    const projects = registry.listProjects();
+    const libraries = registry.listLibraries();
+
+    // 检查无效项目（路径不存在）
+    let invalidProjects = 0;
+    for (const project of projects) {
+      try {
+        await fs.access(project.path);
+      } catch {
+        invalidProjects++;
+      }
+    }
+
+    // 检查无引用库
+    const unreferencedLibs = libraries.filter((lib) => lib.referencedBy.length === 0).length;
+
+    // 检查引用指向不存在的项目
+    let staleRefs = 0;
+    for (const lib of libraries) {
+      for (const projectHash of lib.referencedBy) {
+        if (!registry.getProject(projectHash)) {
+          staleRefs++;
+        }
+      }
+    }
+
+    const hasIssues = invalidProjects > 0 || staleRefs > 0;
+    const issueDetails: string[] = [];
+    if (invalidProjects > 0) issueDetails.push(`${invalidProjects} 个无效项目`);
+    if (staleRefs > 0) issueDetails.push(`${staleRefs} 个失效引用`);
+    if (unreferencedLibs > 0) issueDetails.push(`${unreferencedLibs} 个无引用库`);
+
+    results.push({
+      name: 'Registry',
+      status: hasIssues ? 'warn' : 'ok',
+      message: hasIssues
+        ? `${issueDetails.join(', ')}，运行 td verify 查看详情`
+        : `${projects.length} 个项目, ${libraries.length} 个库`,
+    });
+  } catch {
+    results.push({
+      name: 'Registry',
+      status: 'error',
+      message: '无法加载 Registry',
     });
   }
 

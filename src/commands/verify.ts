@@ -15,6 +15,7 @@ interface VerifyResult {
   orphanLibraries: { libName: string; commit: string; size: number }[];
   missingLibraries: { libName: string; commit: string; project: string }[];
   invalidProjects: string[];
+  staleReferences: { libKey: string; projectHash: string; projectPath: string }[];
 }
 
 /**
@@ -44,6 +45,7 @@ export async function verifyIntegrity(): Promise<void> {
     orphanLibraries: [],
     missingLibraries: [],
     invalidProjects: [],
+    staleReferences: [],
   };
 
   const storePath = await store.getStorePath();
@@ -126,6 +128,74 @@ export async function verifyIntegrity(): Promise<void> {
     // Store 目录不存在或无法读取
   }
 
+  // 3. 检查失效引用（Registry 中 referencedBy 指向的项目没有实际符号链接）
+  info('检查引用一致性...');
+  const libraries = registry.listLibraries();
+
+  for (const lib of libraries) {
+    const libKey = registry.getLibraryKey(lib.libName, lib.commit);
+
+    for (const projectHash of lib.referencedBy) {
+      const project = registry.getProject(projectHash);
+      if (!project) {
+        // 项目不存在于 registry
+        result.staleReferences.push({
+          libKey,
+          projectHash,
+          projectPath: '(项目已删除)',
+        });
+        continue;
+      }
+
+      // 检查项目中是否有符号链接指向此库版本
+      let hasValidLink = false;
+      const libStorePath = path.join(storePath, lib.libName, lib.commit);
+
+      for (const dep of project.dependencies) {
+        if (dep.libName === lib.libName && dep.commit === lib.commit) {
+          const linkPath = path.join(project.path, dep.linkedPath);
+          try {
+            const stat = await fs.lstat(linkPath);
+            if (stat.isSymbolicLink()) {
+              const target = await fs.readlink(linkPath);
+              const resolvedTarget = path.resolve(path.dirname(linkPath), target);
+              // 检查链接是否指向此库版本
+              if (resolvedTarget.startsWith(libStorePath)) {
+                hasValidLink = true;
+                break;
+              }
+            } else if (stat.isDirectory()) {
+              // 多平台模式：检查内部是否有符号链接指向此库
+              const entries = await fs.readdir(linkPath, { withFileTypes: true });
+              for (const entry of entries) {
+                if (entry.isSymbolicLink()) {
+                  const subLinkPath = path.join(linkPath, entry.name);
+                  const subTarget = await fs.readlink(subLinkPath);
+                  const resolvedSubTarget = path.resolve(linkPath, subTarget);
+                  if (resolvedSubTarget.startsWith(libStorePath)) {
+                    hasValidLink = true;
+                    break;
+                  }
+                }
+              }
+              if (hasValidLink) break;
+            }
+          } catch {
+            // 链接不存在或无法读取
+          }
+        }
+      }
+
+      if (!hasValidLink) {
+        result.staleReferences.push({
+          libKey,
+          projectHash,
+          projectPath: project.path,
+        });
+      }
+    }
+  }
+
   // 输出结果
   blank();
   separator();
@@ -169,13 +239,24 @@ export async function verifyIntegrity(): Promise<void> {
     }
   }
 
+  // 失效引用
+  if (result.staleReferences.length === 0) {
+    success('[ok] 引用关系一致');
+  } else {
+    warn(`[warn] 发现 ${result.staleReferences.length} 个失效引用`);
+    for (const ref of result.staleReferences) {
+      info(`  - ${ref.libKey} <- ${ref.projectPath}`);
+    }
+  }
+
   // 总结和建议
   blank();
   const hasIssues =
     result.danglingLinks.length > 0 ||
     result.orphanLibraries.length > 0 ||
     result.missingLibraries.length > 0 ||
-    result.invalidProjects.length > 0;
+    result.invalidProjects.length > 0 ||
+    result.staleReferences.length > 0;
 
   if (hasIssues) {
     hint('建议: 运行 tanmi-dock repair 修复问题');
