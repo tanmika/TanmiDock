@@ -5,7 +5,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import https from 'https';
-import { getConfigDir } from '../core/config.js';
+import { getConfigDir } from '../core/platform.js';
 import { info } from './logger.js';
 
 const PACKAGE_NAME = 'tanmi-dock';

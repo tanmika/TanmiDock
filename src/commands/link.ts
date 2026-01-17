@@ -1465,6 +1465,27 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       }
     }
 
+    // iOS 项目 CocoaPods 配置提示
+    const hasIOSPlatform = platforms.some((p) => p === 'iOS' || p === 'iOS-asan');
+    if (hasIOSPlatform) {
+      const isIOSProject = await detectIOSProject(absolutePath);
+      if (isIOSProject) {
+        // 收集所有成功链接的 iOS 库
+        const iosLibs = newDependencies.filter((d) => d.platform !== GENERAL_PLATFORM);
+        if (iosLibs.length > 0) {
+          const storePath = await store.getStorePath();
+          blank();
+          info('检测到 iOS 项目，CocoaPods 配置:');
+          separator();
+          for (const lib of iosLibs) {
+            const podPath = path.join(storePath, lib.libName, lib.commit, 'iOS');
+            console.log(`pod '${lib.libName}', :path => '${podPath}'`);
+          }
+          separator();
+        }
+      }
+    }
+
     // 检查更新
     const { checkForUpdates } = await import('../utils/update-check.js');
     await checkForUpdates();
@@ -2305,6 +2326,51 @@ async function linkNestedDependencies(
       warn(`${indent}  ${dep.libName} - 缺失 (跳过下载)`);
     }
   }
+}
+
+/**
+ * 检测项目是否为 iOS 项目
+ * 递归检查是否存在 .xcodeproj 或 .xcworkspace 目录（最多 3 层深度）
+ */
+async function detectIOSProject(projectPath: string, maxDepth = 3): Promise<boolean> {
+  async function search(dir: string, depth: number): Promise<boolean> {
+    if (depth > maxDepth) return false;
+
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+
+        // 检查是否为 Xcode 项目文件
+        if (entry.name.endsWith('.xcodeproj') || entry.name.endsWith('.xcworkspace')) {
+          return true;
+        }
+
+        // 跳过不需要搜索的目录
+        if (
+          entry.name.startsWith('.') ||
+          entry.name === 'node_modules' ||
+          entry.name === 'build' ||
+          entry.name === 'dist' ||
+          entry.name === 'Pods'
+        ) {
+          continue;
+        }
+
+        // 递归搜索子目录
+        if (await search(path.join(dir, entry.name), depth + 1)) {
+          return true;
+        }
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  return search(projectPath, 1);
 }
 
 export default createLinkCommand;
