@@ -186,7 +186,8 @@ export function parsePlatformArgs(keys: string[]): string[] {
     result.push(key);
   }
 
-  return result;
+  // 去重：避免 ['mac', 'macOS'] 等情况产生重复
+  return [...new Set(result)];
 }
 
 // ============ 通用多选 ============

@@ -28,8 +28,7 @@ import { ProgressTracker, DownloadMonitor } from '../utils/progress.js';
 import { success, warn, error, info, hint, blank, separator } from '../utils/logger.js';
 import { verifyLocalCommit } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
-import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext, PodConfig } from '../types/index.js';
-import { findPodfiles, modifyPodfile } from '../utils/podfile.js';
+import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext } from '../types/index.js';
 import { withGlobalLock } from '../utils/global-lock.js';
 import { confirmAction, selectPlatforms, parsePlatformArgs, selectOption } from '../utils/prompt.js';
 import pLimit from 'p-limit';
@@ -1476,91 +1475,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       }
     }
 
-    // iOS 项目 CocoaPods 配置
-    const hasIOSPlatform = platforms.some((p) => p === 'iOS' || p === 'iOS-asan');
-    if (hasIOSPlatform) {
-      const isIOSProject = await detectIOSProject(absolutePath);
-      if (isIOSProject) {
-        // 收集所有成功链接的 iOS 库
-        const iosLibs = newDependencies.filter((d) => d.platform !== GENERAL_PLATFORM);
-        if (iosLibs.length > 0) {
-          const storePath = await store.getStorePath();
-
-          // 准备 pod 配置
-          const podConfigs: PodConfig[] = iosLibs.map((lib) => ({
-            libName: lib.libName,
-            podPath: path.join(storePath, lib.libName, lib.commit, 'iOS'),
-          }));
-
-          // 查找 Podfile
-          const podfiles = await findPodfiles(absolutePath);
-
-          if (podfiles.length === 0) {
-            // 没有找到 Podfile，输出配置提示（原有行为）
-            blank();
-            info('检测到 iOS 项目，CocoaPods 配置:');
-            separator();
-            for (const pod of podConfigs) {
-              console.log(`pod '${pod.libName}', :path => '${pod.podPath}'`);
-            }
-            separator();
-            hint('将以上内容添加到 Podfile 后运行 pod install');
-          } else {
-            // 找到 Podfile，自动修改
-            let targetPodfile: string;
-
-            if (podfiles.length === 1) {
-              targetPodfile = podfiles[0];
-            } else if (!options.yes && process.stdout.isTTY) {
-              // 多个 Podfile，交互选择
-              const choices = podfiles.map((p) => ({
-                name: path.relative(absolutePath, p),
-                value: p,
-              }));
-              targetPodfile = await selectOption('检测到多个 Podfile，请选择:', choices);
-            } else {
-              // 非交互模式，选择最浅层的
-              targetPodfile = podfiles[0];
-            }
-
-            try {
-              const result = await modifyPodfile(targetPodfile, podConfigs);
-              blank();
-              info(`检测到 iOS 项目`);
-
-              const relativePath = path.relative(absolutePath, result.podfilePath);
-              if (result.added.length > 0 || result.updated.length > 0) {
-                success(`Podfile 已更新: ${relativePath}`);
-                if (result.added.length > 0) {
-                  info(`  添加: ${result.added.join(', ')}`);
-                }
-                if (result.updated.length > 0) {
-                  info(`  更新: ${result.updated.join(', ')}`);
-                }
-                if (result.skipped.length > 0) {
-                  info(`  跳过 (已存在): ${result.skipped.join(', ')}`);
-                }
-                hint('请运行 pod install 以应用更改');
-              } else {
-                info(`Podfile 无需更新: ${relativePath}`);
-                info(`  已存在: ${result.skipped.join(', ')}`);
-              }
-            } catch (podErr) {
-              // Podfile 修改失败，回退到手动提示
-              warn(`Podfile 修改失败: ${(podErr as Error).message}`);
-              blank();
-              info('请手动添加以下配置到 Podfile:');
-              separator();
-              for (const pod of podConfigs) {
-                console.log(`pod '${pod.libName}', :path => '${pod.podPath}'`);
-              }
-              separator();
-            }
-          }
-        }
-      }
-    }
-
     // 检查更新
     const { checkForUpdates } = await import('../utils/update-check.js');
     await checkForUpdates();
@@ -2411,51 +2325,6 @@ async function linkNestedDependencies(
       warn(`${indent}  ${dep.libName} - 缺失 (跳过下载)`);
     }
   }
-}
-
-/**
- * 检测项目是否为 iOS 项目
- * 递归检查是否存在 .xcodeproj 或 .xcworkspace 目录（最多 3 层深度）
- */
-async function detectIOSProject(projectPath: string, maxDepth = 3): Promise<boolean> {
-  async function search(dir: string, depth: number): Promise<boolean> {
-    if (depth > maxDepth) return false;
-
-    try {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-
-        // 检查是否为 Xcode 项目文件
-        if (entry.name.endsWith('.xcodeproj') || entry.name.endsWith('.xcworkspace')) {
-          return true;
-        }
-
-        // 跳过不需要搜索的目录
-        if (
-          entry.name.startsWith('.') ||
-          entry.name === 'node_modules' ||
-          entry.name === 'build' ||
-          entry.name === 'dist' ||
-          entry.name === 'Pods'
-        ) {
-          continue;
-        }
-
-        // 递归搜索子目录
-        if (await search(path.join(dir, entry.name), depth + 1)) {
-          return true;
-        }
-      }
-
-      return false;
-    } catch {
-      return false;
-    }
-  }
-
-  return search(projectPath, 1);
 }
 
 export default createLinkCommand;

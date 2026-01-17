@@ -317,7 +317,7 @@ export async function absorbLib(
                   }
                 }
 
-                if (nestedCommit && nestedCommit.length >= 7) {
+                if (nestedCommit && /^[0-9a-f]{7,40}$/i.test(nestedCommit)) {
                   // 检测平台目录
                   const nestedEntries = await fs.readdir(depSourcePath, { withFileTypes: true });
                   const nestedPlatformDirs = nestedEntries

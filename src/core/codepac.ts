@@ -9,6 +9,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import { isPlatformDir, normalizePlatformValue, getBaseKeyForCodepac } from './platform.js';
 import type { ProxyConfig } from '../types/index.js';
+import * as logger from '../utils/logger.js';
 
 const execAsync = promisify(exec);
 
@@ -452,8 +453,12 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
       } else {
         // 用户未请求的平台，删除
         const platformPath = path.join(libDir, platform);
-        await fs.rm(platformPath, { recursive: true, force: true });
-        cleanedPlatforms.push(platform);
+        try {
+          await fs.rm(platformPath, { recursive: true, force: true });
+          cleanedPlatforms.push(platform);
+        } catch (err) {
+          logger.warn(`清理平台目录 ${platform} 失败: ${(err as Error).message}`);
+        }
       }
     }
 

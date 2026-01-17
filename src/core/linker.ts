@@ -400,8 +400,10 @@ export async function linkLib(
             // .git 是文件（worktree/submodule 场景）：复制并警告
             logger.warn(`${path.basename(localPath)}: .git 是文件（可能是 worktree/submodule），git 验证可能失败`);
             await fs.copyFile(sourcePath, destPath);
+          } else if (entry.isSymbolicLink()) {
+            // .git 是符号链接（异常情况）：记录并跳过
+            logger.debug(`${path.basename(localPath)}: .git 是符号链接，已跳过`);
           }
-          // 符号链接的 .git 忽略（异常情况）
         } else if (entry.isDirectory()) {
           // 其他目录：复制
           await copyDir(sourcePath, destPath, { preserveSymlinks: true });

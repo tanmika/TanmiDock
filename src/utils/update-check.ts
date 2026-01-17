@@ -6,7 +6,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import https from 'https';
 import { getConfigDir } from '../core/platform.js';
-import { info } from './logger.js';
+import { info, blank } from './logger.js';
 
 const PACKAGE_NAME = 'tanmi-dock';
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000; // 6 小时
@@ -16,6 +16,8 @@ interface UpdateCheckCache {
   lastCheck: number;
   latestVersion: string | null;
 }
+
+const MAX_RESPONSE_SIZE = 10 * 1024; // 10KB 足够
 
 /**
  * 从 npm registry 获取最新版本
@@ -27,12 +29,19 @@ async function fetchLatestVersion(): Promise<string | null> {
       { timeout: 5000 },
       (res) => {
         if (res.statusCode !== 200) {
+          res.resume(); // 消费响应体以正确关闭连接
           resolve(null);
           return;
         }
 
         let data = '';
-        res.on('data', (chunk) => (data += chunk));
+        res.on('data', (chunk) => {
+          data += chunk;
+          if (data.length > MAX_RESPONSE_SIZE) {
+            req.destroy();
+            resolve(null);
+          }
+        });
         res.on('end', () => {
           try {
             const json = JSON.parse(data);
@@ -100,8 +109,8 @@ async function writeCache(cache: UpdateCheckCache): Promise<void> {
 function compareVersions(v1: string, v2: string): number {
   // 去掉预发布后缀
   const clean = (v: string) => v.split('-')[0];
-  const parts1 = clean(v1).split('.').map(Number);
-  const parts2 = clean(v2).split('.').map(Number);
+  const parts1 = clean(v1).split('.').map((n) => parseInt(n, 10) || 0);
+  const parts2 = clean(v2).split('.').map((n) => parseInt(n, 10) || 0);
 
   for (let i = 0; i < 3; i++) {
     const p1 = parts1[i] || 0;
@@ -154,7 +163,7 @@ export async function checkForUpdates(): Promise<void> {
  * 显示更新提示
  */
 function showUpdateNotice(currentVersion: string, latestVersion: string): void {
-  console.log('');
+  blank();
   info(`新版本可用: ${currentVersion} → ${latestVersion}`);
   info('运行 `td update` 或 `npm install -g tanmi-dock` 更新');
 }
