@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-01-17
+
+### Added
+
+- **精确指定平台变体**: 支持 `mac-asan`、`ios-asan`、`android-hwasan` 等精确指定，避免下载不需要的变体
+- **空间统计**: 主页和 `td status --all` 显示节省空间信息
+- **版本更新检查**: 自动检查 npm 新版本并提示更新
+
+### Fixed
+
+- **错误处理增强**:
+  - linker: 拆分 try-catch 避免吞掉 _shared 处理错误
+  - linker: .git 为文件时添加警告（worktree/submodule 场景）
+  - store: 补充 git rev-parse HEAD 回退逻辑获取 commit
+  - lock: 只忽略 ENOENT，其他释放错误记录日志
+- **健壮性修复**:
+  - update-check: HTTP 响应正确消费 + 大小限制
+  - codepac: 平台目录清理添加错误处理
+  - store: commit 验证改为正则十六进制校验
+  - prompt: 平台参数去重
+
 ## [0.6.3] - 2026-01-16
 
 ### Changed
