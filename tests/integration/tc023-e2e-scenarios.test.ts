@@ -189,10 +189,11 @@ describe('TC-023: E2E 端到端测试', () => {
       expect(await isSymlink(localPath1)).toBe(true);
       expect(await isSymlink(localPath2)).toBe(true);
 
-      // 验证 Registry 记录
+      // 验证 Registry 记录 (通过 StoreEntry.usedBy)
       let registry = await loadRegistry(env);
       const libKey = `${libName}:${commit}`;
-      expect(registry.libraries[libKey].referencedBy.length).toBe(2);
+      const storeKey = `${libName}:${commit}:macOS`;
+      expect(registry.stores[storeKey].usedBy.length).toBe(2);
 
       // === 项目 1 取消链接 ===
       await runCommand('unlink', { remove: false }, env, project1);
@@ -203,7 +204,7 @@ describe('TC-023: E2E 端到端测试', () => {
       // 验证 Store 仍存在（项目 2 还在用）
       registry = await loadRegistry(env);
       expect(registry.libraries[libKey]).toBeDefined();
-      expect(registry.libraries[libKey].referencedBy.length).toBe(1);
+      expect(registry.stores[storeKey].usedBy.length).toBe(1);
     });
 
     it('should remove Store when last project unlinks with --remove', async () => {
@@ -287,11 +288,9 @@ describe('TC-023: E2E 端到端测试', () => {
       const projectHash = hashPath(env.projectDir);
       expect(registry.projects[projectHash].dependencies[0].commit).toBe(newCommit);
 
-      // 注意：link 命令在升级时不会自动清理旧库的 referencedBy
-      // 旧版本的 referencedBy 会在 clean 命令运行时被清理
-      // 这里只验证新版本已添加引用
-      const newLibKey = `${libName}:${newCommit}`;
-      expect(registry.libraries[newLibKey].referencedBy).toContain(projectHash);
+      // 验证新版本已添加引用 (通过 StoreEntry.usedBy)
+      const newStoreKey = `${libName}:${newCommit}:${platform}`;
+      expect(registry.stores[newStoreKey].usedBy).toContain(projectHash);
 
       // 旧版本的 Store 引用（usedBy）应该被移除
       const oldStoreKey = `${libName}:${oldCommit}:${platform}`;

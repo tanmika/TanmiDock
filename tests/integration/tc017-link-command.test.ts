@@ -144,9 +144,8 @@ async function verifyProjectRegistry(
   // 检查 libraries 记录
   const libKey = `${libName}:${commit}`;
   expect(registry.libraries[libKey]).toBeDefined();
-  expect(registry.libraries[libKey].referencedBy).toContain(projectHash);
 
-  // 检查 stores 记录
+  // 检查 stores 记录（引用通过 usedBy 追踪）
   for (const platform of platforms) {
     const storeKey = `${libName}:${commit}:${platform}`;
     expect(registry.stores[storeKey]).toBeDefined();
@@ -497,12 +496,11 @@ describe('TC-017: link 命令测试', () => {
       const registry = await loadRegistry(env);
       const projectHash = hashPath(env.projectDir);
 
-      // libraries 记录应包含引用
+      // libraries 记录应存在
       const libKey = `${libName}:${commit}`;
       expect(registry.libraries[libKey]).toBeDefined();
-      expect(registry.libraries[libKey].referencedBy).toContain(projectHash);
 
-      // stores 记录应包含引用
+      // stores 记录应包含引用（引用通过 usedBy 追踪）
       expect(registry.stores[`${libName}:${commit}:macOS`].usedBy).toContain(projectHash);
       expect(registry.stores[`${libName}:${commit}:iOS`].usedBy).toContain(projectHash);
 

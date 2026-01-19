@@ -351,83 +351,87 @@ describe('registry', () => {
     });
 
     describe('reference operations', () => {
-      it('should add reference to library', async () => {
+      it('should add reference to StoreEntry', async () => {
         fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
 
         const { getRegistry } = await import('../../src/core/registry.js');
         const registry = getRegistry();
         await registry.load();
 
-        registry.addLibrary({
+        registry.addStore({
           libName: 'mylib',
           commit: 'abc123',
+          platform: 'macOS',
           branch: 'main',
           url: 'https://github.com/test/mylib.git',
-          platforms: ['mac'],
           size: 1000,
-          referencedBy: [],
+          usedBy: [],
           createdAt: '2026-01-05',
           lastAccess: '2026-01-05',
         });
 
-        const libKey = registry.getLibraryKey('mylib', 'abc123');
-        registry.addReference(libKey, 'project-hash-1');
+        const storeKey = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.addStoreReference(storeKey, 'project-hash-1');
 
-        const refs = registry.getLibraryReferences(libKey);
-        expect(refs).toContain('project-hash-1');
+        const store = registry.getStore(storeKey);
+        expect(store?.usedBy).toContain('project-hash-1');
+        // 添加引用后应该清除 unlinkedAt
+        expect(store?.unlinkedAt).toBeUndefined();
       });
 
-      it('should not add duplicate reference', async () => {
+      it('should not add duplicate reference to StoreEntry', async () => {
         fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
 
         const { getRegistry } = await import('../../src/core/registry.js');
         const registry = getRegistry();
         await registry.load();
 
-        registry.addLibrary({
+        registry.addStore({
           libName: 'mylib',
           commit: 'abc123',
+          platform: 'macOS',
           branch: 'main',
           url: 'https://github.com/test/mylib.git',
-          platforms: ['mac'],
           size: 1000,
-          referencedBy: [],
+          usedBy: [],
           createdAt: '2026-01-05',
           lastAccess: '2026-01-05',
         });
 
-        const libKey = registry.getLibraryKey('mylib', 'abc123');
-        registry.addReference(libKey, 'project-hash-1');
-        registry.addReference(libKey, 'project-hash-1');
+        const storeKey = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.addStoreReference(storeKey, 'project-hash-1');
+        registry.addStoreReference(storeKey, 'project-hash-1');
 
-        const refs = registry.getLibraryReferences(libKey);
-        expect(refs).toHaveLength(1);
+        const store = registry.getStore(storeKey);
+        expect(store?.usedBy).toHaveLength(1);
       });
 
-      it('should remove reference from library', async () => {
+      it('should remove reference from StoreEntry and set unlinkedAt', async () => {
         fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
 
         const { getRegistry } = await import('../../src/core/registry.js');
         const registry = getRegistry();
         await registry.load();
 
-        registry.addLibrary({
+        registry.addStore({
           libName: 'mylib',
           commit: 'abc123',
+          platform: 'macOS',
           branch: 'main',
           url: 'https://github.com/test/mylib.git',
-          platforms: ['mac'],
           size: 1000,
-          referencedBy: ['project-hash-1'],
+          usedBy: ['project-hash-1'],
           createdAt: '2026-01-05',
           lastAccess: '2026-01-05',
         });
 
-        const libKey = registry.getLibraryKey('mylib', 'abc123');
-        registry.removeReference(libKey, 'project-hash-1');
+        const storeKey = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.removeStoreReference(storeKey, 'project-hash-1');
 
-        const refs = registry.getLibraryReferences(libKey);
-        expect(refs).toHaveLength(0);
+        const store = registry.getStore(storeKey);
+        expect(store?.usedBy).toHaveLength(0);
+        // 移除引用后应该设置 unlinkedAt
+        expect(store?.unlinkedAt).toBeDefined();
       });
 
       it('should get unreferenced libraries', async () => {
@@ -467,7 +471,7 @@ describe('registry', () => {
     });
 
     describe('removeProject', () => {
-      it('should remove project and its references', async () => {
+      it('should remove project and its StoreEntry references', async () => {
         fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
 
         const { getRegistry } = await import('../../src/core/registry.js');
@@ -480,37 +484,53 @@ describe('registry', () => {
           commit: 'abc123',
           branch: 'main',
           url: 'https://github.com/test/mylib.git',
-          platforms: ['mac'],
+          platforms: ['macOS'],
           size: 1000,
           referencedBy: [],
           createdAt: '2026-01-05',
           lastAccess: '2026-01-05',
         });
 
-        // Add project with dependency
+        // Add StoreEntry (new API)
+        const storeKey = registry.getStoreKey('mylib', 'abc123', 'macOS');
+        registry.addStore({
+          libName: 'mylib',
+          commit: 'abc123',
+          platform: 'macOS',
+          branch: 'main',
+          url: 'https://github.com/test/mylib.git',
+          size: 1000,
+          usedBy: [],
+          createdAt: '2026-01-05',
+          lastAccess: '2026-01-05',
+        });
+
+        // Add project with dependency (including platform as required by new flow)
         const project = {
           path: '/test/project',
           configPath: '/test/project/codepac-dep.json',
           lastLinked: '2026-01-05',
           platform: 'mac' as const,
           dependencies: [
-            { libName: 'mylib', commit: 'abc123', linkedPath: '/test/project/3rdparty/mylib' },
+            { libName: 'mylib', commit: 'abc123', platform: 'macOS', linkedPath: '/test/project/3rdparty/mylib' },
           ],
         };
         registry.addProject(project);
 
-        // Add reference
-        const libKey = registry.getLibraryKey('mylib', 'abc123');
+        // Add StoreEntry reference (new API)
         const projectHash = registry.hashPath('/test/project');
-        registry.addReference(libKey, projectHash);
+        registry.addStoreReference(storeKey, projectHash);
+
+        // Verify reference was added
+        expect(registry.getStore(storeKey)?.usedBy).toContain(projectHash);
 
         // Remove project
         registry.removeProject(projectHash);
 
         // Verify project removed
         expect(registry.getProject(projectHash)).toBeUndefined();
-        // Verify reference removed
-        expect(registry.getLibraryReferences(libKey)).not.toContain(projectHash);
+        // Verify StoreEntry reference removed (new behavior)
+        expect(registry.getStore(storeKey)?.usedBy).not.toContain(projectHash);
       });
     });
 

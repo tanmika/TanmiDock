@@ -275,9 +275,8 @@ describe('TC-024: 事务回滚测试', () => {
 
       // 库记录
       expect(registry.libraries[libKey]).toBeDefined();
-      expect(registry.libraries[libKey].referencedBy).toContain(projectHash);
 
-      // Store 记录
+      // Store 记录 (引用通过 usedBy 追踪)
       for (const platform of platforms) {
         const storeKey = `${libKey}:${platform}`;
         expect(registry.stores[storeKey]).toBeDefined();
@@ -293,11 +292,10 @@ describe('TC-024: 事务回滚测试', () => {
       // 项目记录已删除
       expect(registry.projects[projectHash]).toBeUndefined();
 
-      // 库记录仍存在但无引用
+      // 库记录仍存在
       expect(registry.libraries[libKey]).toBeDefined();
-      expect(registry.libraries[libKey].referencedBy).not.toContain(projectHash);
 
-      // Store usedBy 已更新
+      // Store usedBy 已更新 (引用已移除)
       for (const platform of platforms) {
         const storeKey = `${libKey}:${platform}`;
         expect(registry.stores[storeKey].usedBy).not.toContain(projectHash);

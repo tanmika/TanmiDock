@@ -302,10 +302,10 @@ describe('TC-016: clean 命令测试', () => {
         referencedBy: [staleProjectPath],
       });
 
-      // 验证初始状态有引用
+      // 验证初始状态有引用 (通过 StoreEntry.usedBy)
       const beforeRegistry = await loadRegistry(env);
-      const libKey = `${libName}:${commit}`;
-      expect(beforeRegistry.libraries[libKey].referencedBy.length).toBeGreaterThan(0);
+      const storeKey = `${libName}:${commit}:macOS`;
+      expect(beforeRegistry.stores[storeKey].usedBy.length).toBeGreaterThan(0);
 
       // 调用 clean 命令（会先清理失效引用，然后清理无引用库）
       await runCommand('clean', { force: true }, env);

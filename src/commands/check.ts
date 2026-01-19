@@ -850,7 +850,19 @@ async function fixAllIssues(
   // 4. 移除失效引用
   for (const ref of issues.staleReferences) {
     try {
-      registry.removeReference(ref.libKey, ref.projectHash);
+      // 移除 StoreEntry 引用（该库的所有平台）
+      // 使用 lastIndexOf 安全解析 libKey，处理 libName 可能包含冒号的情况
+      const colonIndex = ref.libKey.lastIndexOf(':');
+      if (colonIndex === -1) {
+        error(`[err] 无效的 libKey: ${ref.libKey}`);
+        continue;
+      }
+      const libName = ref.libKey.slice(0, colonIndex);
+      const commit = ref.libKey.slice(colonIndex + 1);
+      const storeKeys = registry.getLibraryStoreKeys(libName, commit);
+      for (const storeKey of storeKeys) {
+        registry.removeStoreReference(storeKey, ref.projectHash);
+      }
       success(`[ok] 移除引用: ${ref.libKey} <- ${ref.projectPath}`);
       fixed++;
     } catch (err) {

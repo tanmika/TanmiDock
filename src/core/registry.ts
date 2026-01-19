@@ -41,7 +41,82 @@ class RegistryManager {
     } catch {
       this.registry = { ...EMPTY_REGISTRY };
     }
+    // 标记为已加载，这样 migration 中调用的方法可以正常工作
     this.loaded = true;
+    // 自动迁移旧版引用数据（如果有需要迁移的数据，会立即保存）
+    await this.migrateReferences();
+  }
+
+  /**
+   * 解析 libKey 为 libName 和 commit
+   * 使用安全的方式处理可能包含冒号的 libName
+   */
+  private parseLibraryKey(libKey: string): { libName: string; commit: string } | null {
+    const colonIndex = libKey.lastIndexOf(':');
+    if (colonIndex === -1) return null;
+    return {
+      libName: libKey.slice(0, colonIndex),
+      commit: libKey.slice(colonIndex + 1),
+    };
+  }
+
+  /**
+   * 迁移 LibraryInfo.referencedBy 到 StoreEntry.usedBy
+   * 用于旧版数据兼容，迁移后立即保存避免数据丢失
+   * 只迁移有效的引用（项目存在且路径有效）
+   */
+  private async migrateReferences(): Promise<void> {
+    let migrated = false;
+
+    for (const [libKey, lib] of Object.entries(this.registry.libraries)) {
+      if (!lib.referencedBy || lib.referencedBy.length === 0) continue;
+
+      const parsed = this.parseLibraryKey(libKey);
+      if (!parsed) continue;
+
+      const { libName, commit } = parsed;
+      const storeKeys = this.getLibraryStoreKeys(libName, commit);
+
+      // 保护：如果没有对应的 StoreEntry，保留 referencedBy 数据避免丢失
+      if (storeKeys.length === 0) {
+        // 无法迁移，保留原数据（可能是孤立的 LibraryInfo，会被 clean 命令处理）
+        continue;
+      }
+
+      // 只迁移有效的引用（项目存在）
+      const validRefs: string[] = [];
+      for (const projectHash of lib.referencedBy) {
+        const project = this.registry.projects[projectHash];
+        if (project) {
+          validRefs.push(projectHash);
+        }
+      }
+
+      // 迁移到对应的 StoreEntry
+      for (const storeKey of storeKeys) {
+        const store = this.registry.stores[storeKey];
+        if (store) {
+          for (const projectHash of validRefs) {
+            if (!store.usedBy.includes(projectHash)) {
+              store.usedBy.push(projectHash);
+              migrated = true;
+            }
+          }
+          // 如果有引用，清除 unlinkedAt
+          if (store.usedBy.length > 0) {
+            delete store.unlinkedAt;
+          }
+        }
+      }
+
+      // 迁移成功后清空旧数据
+      lib.referencedBy = [];
+    }
+
+    // 迁移后立即保存，避免重复迁移
+    if (migrated) {
+      await this.save();
+    }
   }
 
   /**
@@ -163,15 +238,20 @@ class RegistryManager {
 
   /**
    * 移除项目
+   * 注意：会移除该项目对所有相关 StoreEntry 的引用（包括所有平台）
    */
   removeProject(pathHash: string): void {
     this.ensureLoaded();
     const project = this.registry.projects[pathHash];
     if (project) {
-      // 移除库的引用
+      // 移除 StoreEntry 引用
+      // 注意：dependencies 中只保存主平台，但实际可能链接了多个平台
+      // 因此需要获取该库所有平台的 StoreEntry 并移除引用
       for (const dep of project.dependencies) {
-        const libKey = this.getLibraryKey(dep.libName, dep.commit);
-        this.removeReference(libKey, pathHash);
+        const storeKeys = this.getLibraryStoreKeys(dep.libName, dep.commit);
+        for (const storeKey of storeKeys) {
+          this.removeStoreReference(storeKey, pathHash);
+        }
       }
       delete this.registry.projects[pathHash];
     }
@@ -240,10 +320,25 @@ class RegistryManager {
 
   /**
    * 获取无引用的库
+   * @deprecated 使用 getUnreferencedStores() 替代
    */
   getUnreferencedLibraries(): LibraryInfo[] {
     this.ensureLoaded();
     return this.listLibraries().filter((lib) => lib.referencedBy.length === 0);
+  }
+
+  /**
+   * 获取孤立的 LibraryInfo 记录（没有对应的 StoreEntry）
+   * 这种情况可能发生在：
+   * 1. 所有平台的 StoreEntry 都被删除但 LibraryInfo 没有清理
+   * 2. 数据损坏或手动修改导致的不一致
+   */
+  getOrphanLibraries(): LibraryInfo[] {
+    this.ensureLoaded();
+    return this.listLibraries().filter((lib) => {
+      const storeKeys = this.getLibraryStoreKeys(lib.libName, lib.commit);
+      return storeKeys.length === 0;
+    });
   }
 
   // ========== Store 管理 (新版，按平台) ==========
@@ -306,16 +401,9 @@ class RegistryManager {
    * @returns 平台列表
    */
   getLibraryPlatforms(libName: string, commit: string): string[] {
-    this.ensureLoaded();
+    const storeKeys = this.getLibraryStoreKeys(libName, commit);
     const prefix = `${libName}:${commit}:`;
-    const platforms: string[] = [];
-    for (const key of Object.keys(this.registry.stores)) {
-      if (key.startsWith(prefix)) {
-        const platform = key.slice(prefix.length);
-        platforms.push(platform);
-      }
-    }
-    return platforms;
+    return storeKeys.map((key) => key.slice(prefix.length));
   }
 
   /**
@@ -427,6 +515,48 @@ class RegistryManager {
   }
 
   /**
+   * 批量添加 Store 引用
+   * @param projectHash 项目 hash
+   * @param storeKeys Store key 列表
+   */
+  addProjectReferences(projectHash: string, storeKeys: string[]): void {
+    this.ensureLoaded();
+    for (const storeKey of storeKeys) {
+      this.addStoreReference(storeKey, projectHash);
+    }
+  }
+
+  /**
+   * 批量移除 Store 引用
+   * @param projectHash 项目 hash
+   * @param storeKeys Store key 列表
+   */
+  removeProjectReferences(projectHash: string, storeKeys: string[]): void {
+    this.ensureLoaded();
+    for (const storeKey of storeKeys) {
+      this.removeStoreReference(storeKey, projectHash);
+    }
+  }
+
+  /**
+   * 获取库的所有 Store keys
+   * @param libName 库名
+   * @param commit commit hash
+   * @returns Store key 列表
+   */
+  getLibraryStoreKeys(libName: string, commit: string): string[] {
+    this.ensureLoaded();
+    const prefix = `${libName}:${commit}:`;
+    const keys: string[] = [];
+    for (const key of Object.keys(this.registry.stores)) {
+      if (key.startsWith(prefix)) {
+        keys.push(key);
+      }
+    }
+    return keys;
+  }
+
+  /**
    * 获取项目的 Store keys
    */
   getProjectStoreKeys(projectHash: string): string[] {
@@ -438,32 +568,11 @@ class RegistryManager {
     );
   }
 
-  // ========== 引用关系管理 ==========
-
-  /**
-   * 添加引用
-   */
-  addReference(libKey: string, projectHash: string): void {
-    this.ensureLoaded();
-    const lib = this.registry.libraries[libKey];
-    if (lib && !lib.referencedBy.includes(projectHash)) {
-      lib.referencedBy.push(projectHash);
-    }
-  }
-
-  /**
-   * 移除引用
-   */
-  removeReference(libKey: string, projectHash: string): void {
-    this.ensureLoaded();
-    const lib = this.registry.libraries[libKey];
-    if (lib) {
-      lib.referencedBy = lib.referencedBy.filter((h) => h !== projectHash);
-    }
-  }
+  // ========== 引用关系管理 (deprecated, 仅保留读取) ==========
 
   /**
    * 获取库的引用列表
+   * @deprecated 使用 StoreEntry.usedBy 替代
    */
   getLibraryReferences(libKey: string): string[] {
     this.ensureLoaded();
@@ -557,7 +666,7 @@ class RegistryManager {
 
   /**
    * 清理失效的 Store 引用
-   * 检查所有 StoreEntry.usedBy 和 LibraryInfo.referencedBy 中的项目是否还存在
+   * 检查所有 StoreEntry.usedBy 中的项目是否还存在
    * @returns 被清理的引用数量
    */
   async cleanStaleReferences(): Promise<number> {
@@ -593,28 +702,11 @@ class RegistryManager {
       }
     }
 
-    // 清理 libraries.referencedBy 中的失效引用
+    // 清理 libraries.referencedBy 中的残留数据（迁移遗留）
     for (const lib of Object.values(this.registry.libraries)) {
-      const validRefs: string[] = [];
-
-      for (const projectHash of lib.referencedBy) {
-        const project = this.registry.projects[projectHash];
-        if (project) {
-          // 检查项目路径是否存在
-          try {
-            await fs.access(project.path);
-            validRefs.push(projectHash);
-          } catch {
-            cleaned++;
-          }
-        } else {
-          cleaned++;
-        }
-      }
-
-      // 更新引用列表
-      if (validRefs.length !== lib.referencedBy.length) {
-        lib.referencedBy = validRefs;
+      if (lib.referencedBy && lib.referencedBy.length > 0) {
+        lib.referencedBy = [];
+        // 不计入 cleaned，因为这是迁移遗留数据，不是真正的失效引用
       }
     }
 

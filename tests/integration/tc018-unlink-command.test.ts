@@ -219,19 +219,20 @@ describe('TC-018: unlink 命令测试', () => {
       // 创建并链接
       await createLinkedProject(env, [{ libName, commit, platforms: ['macOS'] }], ['macOS']);
 
-      // 验证有引用
+      // 验证有引用 (通过 StoreEntry.usedBy)
       let registry = await loadRegistry(env);
       const projectHash = hashPath(env.projectDir);
       const libKey = `${libName}:${commit}`;
-      expect(registry.libraries[libKey].referencedBy).toContain(projectHash);
+      const storeKey = `${libName}:${commit}:macOS`;
+      expect(registry.stores[storeKey].usedBy).toContain(projectHash);
 
       // 执行 unlink 命令
       await runCommand('unlink', { remove: false }, env, env.projectDir);
 
-      // 验证引用已移除
+      // 验证引用已移除 (通过 StoreEntry.usedBy)
       registry = await loadRegistry(env);
       expect(registry.libraries[libKey]).toBeDefined();
-      expect(registry.libraries[libKey].referencedBy).not.toContain(projectHash);
+      expect(registry.stores[storeKey].usedBy).not.toContain(projectHash);
     });
 
     it('should update stores.usedBy after unlink', async () => {
@@ -292,14 +293,35 @@ describe('TC-018: unlink 命令测试', () => {
 
       const libName = 'libProtected';
       const commit = 'protected123456';
+      const otherProjectPath = path.join(env.tempDir, 'other-project');
+
+      // 创建另一个项目目录（使其成为有效引用）
+      await fs.mkdir(otherProjectPath, { recursive: true });
 
       // 创建 Store 数据，设置有其他项目引用
       await createMockStoreDataV2(env, {
         libName,
         commit,
         platforms: ['macOS'],
-        referencedBy: ['/other/project'], // 其他项目引用
+        referencedBy: [otherProjectPath], // 其他项目引用
       });
+
+      // 为其他项目创建 Registry 记录（使引用有效）
+      const registry = await loadRegistry(env);
+      const otherProjectHash = hashPath(otherProjectPath);
+      registry.projects[otherProjectHash] = {
+        path: otherProjectPath,
+        configPath: path.join(otherProjectPath, '3rdparty', 'codepac-dep.json'),
+        lastLinked: new Date().toISOString(),
+        platforms: ['macOS'],
+        dependencies: [{
+          libName,
+          commit,
+          platform: 'macOS',
+          linkedPath: `3rdparty/${libName}/macOS`,
+        }],
+      };
+      await saveRegistry(env, registry);
 
       // 创建 codepac-dep.json
       const thirdPartyDir = path.join(env.projectDir, '3rdparty');
@@ -335,9 +357,9 @@ describe('TC-018: unlink 命令测试', () => {
       await verifyDirectoryExists(storeCommitPath);
 
       // 验证 Registry 记录仍存在
-      const registry = await loadRegistry(env);
+      const afterRegistry = await loadRegistry(env);
       const libKey = `${libName}:${commit}`;
-      expect(registry.libraries[libKey]).toBeDefined();
+      expect(afterRegistry.libraries[libKey]).toBeDefined();
     });
   });
 

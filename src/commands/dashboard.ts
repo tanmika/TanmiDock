@@ -130,7 +130,7 @@ function showReferenceStatus(registry: RegistryManager | null): void {
 
   const projects = registry.listProjects();
   const stores = registry.listStores();
-  const referenced = stores.filter((s) => s.usedBy && Object.keys(s.usedBy).length > 0);
+  const referenced = stores.filter((s) => s.usedBy && s.usedBy.length > 0);
   const unreferenced = registry.getUnreferencedStores();
   const unreferencedSize = unreferenced.reduce((sum, s) => sum + s.size, 0);
 

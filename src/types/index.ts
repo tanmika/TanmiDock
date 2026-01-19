@@ -102,6 +102,10 @@ export interface LibraryInfo {
   url: string;
   platforms: string[];
   size: number;
+  /**
+   * 引用该库的项目 hash 列表
+   * @deprecated 使用 StoreEntry.usedBy 替代
+   */
   referencedBy: string[];
   createdAt: string;
   lastAccess: string;

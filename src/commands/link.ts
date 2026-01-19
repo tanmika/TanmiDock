@@ -720,8 +720,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   lastAccess: new Date().toISOString(),
                 });
               }
-              registry.addReference(libKey, projectHash);
-
               // 记录为 General 库
               generalLibs.add(dependency.libName);
 
@@ -898,11 +896,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       }
       // 保存事务进度
       await tx.save();
-
-      // 添加引用关系（非 MISSING 状态）
-      if (status !== DependencyStatus.MISSING) {
-        registry.addReference(libKey, projectHash);
-      }
     }
 
     // 并行处理 MISSING 依赖
@@ -998,8 +991,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                     lastAccess: new Date().toISOString(),
                   });
                 }
-                registry.addReference(libKey, projectHash);
-
                 success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 链接完成 [${platforms.join(', ')}]`);
                 return {
                   success: true,
@@ -1115,7 +1106,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                       lastAccess: new Date().toISOString(),
                     });
                   }
-                  registry.addReference(libKey, projectHash);
 
                   // 记录为 General 库
                   generalLibs.add(dependency.libName);
@@ -1217,7 +1207,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                       lastAccess: new Date().toISOString(),
                     });
                   }
-                  registry.addReference(libKey, projectHash);
 
                   // 记录为 General 库
                   generalLibs.add(dependency.libName);
@@ -1286,7 +1275,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                     lastAccess: new Date().toISOString(),
                   });
                 }
-                registry.addReference(libKey, projectHash);
 
                 // 计算未能链接的平台（用户请求但未下载也未在 Store 中的）
                 const notLinkedPlatforms = platforms.filter((p) => !linkPlatforms.includes(p));
@@ -1431,21 +1419,12 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     for (const key of oldStoreKeys) {
       if (!newStoreKeys.includes(key)) {
         registry.removeStoreReference(key, projectHash);
-        // 同时移除 LibraryInfo 的引用
-        // storeKey 格式: libName:commit:platform
-        const [libName, commit] = key.split(':');
-        const libKey = registry.getLibraryKey(libName, commit);
-        registry.removeReference(libKey, projectHash);
       }
     }
 
     // 添加新引用（清除 unlinkedAt）
     for (const key of newStoreKeys) {
       registry.addStoreReference(key, projectHash);
-      // 同时添加 LibraryInfo 的引用
-      const [libName, commit] = key.split(':');
-      const libKey = registry.getLibraryKey(libName, commit);
-      registry.addReference(libKey, projectHash);
     }
 
     await registry.save();

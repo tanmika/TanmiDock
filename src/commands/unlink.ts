@@ -119,28 +119,45 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
       }
     }
 
-    // 移除引用关系
-    registry.removeReference(libKey, projectHash);
-
-    // 移除 StoreEntry 引用（所有平台 + general）
-    const { GENERAL_PLATFORM } = await import('../core/platform.js');
-    const platformsToRemove = [...new Set([...projectInfo.platforms, GENERAL_PLATFORM])];
-    for (const platform of platformsToRemove) {
-      const storeKey = registry.getStoreKey(dep.libName, dep.commit, platform);
+    // 移除 StoreEntry 引用（该库的所有平台）
+    // 注意：需要在 --remove 检查之前移除引用，以便正确判断是否还有其他项目引用
+    const depStoreKeys = registry.getLibraryStoreKeys(dep.libName, dep.commit);
+    for (const storeKey of depStoreKeys) {
       registry.removeStoreReference(storeKey, projectHash);
     }
 
     // 如果需要删除无引用的库
     if (options.remove) {
-      const lib = registry.getLibrary(libKey);
-      if (lib && lib.referencedBy.length === 0) {
+      // 复用 depStoreKeys，检查是否还有其他项目引用
+      const hasReferences = depStoreKeys.some((key) => {
+        const storeEntry = registry.getStore(key);
+        return storeEntry && storeEntry.usedBy.length > 0;
+      });
+
+      if (!hasReferences) {
         try {
-          const store = await import('../core/store.js');
-          // 从 StoreEntry 动态获取平台列表（比 LibraryInfo.platforms 更准确）
+          const storeModule = await import('../core/store.js');
+          const storePath = await storeModule.getStorePath();
+
+          // 从 StoreEntry 动态获取平台列表
           const platforms = registry.getLibraryPlatforms(dep.libName, dep.commit);
           for (const platform of platforms) {
-            await store.remove(dep.libName, dep.commit, platform);
+            await storeModule.remove(dep.libName, dep.commit, platform);
+            const storeKey = registry.getStoreKey(dep.libName, dep.commit, platform);
+            registry.removeStore(storeKey);
           }
+
+          // 清理整个 commit 目录（包括 _shared）
+          const commitPath = path.join(storePath, dep.libName, dep.commit);
+          await fs.rm(commitPath, { recursive: true, force: true }).catch(() => {});
+
+          // 检查 library 目录是否为空，如果是则删除
+          const libPath = path.join(storePath, dep.libName);
+          const entries = await fs.readdir(libPath).catch(() => []);
+          if (entries.length === 0) {
+            await fs.rm(libPath, { recursive: true, force: true }).catch(() => {});
+          }
+
           registry.removeLibrary(libKey);
           removed++;
           hint(`${dep.libName} (${dep.commit.slice(0, 7)}) - 已从 Store 删除`);
@@ -151,8 +168,8 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
     }
   }
 
-  // 移除项目记录
-  registry.removeProject(projectHash);
+  // 直接删除项目记录（不调用 removeProject 以避免重复移除引用）
+  registry.getRaw().projects[projectHash] && delete registry.getRaw().projects[projectHash];
   await registry.save();
 
   blank();
