@@ -18,6 +18,7 @@ import {
 } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
+import type { NestedAbsorbInfo } from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { setProxyConfig } from '../core/codepac.js';
@@ -338,6 +339,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               { vars: configVars }
             );
 
+            // 注册嵌套依赖
+            await registerNestedLibraries(supplementResult.nestedLibraries, projectHash);
+
             if (supplementResult.downloaded.length > 0) {
               // 有新平台下载，需要重新链接所有平台
               const linkedCommitPath = path.join(storePath, dependency.libName, dependency.commit);
@@ -391,6 +395,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               tx,
               { vars: configVars }
             );
+
+            // 注册嵌套依赖
+            await registerNestedLibraries(relinkSupplementResult.nestedLibraries, projectHash);
 
             // 获取所有可用平台（原有 + 新下载）
             const { existing: relinkExisting } = await store.checkPlatformCompleteness(
@@ -473,6 +480,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               tx,
               { vars: configVars }
             );
+
+            // 注册嵌套依赖
+            await registerNestedLibraries(replaceSupplementResult.nestedLibraries, projectHash);
 
             // 获取所有可用平台（原有 + 新下载）
             const { existing: replaceExisting } = await store.checkPlatformCompleteness(
@@ -638,6 +648,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               }
             }
 
+            // 注册嵌套依赖
+            await registerNestedLibraries(absorbResult.nestedLibraries, projectHash);
+
             // 补充缺失平台（本地没有但用户需要的）
             const absorbSupplementResult = await supplementMissingPlatforms(
               dependency,
@@ -646,6 +659,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               tx,
               { vars: configVars }
             );
+
+            // 注册嵌套依赖
+            await registerNestedLibraries(absorbSupplementResult.nestedLibraries, projectHash);
 
             // 合并所有可链接的平台
             if (absorbSupplementResult.downloaded.length > 0) {
@@ -788,12 +804,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               const filteredDownloaded = downloadResult.platformDirs.filter(p => missing.includes(p));
               if (filteredDownloaded.length > 0) {
                 tx.recordOp('absorb', linkNewCommitPath, downloadResult.libDir);
-                await store.absorbLib(
+                const linkNewAbsorbResult = await store.absorbLib(
                   downloadResult.libDir,
                   filteredDownloaded,
                   dependency.libName,
                   dependency.commit
                 );
+                // 注册嵌套依赖
+                await registerNestedLibraries(linkNewAbsorbResult.nestedLibraries, projectHash);
               }
             } finally {
               // 清理临时目录
@@ -1153,12 +1171,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                 // 5. 调用 absorbLib 将临时目录内容移入 Store（如果有下载成功的平台）
                 if (filteredDownloaded.length > 0) {
                   tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
-                  await store.absorbLib(
+                  const downloadAbsorbResult = await store.absorbLib(
                     downloadResult.libDir,
                     filteredDownloaded,
                     dependency.libName,
                     dependency.commit
                   );
+                  // 注册嵌套依赖
+                  await registerNestedLibraries(downloadAbsorbResult.nestedLibraries, projectHash);
                 }
 
                 // 5. 获取所有可链接的平台（已存在 + 新下载成功的）
@@ -1532,6 +1552,92 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 }
 
 /**
+ * 注册嵌套依赖到 Registry
+ * absorbLib 递归吸收嵌套依赖时只做文件操作，此函数负责 Registry 注册
+ */
+async function registerNestedLibraries(
+  nestedLibraries: NestedAbsorbInfo[],
+  projectHash: string
+): Promise<void> {
+  if (nestedLibraries.length === 0) return;
+
+  const registry = getRegistry();
+
+  for (const nested of nestedLibraries) {
+    if (nested.isGeneral) {
+      // General 库：单个 StoreEntry
+      const storeKey = registry.getStoreKey(nested.libName, nested.commit, GENERAL_PLATFORM);
+      if (!registry.getStore(storeKey)) {
+        registry.addStore({
+          libName: nested.libName,
+          commit: nested.commit,
+          platform: GENERAL_PLATFORM,
+          branch: '',  // 嵌套依赖无法获取 branch 信息
+          url: '',     // 嵌套依赖无法获取 url 信息
+          size: nested.size,
+          usedBy: [],
+          createdAt: new Date().toISOString(),
+          lastAccess: new Date().toISOString(),
+        });
+      }
+      registry.addStoreReference(storeKey, projectHash);
+
+      // 兼容旧结构：LibraryInfo
+      const libKey = registry.getLibraryKey(nested.libName, nested.commit);
+      if (!registry.getLibrary(libKey)) {
+        registry.addLibrary({
+          libName: nested.libName,
+          commit: nested.commit,
+          branch: '',
+          url: '',
+          platforms: [GENERAL_PLATFORM],
+          size: nested.size,
+          referencedBy: [],
+          createdAt: new Date().toISOString(),
+          lastAccess: new Date().toISOString(),
+        });
+      }
+    } else {
+      // 平台库：每个平台一个 StoreEntry
+      for (const platform of nested.platforms) {
+        const storeKey = registry.getStoreKey(nested.libName, nested.commit, platform);
+        if (!registry.getStore(storeKey)) {
+          const platformSize = await store.getSize(nested.libName, nested.commit, platform);
+          registry.addStore({
+            libName: nested.libName,
+            commit: nested.commit,
+            platform,
+            branch: '',
+            url: '',
+            size: platformSize,
+            usedBy: [],
+            createdAt: new Date().toISOString(),
+            lastAccess: new Date().toISOString(),
+          });
+        }
+        registry.addStoreReference(storeKey, projectHash);
+      }
+
+      // 兼容旧结构：LibraryInfo
+      const libKey = registry.getLibraryKey(nested.libName, nested.commit);
+      if (!registry.getLibrary(libKey)) {
+        registry.addLibrary({
+          libName: nested.libName,
+          commit: nested.commit,
+          branch: '',
+          url: '',
+          platforms: nested.platforms,
+          size: nested.size,
+          referencedBy: [],
+          createdAt: new Date().toISOString(),
+          lastAccess: new Date().toISOString(),
+        });
+      }
+    }
+  }
+}
+
+/**
  * 分类依赖状态
  * @param dependencies 依赖列表
  * @param projectPath 项目路径
@@ -1703,6 +1809,7 @@ interface SupplementOptions {
 interface SupplementResult {
   downloaded: string[];
   unavailable: string[];
+  nestedLibraries: NestedAbsorbInfo[];
 }
 
 async function supplementMissingPlatforms(
@@ -1712,7 +1819,7 @@ async function supplementMissingPlatforms(
   tx: Transaction,
   options: SupplementOptions = {}
 ): Promise<SupplementResult> {
-  const result: SupplementResult = { downloaded: [], unavailable: [] };
+  const result: SupplementResult = { downloaded: [], unavailable: [], nestedLibraries: [] };
 
   // 1. 检查平台完整性
   const { missing } = await store.checkPlatformCompleteness(
@@ -1786,12 +1893,15 @@ async function supplementMissingPlatforms(
         const storeCommitPath = path.join(storePath, dependency.libName, dependency.commit);
 
         tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
-        await store.absorbLib(
+        const supplementAbsorbResult = await store.absorbLib(
           downloadResult.libDir,
           downloaded,
           dependency.libName,
           dependency.commit
         );
+
+        // 收集嵌套依赖（由调用者负责注册）
+        result.nestedLibraries.push(...supplementAbsorbResult.nestedLibraries);
 
         // 8. 更新 Registry StoreEntry
         for (const platform of downloaded) {
@@ -2119,7 +2229,8 @@ async function linkNestedDependencies(
                 .filter((e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name))
                 .map((e) => e.name);
               tx.recordOp('absorb', storeCommitPath, localPath);
-              await store.absorbLib(localPath, platformDirs, dep.libName, dep.commit);
+              const nestedAbsorbResult = await store.absorbLib(localPath, platformDirs, dep.libName, dep.commit);
+              await registerNestedLibraries(nestedAbsorbResult.nestedLibraries, projectHash);
             }
             storeHas = true;
           }
@@ -2157,7 +2268,8 @@ async function linkNestedDependencies(
                   .filter((e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name))
                   .map((e) => e.name);
                 tx.recordOp('absorb', storeCommitPath, localPath);
-                await store.absorbLib(localPath, platformDirs, dep.libName, dep.commit);
+                const nestedAbsorbResult = await store.absorbLib(localPath, platformDirs, dep.libName, dep.commit);
+                await registerNestedLibraries(nestedAbsorbResult.nestedLibraries, projectHash);
               }
               storeHas = true;
             }
@@ -2286,12 +2398,13 @@ async function linkNestedDependencies(
         } else if (downloadResult.platformDirs.length > 0) {
           // 平台库处理
           tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
-          await store.absorbLib(
+          const nestedAbsorbResult = await store.absorbLib(
             downloadResult.libDir,
             downloadResult.platformDirs,
             dep.libName,
             dep.commit
           );
+          await registerNestedLibraries(nestedAbsorbResult.nestedLibraries, projectHash);
 
           tx.recordOp('link', localPath, storeCommitPath);
           await linker.linkLib(localPath, storeCommitPath, downloadResult.platformDirs);

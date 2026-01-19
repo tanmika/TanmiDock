@@ -454,3 +454,219 @@ describe('TC-018: unlink 命令测试', () => {
     });
   });
 });
+
+/**
+ * TC-018 回归测试: 嵌套依赖 unlink 验证
+ *
+ * 验证 unlink 命令正确处理嵌套依赖的 Registry 引用：
+ * - unlink 后嵌套库的 usedBy 应正确移除项目引用
+ * - 多项目共享嵌套库时，unlink 只移除当前项目的引用
+ */
+describe('TC-018: 嵌套依赖 unlink 回归测试', () => {
+  let env: TestEnv | null = null;
+
+  afterEach(async () => {
+    if (env) {
+      await env.cleanup();
+      env = null;
+    }
+  });
+
+  /**
+   * 创建带嵌套依赖的本地库
+   */
+  async function createLocalLibWithNestedDeps(
+    projectDir: string,
+    mainLib: { name: string; commit: string },
+    nestedLibs: Array<{ name: string; commit: string; platforms: string[] }>
+  ): Promise<void> {
+    const thirdPartyDir = path.join(projectDir, '3rdparty');
+    const mainLibDir = path.join(thirdPartyDir, mainLib.name);
+    await fs.mkdir(mainLibDir, { recursive: true });
+
+    // 创建主库平台目录
+    const mainPlatformDir = path.join(mainLibDir, 'macOS');
+    await fs.mkdir(mainPlatformDir, { recursive: true });
+    await fs.writeFile(path.join(mainPlatformDir, 'lib.a'), 'main lib content', 'utf-8');
+
+    // 创建 dependencies 目录和嵌套库
+    const depsDir = path.join(mainLibDir, 'dependencies');
+    await fs.mkdir(depsDir, { recursive: true });
+
+    for (const nested of nestedLibs) {
+      const nestedLibDir = path.join(depsDir, nested.name);
+      await fs.mkdir(nestedLibDir, { recursive: true });
+
+      // 创建嵌套库的平台目录
+      for (const platform of nested.platforms) {
+        const nestedPlatformDir = path.join(nestedLibDir, platform);
+        await fs.mkdir(nestedPlatformDir, { recursive: true });
+        await fs.writeFile(
+          path.join(nestedPlatformDir, 'nested.a'),
+          `Nested lib ${nested.name} for ${platform}`,
+          'utf-8'
+        );
+      }
+
+      // 创建 .git/commit_hash 文件
+      const gitDir = path.join(nestedLibDir, '.git');
+      await fs.mkdir(gitDir, { recursive: true });
+      await fs.writeFile(path.join(gitDir, 'commit_hash'), nested.commit, 'utf-8');
+    }
+
+    // 创建配置文件
+    const codepacDep = {
+      version: '1.0.0',
+      repos: {
+        common: [
+          {
+            url: `https://github.com/test/${mainLib.name}.git`,
+            commit: mainLib.commit,
+            branch: 'main',
+            dir: mainLib.name,
+          },
+        ],
+      },
+    };
+    await fs.writeFile(
+      path.join(thirdPartyDir, 'codepac-dep.json'),
+      JSON.stringify(codepacDep, null, 2),
+      'utf-8'
+    );
+  }
+
+  it('should register nested library in Registry after link', async () => {
+    env = await createTestEnv();
+
+    const mainLib = { name: 'libMainUnlink', commit: 'aaa1111111' };
+    const nestedLib = { name: 'libNestedUnlink', commit: 'bbb2222222', platforms: ['macOS'] };
+
+    // Given: 本地库带嵌套依赖
+    await createLocalLibWithNestedDeps(env.projectDir, mainLib, [nestedLib]);
+
+    // When: 执行 link（触发 ABSORB + registerNestedLibraries）
+    await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+    // Then: 嵌套库在 Registry 中且有引用
+    const registry = await loadRegistry(env);
+    const projectHash = hashPath(env.projectDir);
+    const nestedStoreKey = `${nestedLib.name}:${nestedLib.commit}:macOS`;
+    const nestedLibKey = `${nestedLib.name}:${nestedLib.commit}`;
+
+    // 【关键验证】嵌套库被注册到 Registry
+    expect(registry.libraries[nestedLibKey]).toBeDefined();
+    expect(registry.stores[nestedStoreKey]).toBeDefined();
+    expect(registry.stores[nestedStoreKey].usedBy).toContain(projectHash);
+  });
+
+  it('should clean up nested library usedBy after unlink', async () => {
+    env = await createTestEnv();
+
+    const mainLib = { name: 'libMainCleanup', commit: 'eee1111111' };
+    const nestedLib = { name: 'libNestedCleanup', commit: 'fff2222222', platforms: ['macOS'] };
+
+    // Given: 本地库带嵌套依赖，已 link
+    await createLocalLibWithNestedDeps(env.projectDir, mainLib, [nestedLib]);
+    await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+    // 验证嵌套库已注册
+    let registry = await loadRegistry(env);
+    const projectHash = hashPath(env.projectDir);
+    const nestedStoreKey = `${nestedLib.name}:${nestedLib.commit}:macOS`;
+    expect(registry.stores[nestedStoreKey].usedBy).toContain(projectHash);
+
+    // When: 执行 unlink
+    await runCommand('unlink', { remove: false }, env, env.projectDir);
+
+    // Then: 嵌套库的 usedBy 不再包含项目引用
+    registry = await loadRegistry(env);
+    expect(registry.stores[nestedStoreKey]).toBeDefined();
+    expect(registry.stores[nestedStoreKey].usedBy).not.toContain(projectHash);
+  });
+
+  it('should register nested library with multiple project references', async () => {
+    env = await createTestEnv();
+
+    const mainLib = { name: 'libSharedMain', commit: 'ccc1111111' };
+    const nestedLib = { name: 'libSharedNested', commit: 'ddd2222222', platforms: ['macOS'] };
+
+    // Given: 第一个项目链接带嵌套依赖的库
+    await createLocalLibWithNestedDeps(env.projectDir, mainLib, [nestedLib]);
+    await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+    // 创建第二个项目并手动添加引用（模拟另一个项目也链接了同一嵌套库）
+    const otherProjectPath = path.join(env.tempDir, 'other-project');
+    await fs.mkdir(otherProjectPath, { recursive: true });
+
+    let registry = await loadRegistry(env);
+    const otherProjectHash = hashPath(otherProjectPath);
+    const nestedStoreKey = `${nestedLib.name}:${nestedLib.commit}:macOS`;
+    const nestedLibKey = `${nestedLib.name}:${nestedLib.commit}`;
+    const projectHash = hashPath(env.projectDir);
+
+    // 添加另一个项目的引用
+    registry.projects[otherProjectHash] = {
+      path: otherProjectPath,
+      configPath: path.join(otherProjectPath, '3rdparty', 'codepac-dep.json'),
+      lastLinked: new Date().toISOString(),
+      platforms: ['macOS'],
+      dependencies: [],
+    };
+    registry.stores[nestedStoreKey].usedBy.push(otherProjectHash);
+    await saveRegistry(env, registry);
+
+    // Then: 嵌套库被注册且有两个项目引用
+    registry = await loadRegistry(env);
+    expect(registry.libraries[nestedLibKey]).toBeDefined();
+    expect(registry.stores[nestedStoreKey]).toBeDefined();
+    expect(registry.stores[nestedStoreKey].usedBy).toContain(projectHash);
+    expect(registry.stores[nestedStoreKey].usedBy).toContain(otherProjectHash);
+  });
+
+  it('should preserve other project references when unlink', async () => {
+    env = await createTestEnv();
+
+    const mainLib = { name: 'libSharedMain2', commit: 'aaa3333333' };
+    const nestedLib = { name: 'libSharedNested2', commit: 'bbb4444444', platforms: ['macOS'] };
+
+    // Given: 第一个项目链接带嵌套依赖的库
+    await createLocalLibWithNestedDeps(env.projectDir, mainLib, [nestedLib]);
+    await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+    // 创建第二个项目并手动添加引用
+    const otherProjectPath = path.join(env.tempDir, 'other-project-2');
+    await fs.mkdir(otherProjectPath, { recursive: true });
+
+    let registry = await loadRegistry(env);
+    const otherProjectHash = hashPath(otherProjectPath);
+    const nestedStoreKey = `${nestedLib.name}:${nestedLib.commit}:macOS`;
+    const nestedLibKey = `${nestedLib.name}:${nestedLib.commit}`;
+    const projectHash = hashPath(env.projectDir);
+
+    // 添加另一个项目的引用
+    registry.projects[otherProjectHash] = {
+      path: otherProjectPath,
+      configPath: path.join(otherProjectPath, '3rdparty', 'codepac-dep.json'),
+      lastLinked: new Date().toISOString(),
+      platforms: ['macOS'],
+      dependencies: [],
+    };
+    registry.stores[nestedStoreKey].usedBy.push(otherProjectHash);
+    await saveRegistry(env, registry);
+
+    // 验证两个项目都有引用
+    registry = await loadRegistry(env);
+    expect(registry.stores[nestedStoreKey].usedBy).toContain(projectHash);
+    expect(registry.stores[nestedStoreKey].usedBy).toContain(otherProjectHash);
+
+    // When: 第一个项目 unlink
+    await runCommand('unlink', { remove: false }, env, env.projectDir);
+
+    // Then: 嵌套库仍存在，只移除第一个项目的引用，保留第二个项目的引用
+    registry = await loadRegistry(env);
+    expect(registry.libraries[nestedLibKey]).toBeDefined();
+    expect(registry.stores[nestedStoreKey]).toBeDefined();
+    expect(registry.stores[nestedStoreKey].usedBy).not.toContain(projectHash);
+    expect(registry.stores[nestedStoreKey].usedBy).toContain(otherProjectHash);
+  });
+});

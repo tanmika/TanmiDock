@@ -238,20 +238,16 @@ class RegistryManager {
 
   /**
    * 移除项目
-   * 注意：会移除该项目对所有相关 StoreEntry 的引用（包括所有平台）
+   * 注意：会移除该项目对所有 StoreEntry 的引用（包括直接依赖和嵌套依赖）
    */
   removeProject(pathHash: string): void {
     this.ensureLoaded();
     const project = this.registry.projects[pathHash];
     if (project) {
-      // 移除 StoreEntry 引用
-      // 注意：dependencies 中只保存主平台，但实际可能链接了多个平台
-      // 因此需要获取该库所有平台的 StoreEntry 并移除引用
-      for (const dep of project.dependencies) {
-        const storeKeys = this.getLibraryStoreKeys(dep.libName, dep.commit);
-        for (const storeKey of storeKeys) {
-          this.removeStoreReference(storeKey, pathHash);
-        }
+      // 移除所有 StoreEntry 中对该项目的引用
+      // 这包括直接依赖和通过 registerNestedLibraries 注册的嵌套依赖
+      for (const storeKey of Object.keys(this.registry.stores)) {
+        this.removeStoreReference(storeKey, pathHash);
       }
       delete this.registry.projects[pathHash];
     }

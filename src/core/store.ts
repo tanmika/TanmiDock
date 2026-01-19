@@ -23,12 +23,24 @@ const execFileAsync = promisify(execFile);
 export type StoreVersion = 'v0.5' | 'v0.6' | 'unknown';
 
 /**
+ * 嵌套依赖吸收信息
+ */
+export interface NestedAbsorbInfo {
+  libName: string;
+  commit: string;
+  platforms: string[];      // 吸收的平台列表
+  isGeneral: boolean;       // 是否为 General 库
+  size: number;             // 吸收后的大小
+}
+
+/**
  * absorbLib 返回结果
  */
 export interface AbsorbResult {
   platformPaths: Record<string, string>;  // { macOS: "Store/.../macOS", android: "..." } 新增的平台
   sharedPath: string;                     // Store/.../_shared
   skippedPlatforms: string[];             // 已存在而跳过的平台
+  nestedLibraries: NestedAbsorbInfo[];    // 嵌套依赖吸收信息
 }
 
 /**
@@ -208,6 +220,7 @@ export async function absorbLib(
 
   const platformPaths: Record<string, string> = {};
   const skippedPlatforms: string[] = [];
+  const nestedLibraries: NestedAbsorbInfo[] = [];
 
   // 跟踪已移动的文件，用于失败时回滚
   // crossFs: true 表示跨文件系统复制（源还在，回滚只需删除目标）
@@ -326,10 +339,35 @@ export async function absorbLib(
 
                   if (nestedPlatformDirs.length > 0) {
                     // 有平台目录，递归吸收到 Store
-                    await absorbLib(depSourcePath, nestedPlatformDirs, depEntry.name, nestedCommit);
+                    const nestedResult = await absorbLib(depSourcePath, nestedPlatformDirs, depEntry.name, nestedCommit);
+                    // 计算吸收后的大小
+                    let nestedSize = 0;
+                    for (const platform of nestedPlatformDirs) {
+                      nestedSize += await getSize(depEntry.name, nestedCommit, platform);
+                    }
+                    nestedLibraries.push({
+                      libName: depEntry.name,
+                      commit: nestedCommit,
+                      platforms: nestedPlatformDirs,
+                      isGeneral: false,
+                      size: nestedSize,
+                    });
+                    // 递归收集嵌套的嵌套依赖
+                    nestedLibraries.push(...nestedResult.nestedLibraries);
                   } else {
                     // 没有平台目录，可能是 General 库，吸收到 _shared
                     await absorbGeneral(depSourcePath, depEntry.name, nestedCommit);
+                    // 计算 General 库大小
+                    const nestedStorePath = await getStorePath();
+                    const nestedSharedPath = path.join(nestedStorePath, depEntry.name, nestedCommit, '_shared');
+                    const nestedSize = await getDirSize(nestedSharedPath).catch(() => 0);
+                    nestedLibraries.push({
+                      libName: depEntry.name,
+                      commit: nestedCommit,
+                      platforms: [GENERAL_PLATFORM],
+                      isGeneral: true,
+                      size: nestedSize,
+                    });
                   }
                 }
                 // 吸收完成后，子目录内容已移走，不需要再处理
@@ -431,6 +469,7 @@ export async function absorbLib(
     platformPaths,
     sharedPath,
     skippedPlatforms,
+    nestedLibraries,
   };
 }
 
