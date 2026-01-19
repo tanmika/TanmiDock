@@ -205,28 +205,47 @@ export interface DownloadMonitorOptions {
   getDirSize: (dirPath: string) => Promise<number>;
   /** 更新间隔 (ms)，默认 500ms */
   interval?: number;
+  /** 非 TTY 模式下的日志输出间隔 (ms)，默认 10000ms */
+  logInterval?: number;
 }
 
 /**
  * 下载进度监控器
  * 通过定时检查目录大小来监控下载进度
+ * TTY 模式：使用进度条
+ * 非 TTY 模式：周期性输出日志行（方便 AI 等自动化工具监控）
  */
 export class DownloadMonitor {
-  private tracker: ProgressTracker;
+  private tracker: ProgressTracker | null = null;
   private getDirSize: (dirPath: string) => Promise<number>;
   private interval: number;
+  private logInterval: number;
   private timer: ReturnType<typeof setInterval> | null = null;
   private dirPath: string = '';
   private started: boolean = false;
+  private isTTY: boolean;
+  private name: string;
+  private estimatedSize: number;
+  private lastLogTime: number = 0;
+  private lastSize: number = 0;
+  private lastSizeTime: number = 0;
 
   constructor(options: DownloadMonitorOptions) {
-    this.tracker = new ProgressTracker({
-      name: options.name,
-      total: options.estimatedSize,
-      showSpeed: true,
-    });
+    this.isTTY = process.stdout.isTTY ?? false;
+    this.name = options.name ?? '下载';
+    this.estimatedSize = options.estimatedSize ?? 0;
     this.getDirSize = options.getDirSize;
     this.interval = options.interval ?? 500;
+    this.logInterval = options.logInterval ?? 10000;
+
+    // TTY 模式下使用进度条
+    if (this.isTTY) {
+      this.tracker = new ProgressTracker({
+        name: options.name,
+        total: options.estimatedSize,
+        showSpeed: true,
+      });
+    }
   }
 
   /**
@@ -236,12 +255,20 @@ export class DownloadMonitor {
     if (this.started) return;
     this.started = true;
     this.dirPath = dirPath;
-    this.tracker.start();
+    this.lastLogTime = Date.now();
+    this.lastSizeTime = Date.now();
+
+    if (this.isTTY && this.tracker) {
+      this.tracker.start();
+    } else {
+      // 非 TTY：输出开始日志
+      console.log(`[progress] ${this.name}: 开始下载...`);
+    }
 
     this.timer = setInterval(async () => {
       try {
         const size = await this.getDirSize(this.dirPath);
-        this.tracker.update(size);
+        this.updateProgress(size);
       } catch {
         // 目录可能不存在，忽略
       }
@@ -249,10 +276,47 @@ export class DownloadMonitor {
   }
 
   /**
+   * 更新进度
+   */
+  private updateProgress(size: number): void {
+    const now = Date.now();
+
+    if (this.isTTY && this.tracker) {
+      // TTY 模式：更新进度条
+      this.tracker.update(size);
+    } else {
+      // 非 TTY 模式：周期性输出日志
+      if (now - this.lastLogTime >= this.logInterval) {
+        // 计算速度
+        const elapsed = (now - this.lastSizeTime) / 1000;
+        const speed = elapsed > 0 ? (size - this.lastSize) / elapsed : 0;
+
+        let progressStr: string;
+        if (this.estimatedSize > 0) {
+          const percentage = Math.min(100, Math.round((size / this.estimatedSize) * 100));
+          progressStr = `${formatBytes(size)} / ${formatBytes(this.estimatedSize)} (${percentage}%)`;
+        } else {
+          progressStr = formatBytes(size);
+        }
+
+        const speedStr = speed > 0 ? ` @ ${formatSpeed(speed)}` : '';
+        console.log(`[progress] ${this.name}: ${progressStr}${speedStr}`);
+
+        this.lastLogTime = now;
+        this.lastSize = size;
+        this.lastSizeTime = now;
+      }
+    }
+  }
+
+  /**
    * 更新预估总大小
    */
   setEstimatedSize(size: number): void {
-    this.tracker.setTotal(size);
+    this.estimatedSize = size;
+    if (this.tracker) {
+      this.tracker.setTotal(size);
+    }
   }
 
   /**
@@ -263,16 +327,24 @@ export class DownloadMonitor {
       clearInterval(this.timer);
       this.timer = null;
     }
+
     // 最后更新一次
+    let finalSize = 0;
     if (this.dirPath) {
       try {
-        const finalSize = await this.getDirSize(this.dirPath);
-        this.tracker.update(finalSize);
+        finalSize = await this.getDirSize(this.dirPath);
       } catch {
         // 忽略
       }
     }
-    this.tracker.stop();
+
+    if (this.isTTY && this.tracker) {
+      this.tracker.update(finalSize);
+      this.tracker.stop();
+    } else {
+      // 非 TTY：输出完成日志
+      console.log(`[progress] ${this.name}: 完成 (${formatBytes(finalSize)})`);
+    }
   }
 }
 
