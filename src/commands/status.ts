@@ -92,7 +92,7 @@ async function interactiveStatus(): Promise<void> {
 
   choices.push({
     value: 'exit',
-    name: colorize('退出', 'gray'),
+    name: colorize('← 退出', 'dim'),
   });
 
   const selected = await selectWithCancel({

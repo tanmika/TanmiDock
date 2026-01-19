@@ -192,7 +192,7 @@ const UNVERIFIED_LOCAL_STRATEGY_LABELS: Record<UnverifiedLocalStrategy, string> 
  */
 function formatValue(key: keyof DockConfig, value: unknown): string {
   if (value === undefined || value === null) {
-    return colorize('未设置', 'gray');
+    return colorize('(未设置)', 'dim');
   }
   if (key === 'storePath' && typeof value === 'string') {
     return shrinkHome(value);
@@ -221,7 +221,7 @@ function formatValue(key: keyof DockConfig, value: unknown): string {
   if (key === 'proxy') {
     const proxy = value as ProxyConfig;
     if (!proxy.http && !proxy.https) {
-      return colorize('未设置', 'gray');
+      return colorize('(未设置)', 'dim');
     }
     return proxy.http || proxy.https || '';
   }
@@ -273,7 +273,7 @@ async function interactiveConfig(cfg: DockConfig): Promise<void> {
         value: m.key,
         name: `${m.label} - ${m.description}`,
       })),
-      { value: '_exit' as const, name: colorize('退出', 'gray') },
+      { value: '_exit' as const, name: colorize('← 退出', 'dim') },
     ];
 
     const selected = await selectWithCancel({
@@ -390,7 +390,7 @@ async function editProxyConfig(current: ProxyConfig | undefined): Promise<ProxyC
     choices: [
       { value: 'edit', name: '编辑' },
       { value: 'clear', name: '清除' },
-      { value: 'cancel', name: colorize('取消', 'gray') },
+      { value: 'cancel', name: colorize('← 取消', 'dim') },
     ],
   });
 

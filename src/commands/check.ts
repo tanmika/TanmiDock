@@ -18,6 +18,7 @@ import {
   blank,
   title,
   separator,
+  colorize,
 } from '../utils/logger.js';
 import {
   selectWithCancel,
@@ -526,7 +527,7 @@ async function interactiveCheck(
       { name: '修复所有问题', value: 'fix-all' as const },
       { name: '选择性修复', value: 'select' as const },
       { name: '查看详情', value: 'detail' as const },
-      { name: '退出', value: 'exit' as const },
+      { name: colorize('← 退出', 'dim'), value: 'exit' as const },
     ],
   });
 
