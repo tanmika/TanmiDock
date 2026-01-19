@@ -526,7 +526,7 @@ export async function runCommand(
       break;
     }
     case 'repair': {
-      const { repairIssues } = await import('../../src/commands/repair.js');
+      const { repairIssues } = await import('../../src/commands/check.js');
       const repairOpts = options as RepairOptions;
       await repairIssues({
         dryRun: repairOpts.dryRun ?? false,
@@ -536,7 +536,7 @@ export async function runCommand(
       break;
     }
     case 'verify': {
-      const { verifyIntegrity } = await import('../../src/commands/verify.js');
+      const { verifyIntegrity } = await import('../../src/commands/check.js');
       await verifyIntegrity();
       break;
     }

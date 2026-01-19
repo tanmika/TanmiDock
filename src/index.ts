@@ -8,9 +8,7 @@ import { createCleanCommand } from './commands/clean.js';
 import { createUnlinkCommand } from './commands/unlink.js';
 import { createConfigCommand } from './commands/config.js';
 import { createMigrateCommand } from './commands/migrate.js';
-import { createDoctorCommand } from './commands/doctor.js';
-import { createVerifyCommand } from './commands/verify.js';
-import { createRepairCommand } from './commands/repair.js';
+import { createCheckCommand } from './commands/check.js';
 import { createUpdateCommand } from './commands/update.js';
 import { showDashboard } from './commands/dashboard.js';
 import { Transaction } from './core/transaction.js';
@@ -56,7 +54,7 @@ process.on('uncaughtException', (err) => {
   if (process.env.DEBUG) {
     console.error(err.stack);
   }
-  console.error('[hint] 如问题持续，请运行 tanmi-dock doctor 诊断');
+  console.error('[hint] 如问题持续，请运行 tanmi-dock check 诊断');
   process.exit(1);
 });
 
@@ -104,9 +102,7 @@ program.addCommand(createCleanCommand());
 program.addCommand(createUnlinkCommand());
 program.addCommand(createConfigCommand());
 program.addCommand(createMigrateCommand());
-program.addCommand(createDoctorCommand());
-program.addCommand(createVerifyCommand());
-program.addCommand(createRepairCommand());
+program.addCommand(createCheckCommand());
 program.addCommand(createUpdateCommand());
 
 // 无参数时显示工作台

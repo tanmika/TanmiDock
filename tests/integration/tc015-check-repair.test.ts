@@ -1,5 +1,5 @@
 /**
- * TC-015: repair 命令测试
+ * TC-015: check 命令 - 修复功能测试
  *
  * 测试场景:
  * - S-6.2.1: 清理过期项目（项目路径不存在）
@@ -22,7 +22,7 @@ import {
 // import { isSymlink } from '../../src/core/linker.js';
 import type { Registry } from '../../src/types/index.js';
 
-describe('TC-015: repair 命令测试', () => {
+describe('TC-015: check 命令 - 修复功能测试', () => {
   let env: TestEnv | null = null;
 
   afterEach(async () => {

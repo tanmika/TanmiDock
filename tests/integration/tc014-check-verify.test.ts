@@ -1,5 +1,5 @@
 /**
- * TC-014: verify 命令测试
+ * TC-014: check 命令 - 验证功能测试
  *
  * 测试场景:
  * - S-6.1.1: 检测悬挂链接（符号链接目标不存在）
@@ -21,7 +21,7 @@ import {
 import { isSymlink, isValidLink } from '../../src/core/linker.js';
 import type { Registry } from '../../src/types/index.js';
 
-describe('TC-014: verify 命令测试', () => {
+describe('TC-014: check 命令 - 验证功能测试', () => {
   let env: TestEnv | null = null;
 
   afterEach(async () => {

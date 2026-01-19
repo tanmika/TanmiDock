@@ -153,7 +153,7 @@ function showSystemHealth(registry: RegistryManager | null): void {
   console.log(colorize('系统健康', 'bold'));
 
   if (!registry) {
-    console.log(`   ${colorize('[warn]', 'yellow')} Registry 不可用，运行 td doctor 检查`);
+    console.log(`   ${colorize('[warn]', 'yellow')} Registry 不可用，运行 td check 检查`);
     return;
   }
 
