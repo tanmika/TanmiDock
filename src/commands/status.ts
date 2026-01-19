@@ -4,7 +4,6 @@
 import path from 'path';
 import fs from 'fs/promises';
 import { Command } from 'commander';
-import { select } from '@inquirer/prompts';
 import { ensureInitialized } from '../core/guard.js';
 import { parseProjectDependencies, findCodepacConfig } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
@@ -13,6 +12,7 @@ import * as linker from '../core/linker.js';
 import { resolvePath, shrinkHome } from '../core/platform.js';
 import { formatSize } from '../utils/disk.js';
 import { info, warn, success, hint, blank, separator, title, colorize, tree as printTree } from '../utils/logger.js';
+import { selectWithCancel, PROMPT_CANCELLED } from '../utils/prompt.js';
 import type { ParsedDependency } from '../types/index.js';
 import type { TreeItem } from '../utils/logger.js';
 
@@ -95,12 +95,13 @@ async function interactiveStatus(): Promise<void> {
     name: colorize('退出', 'gray'),
   });
 
-  const selected = await select({
+  const selected = await selectWithCancel({
     message: '查看:',
     choices,
   });
 
-  if (selected === 'exit') {
+  // ESC 或选择退出都退出
+  if (selected === PROMPT_CANCELLED || selected === 'exit') {
     return;
   }
 

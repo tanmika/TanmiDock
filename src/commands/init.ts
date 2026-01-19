@@ -11,7 +11,7 @@ import { expandHome, getConfigPath, shrinkHome, isPathSafe } from '../core/platf
 import { info, success, warn, error, hint, title, blank, separator } from '../utils/logger.js';
 import { EMPTY_REGISTRY } from '../types/index.js';
 import { getRegistryPath } from '../core/platform.js';
-import { selectOption, inputText, confirmAction } from '../utils/prompt.js';
+import { selectOption, inputText, confirmAction, PROMPT_CANCELLED } from '../utils/prompt.js';
 
 /**
  * 创建 init 命令
@@ -59,7 +59,13 @@ export async function initializeDock(options: InitOptions): Promise<void> {
     info(`使用默认路径: ${shrinkHome(storePath)}`);
   } else {
     // 交互式选择
-    storePath = await selectStorePath();
+    const selected = await selectStorePath();
+    // ESC 取消
+    if (selected === PROMPT_CANCELLED) {
+      info('已取消');
+      return;
+    }
+    storePath = selected;
   }
 
   // 验证路径
@@ -94,7 +100,7 @@ export async function initializeDock(options: InitOptions): Promise<void> {
 /**
  * 交互式选择存储路径
  */
-async function selectStorePath(): Promise<string> {
+async function selectStorePath(): Promise<string | typeof PROMPT_CANCELLED> {
   // 显示磁盘信息
   info('磁盘空间:');
   const disks = await getDiskInfo();
@@ -120,17 +126,28 @@ async function selectStorePath(): Promise<string> {
 
   const selected = await selectOption('选择存储位置:', choices);
 
+  // ESC 取消
+  if (selected === PROMPT_CANCELLED) {
+    return PROMPT_CANCELLED;
+  }
+
   if (selected === '__custom__') {
-    return inputText('输入存储路径:', '~/.tanmi-dock/store', (v) => {
+    const customPath = await inputText('输入存储路径:', '~/.tanmi-dock/store', (v) => {
       const expanded = expandHome(v);
       const check = isPathSafe(expanded);
       return check.safe || check.reason || '路径无效';
     });
+    // ESC 取消
+    if (customPath === PROMPT_CANCELLED) {
+      return PROMPT_CANCELLED;
+    }
+    return customPath;
   }
 
   // 确认选择
   const confirmed = await confirmAction(`确认使用路径 '${shrinkHome(selected)}'?`, true);
-  if (!confirmed) {
+  // ESC 取消或确认 No
+  if (confirmed === PROMPT_CANCELLED || !confirmed) {
     info('已取消，重新选择...');
     return selectStorePath();
   }

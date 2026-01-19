@@ -1,39 +1,476 @@
-import { select, confirm, input, checkbox, Separator } from '@inquirer/prompts';
+import {
+  select,
+  confirm,
+  input,
+  checkbox,
+  Separator,
+} from '@inquirer/prompts';
+import {
+  createPrompt,
+  useState,
+  useKeypress,
+  usePrefix,
+  usePagination,
+  useMemo,
+  isEnterKey,
+  isUpKey,
+  isDownKey,
+  makeTheme,
+  type Status,
+} from '@inquirer/core';
+import figures from '@inquirer/figures';
+import { styleText } from 'node:util';
 import { PLATFORM_OPTIONS } from '../core/platform.js';
+
+// ============ ESC 取消支持 ============
+
+/**
+ * 表示用户按 ESC 取消操作
+ */
+export const PROMPT_CANCELLED = Symbol('PROMPT_CANCELLED');
+
+/**
+ * 检查是否为 ESC 键
+ */
+function isEscapeKey(key: { name?: string }): boolean {
+  return key.name === 'escape';
+}
+
+// ============ 可取消的 Select ============
+
+interface SelectChoice<T> {
+  name: string;
+  value: T;
+  description?: string;
+  disabled?: boolean | string;
+}
+
+interface SelectConfig<T> {
+  message: string;
+  choices: Array<SelectChoice<T> | typeof Separator.prototype>;
+  default?: T;
+  pageSize?: number;
+  loop?: boolean;
+}
+
+const selectTheme = {
+  icon: { cursor: figures.pointer },
+  style: {
+    disabled: (text: string) => styleText('dim', `- ${text}`),
+    description: (text: string) => styleText('cyan', text),
+    helpTip: (text: string) => styleText('dim', text),
+  },
+};
+
+function isSelectable<T>(item: SelectChoice<T> | typeof Separator.prototype): item is SelectChoice<T> {
+  return !Separator.isSeparator(item) && !item.disabled;
+}
+
+/**
+ * 可取消的 select - 支持 ESC 返回
+ */
+export const selectWithCancel = createPrompt(
+  <T,>(config: SelectConfig<T>, done: (value: T | typeof PROMPT_CANCELLED) => void) => {
+    const { loop = true, pageSize = 7 } = config;
+    const theme = makeTheme(selectTheme);
+    const [status, setStatus] = useState<Status>('idle');
+    const prefix = usePrefix({ status, theme });
+
+    const items = useMemo(
+      () =>
+        config.choices.map((choice) => {
+          if (Separator.isSeparator(choice)) return choice;
+          const name = choice.name ?? String(choice.value);
+          return {
+            value: choice.value,
+            name,
+            description: choice.description,
+            disabled: choice.disabled ?? false,
+          };
+        }),
+      [config.choices]
+    );
+
+    const bounds = useMemo(() => {
+      const first = items.findIndex(isSelectable);
+      // findLastIndex polyfill
+      let last = -1;
+      for (let i = items.length - 1; i >= 0; i--) {
+        if (isSelectable(items[i])) {
+          last = i;
+          break;
+        }
+      }
+      return { first, last };
+    }, [items]);
+
+    const defaultIndex = useMemo(() => {
+      if (!('default' in config)) return -1;
+      return items.findIndex((item) => isSelectable(item) && item.value === config.default);
+    }, [config.default, items]);
+
+    const [active, setActive] = useState(defaultIndex === -1 ? bounds.first : defaultIndex);
+    const selectedChoice = items[active] as SelectChoice<T>;
+
+    useKeypress((key) => {
+      if (isEscapeKey(key)) {
+        setStatus('done');
+        done(PROMPT_CANCELLED);
+      } else if (isEnterKey(key)) {
+        setStatus('done');
+        done(selectedChoice.value);
+      } else if (isUpKey(key) || isDownKey(key)) {
+        if (
+          loop ||
+          (isUpKey(key) && active !== bounds.first) ||
+          (isDownKey(key) && active !== bounds.last)
+        ) {
+          const offset = isUpKey(key) ? -1 : 1;
+          let next = active;
+          do {
+            next = (next + offset + items.length) % items.length;
+          } while (!isSelectable(items[next]));
+          setActive(next);
+        }
+      }
+    });
+
+    const page = usePagination({
+      items,
+      active,
+      renderItem: ({ item, index, isActive }) => {
+        if (Separator.isSeparator(item)) {
+          return ` ${item.separator}`;
+        }
+
+        const line = item.name;
+        if (item.disabled) {
+          const disabledLabel =
+            typeof item.disabled === 'string' ? item.disabled : '(disabled)';
+          return styleText('dim', `- ${line} ${disabledLabel}`);
+        }
+
+        const cursor = isActive ? figures.pointer : ' ';
+        const color = isActive ? 'cyan' : 'white';
+        let output = `${cursor} ${styleText(color, line)}`;
+
+        if (item.description && isActive) {
+          output += `\n   ${styleText('cyan', item.description)}`;
+        }
+
+        return output;
+      },
+      pageSize,
+      loop,
+    });
+
+    if (status === 'done') {
+      return `${prefix} ${config.message} ${styleText('cyan', selectedChoice?.name ?? '(cancelled)')}`;
+    }
+
+    const helpTip = styleText(
+      'dim',
+      '↑↓ 选择 • ⏎ 确认 • esc 取消'
+    );
+
+    return `${prefix} ${config.message}\n${page}\n${helpTip}`;
+  }
+);
+
+// ============ 可取消的 Checkbox ============
+
+interface CheckboxChoice<T> {
+  name: string;
+  value: T;
+  checked?: boolean;
+  disabled?: boolean | string;
+}
+
+interface CheckboxConfig<T> {
+  message: string;
+  choices: Array<CheckboxChoice<T> | typeof Separator.prototype>;
+  pageSize?: number;
+  loop?: boolean;
+  required?: boolean;
+}
+
+/**
+ * 可取消的 checkbox - 支持 ESC 返回
+ */
+export const checkboxWithCancel = createPrompt(
+  <T,>(config: CheckboxConfig<T>, done: (value: T[] | typeof PROMPT_CANCELLED) => void) => {
+    const { pageSize = 7, loop = true, required = false } = config;
+    const theme = makeTheme(selectTheme);
+    const [status, setStatus] = useState<Status>('idle');
+    const prefix = usePrefix({ status, theme });
+
+    type InternalChoice = {
+      value: T;
+      name: string;
+      checked: boolean;
+      disabled: boolean | string;
+    };
+
+    const [items, setItems] = useState<Array<InternalChoice | typeof Separator.prototype>>(() =>
+      config.choices.map((choice) => {
+        if (Separator.isSeparator(choice)) return choice;
+        return {
+          value: choice.value,
+          name: choice.name ?? String(choice.value),
+          checked: choice.checked ?? false,
+          disabled: choice.disabled ?? false,
+        };
+      })
+    );
+
+    const bounds = useMemo(() => {
+      const isSelectableItem = (item: InternalChoice | typeof Separator.prototype): boolean =>
+        !Separator.isSeparator(item) && !item.disabled;
+      const first = items.findIndex(isSelectableItem);
+      // findLastIndex polyfill
+      let last = -1;
+      for (let i = items.length - 1; i >= 0; i--) {
+        if (isSelectableItem(items[i])) {
+          last = i;
+          break;
+        }
+      }
+      return { first, last };
+    }, [items]);
+
+    const [active, setActive] = useState(bounds.first);
+
+    useKeypress((key) => {
+      if (isEscapeKey(key)) {
+        setStatus('done');
+        done(PROMPT_CANCELLED);
+      } else if (isEnterKey(key)) {
+        const selected = items
+          .filter((item): item is InternalChoice => !Separator.isSeparator(item) && item.checked)
+          .map((item) => item.value);
+
+        if (required && selected.length === 0) {
+          // 不允许空选择
+          return;
+        }
+
+        setStatus('done');
+        done(selected);
+      } else if (key.name === 'space') {
+        // 切换选中状态
+        setItems(
+          items.map((item, index) => {
+            if (index === active && !Separator.isSeparator(item) && !item.disabled) {
+              return { ...item, checked: !item.checked };
+            }
+            return item;
+          })
+        );
+      } else if (isUpKey(key) || isDownKey(key)) {
+        if (
+          loop ||
+          (isUpKey(key) && active !== bounds.first) ||
+          (isDownKey(key) && active !== bounds.last)
+        ) {
+          const offset = isUpKey(key) ? -1 : 1;
+          let next = active;
+          do {
+            next = (next + offset + items.length) % items.length;
+          } while (Separator.isSeparator(items[next]) || (items[next] as InternalChoice).disabled);
+          setActive(next);
+        }
+      } else if (key.name === 'a') {
+        // 全选/全不选
+        const allChecked = items.every(
+          (item) => Separator.isSeparator(item) || item.disabled || item.checked
+        );
+        setItems(
+          items.map((item) => {
+            if (Separator.isSeparator(item) || item.disabled) return item;
+            return { ...item, checked: !allChecked };
+          })
+        );
+      }
+    });
+
+    const page = usePagination({
+      items,
+      active,
+      renderItem: ({ item, index, isActive }) => {
+        if (Separator.isSeparator(item)) {
+          return ` ${item.separator}`;
+        }
+
+        const checkbox = item.checked ? figures.checkboxOn : figures.checkboxOff;
+        const color = isActive ? 'cyan' : 'white';
+        const cursor = isActive ? figures.pointer : ' ';
+
+        if (item.disabled) {
+          return styleText('dim', `${cursor} ${checkbox} ${item.name}`);
+        }
+
+        return `${cursor} ${styleText(color, `${checkbox} ${item.name}`)}`;
+      },
+      pageSize,
+      loop,
+    });
+
+    if (status === 'done') {
+      const selected = items
+        .filter((item): item is InternalChoice => !Separator.isSeparator(item) && item.checked)
+        .map((item) => item.name);
+      const summary = selected.length > 0 ? selected.join(', ') : '(none)';
+      return `${prefix} ${config.message} ${styleText('cyan', summary)}`;
+    }
+
+    const helpTip = styleText(
+      'dim',
+      '↑↓ 移动 • space 选择 • a 全选 • ⏎ 确认 • esc 取消'
+    );
+
+    return `${prefix} ${config.message}\n${page}\n${helpTip}`;
+  }
+);
+
+// ============ 可取消的 Confirm ============
+
+interface ConfirmConfig {
+  message: string;
+  default?: boolean;
+}
+
+/**
+ * 可取消的 confirm - 支持 ESC 返回
+ */
+export const confirmWithCancel = createPrompt(
+  (config: ConfirmConfig, done: (value: boolean | typeof PROMPT_CANCELLED) => void) => {
+    const { default: defaultValue = false } = config;
+    const theme = makeTheme(selectTheme);
+    const [status, setStatus] = useState<Status>('idle');
+    const [value, setValue] = useState<boolean | undefined>(undefined);
+    const prefix = usePrefix({ status, theme });
+
+    useKeypress((key) => {
+      if (isEscapeKey(key)) {
+        setStatus('done');
+        done(PROMPT_CANCELLED);
+      } else if (isEnterKey(key)) {
+        setStatus('done');
+        done(value ?? defaultValue);
+      } else if (key.name === 'y' || key.name === 'Y') {
+        setValue(true);
+      } else if (key.name === 'n' || key.name === 'N') {
+        setValue(false);
+      }
+    });
+
+    const hint = defaultValue ? '(Y/n)' : '(y/N)';
+    const displayValue =
+      value === undefined ? '' : value ? styleText('green', 'Yes') : styleText('red', 'No');
+
+    if (status === 'done') {
+      const finalValue = value ?? defaultValue;
+      return `${prefix} ${config.message} ${finalValue ? styleText('green', 'Yes') : styleText('red', 'No')}`;
+    }
+
+    const helpTip = styleText('dim', 'y/n 选择 • ⏎ 确认 • esc 取消');
+
+    return `${prefix} ${config.message} ${hint} ${displayValue}\n${helpTip}`;
+  }
+);
+
+// ============ 可取消的 Input ============
+
+interface InputConfig {
+  message: string;
+  default?: string;
+  validate?: (value: string) => boolean | string | Promise<boolean | string>;
+}
+
+/**
+ * 可取消的 input - 支持 ESC 返回
+ */
+export const inputWithCancel = createPrompt(
+  (config: InputConfig, done: (value: string | typeof PROMPT_CANCELLED) => void) => {
+    const theme = makeTheme(selectTheme);
+    const [status, setStatus] = useState<Status>('idle');
+    const [value, setValue] = useState(config.default ?? '');
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const prefix = usePrefix({ status, theme });
+
+    useKeypress(async (key, rl) => {
+      if (isEscapeKey(key)) {
+        setStatus('done');
+        done(PROMPT_CANCELLED);
+      } else if (isEnterKey(key)) {
+        // 验证
+        if (config.validate) {
+          const result = await config.validate(value);
+          if (result !== true) {
+            setErrorMsg(typeof result === 'string' ? result : '输入无效');
+            return;
+          }
+        }
+        setStatus('done');
+        done(value);
+      } else {
+        // 获取当前输入
+        setValue(rl.line);
+        setErrorMsg(null);
+      }
+    });
+
+    if (status === 'done') {
+      return `${prefix} ${config.message} ${styleText('cyan', value || '(empty)')}`;
+    }
+
+    const defaultHint = config.default ? styleText('dim', ` (${config.default})`) : '';
+    const errorDisplay = errorMsg ? `\n${styleText('red', `✖ ${errorMsg}`)}` : '';
+    const helpTip = styleText('dim', '输入文本 • ⏎ 确认 • esc 取消');
+
+    return `${prefix} ${config.message}${defaultHint}\n> ${value}${errorDisplay}\n${helpTip}`;
+  }
+);
+
+// ============ 原有函数（支持 ESC 取消）============
 
 export async function selectOption<T extends string>(
   message: string,
   choices: { name: string; value: T; description?: string }[]
-): Promise<T> {
-  return select({ message, choices });
+): Promise<T | typeof PROMPT_CANCELLED> {
+  const result = await selectWithCancel<T>({ message, choices });
+  return result;
 }
 
 export async function confirmAction(
   message: string,
   defaultValue = false
-): Promise<boolean> {
-  return confirm({ message, default: defaultValue });
+): Promise<boolean | typeof PROMPT_CANCELLED> {
+  return confirmWithCancel({ message, default: defaultValue });
 }
 
 export async function inputText(
   message: string,
   defaultValue?: string,
   validate?: (value: string) => boolean | string
-): Promise<string> {
-  return input({ message, default: defaultValue, validate });
+): Promise<string | typeof PROMPT_CANCELLED> {
+  return inputWithCancel({ message, default: defaultValue, validate });
 }
 
 export async function selectFromList<T>(
   message: string,
   items: T[],
   display: (item: T) => string
-): Promise<T> {
+): Promise<T | typeof PROMPT_CANCELLED> {
   const choices = items.map((item, i) => ({
     name: display(item),
     value: i,
   }));
-  const index = await select({ message, choices });
-  return items[index];
+  const result = await selectWithCancel<number>({ message, choices });
+  if (result === PROMPT_CANCELLED) {
+    return PROMPT_CANCELLED;
+  }
+  return items[result];
 }
 
 // ============ 平台选择 ============
@@ -41,9 +478,9 @@ export async function selectFromList<T>(
 /**
  * 交互式选择平台
  * @param remembered 上次选择的平台 values，用于默认勾选
- * @returns 选中的平台 value 列表 (如 ['macOS', 'iOS', 'macOS-asan'])
+ * @returns 选中的平台 value 列表 (如 ['macOS', 'iOS', 'macOS-asan'])，或 PROMPT_CANCELLED 表示取消
  */
-export async function selectPlatforms(remembered?: string[]): Promise<string[]> {
+export async function selectPlatforms(remembered?: string[]): Promise<string[] | typeof PROMPT_CANCELLED> {
   const rememberedSet = new Set(remembered ?? []);
 
   // 构建选项列表 - 主平台 + asan 子选项
@@ -92,12 +529,17 @@ export async function selectPlatforms(remembered?: string[]): Promise<string[]> 
     checked: false,
   });
 
-  // 选择
-  const selected = await checkbox<string>({
+  // 选择 (使用支持 ESC 的版本)
+  const selected = await checkboxWithCancel<string>({
     message: '请选择需要的平台:',
-    choices: choices as Parameters<typeof checkbox<string>>[0]['choices'],
+    choices: choices as Parameters<typeof checkboxWithCancel<string>>[0]['choices'],
     pageSize: 15,
   });
+
+  // 检查取消
+  if (selected === PROMPT_CANCELLED) {
+    return PROMPT_CANCELLED;
+  }
 
   // 处理结果
   const result: string[] = [];
@@ -113,9 +555,14 @@ export async function selectPlatforms(remembered?: string[]): Promise<string[]> 
 
   // 自定义输入
   if (needCustomInput) {
-    const customInput = await input({
+    const customInput = await inputWithCancel({
       message: '请输入自定义平台 (空格或逗号分隔):',
     });
+
+    // 检查取消
+    if (customInput === PROMPT_CANCELLED) {
+      return PROMPT_CANCELLED;
+    }
 
     if (customInput.trim()) {
       const customPlatforms = customInput
@@ -193,16 +640,16 @@ export function parsePlatformArgs(keys: string[]): string[] {
 // ============ 通用多选 ============
 
 /**
- * 通用多选框
+ * 通用多选框 (支持 ESC 取消)
  * @param message 提示信息
  * @param choices 选项列表
- * @returns 选中的值列表
+ * @returns 选中的值列表，或 PROMPT_CANCELLED 表示取消
  */
 export async function checkboxSelect<T extends string>(
   message: string,
   choices: { name: string; value: T; checked?: boolean }[]
-): Promise<T[]> {
-  return checkbox<T>({
+): Promise<T[] | typeof PROMPT_CANCELLED> {
+  const result = await checkboxWithCancel<T>({
     message,
     choices: choices.map((c) => ({
       name: c.name,
@@ -211,4 +658,5 @@ export async function checkboxSelect<T extends string>(
     })),
     pageSize: 20,
   });
+  return result;
 }

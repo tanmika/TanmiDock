@@ -31,7 +31,7 @@ import { verifyLocalCommit } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext } from '../types/index.js';
 import { withGlobalLock } from '../utils/global-lock.js';
-import { confirmAction, selectPlatforms, parsePlatformArgs, selectOption } from '../utils/prompt.js';
+import { confirmAction, selectPlatforms, parsePlatformArgs, selectOption, PROMPT_CANCELLED } from '../utils/prompt.js';
 import pLimit from 'p-limit';
 import { EXIT_CODES } from '../utils/exit-codes.js';
 
@@ -108,7 +108,13 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     platforms = parsePlatformArgs(options.platform);
   } else if (!options.yes && process.stdout.isTTY) {
     // 交互模式：显示平台选择，使用记忆的平台作为默认勾选
-    platforms = await selectPlatforms(rememberedPlatforms);
+    const selectedPlatforms = await selectPlatforms(rememberedPlatforms);
+    // ESC 取消
+    if (selectedPlatforms === PROMPT_CANCELLED) {
+      info('已取消');
+      return;
+    }
+    platforms = selectedPlatforms;
     if (platforms.length === 0) {
       error('至少需要选择一个平台');
       process.exit(EXIT_CODES.MISUSE);
@@ -281,10 +287,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       info(`本地检测到额外平台: ${extraPlatforms.join(', ')}`);
       blank();
 
-      const { checkbox } = await import('@inquirer/prompts');
+      const { checkboxWithCancel, PROMPT_CANCELLED } = await import('../utils/prompt.js');
       const allAvailable = [...platforms, ...extraPlatforms];
 
-      finalLinkPlatforms = await checkbox({
+      const selectedPlatforms = await checkboxWithCancel({
         message: '选择要链接的平台 (未选择的将被删除):',
         choices: allAvailable.map(p => ({
           name: p,
@@ -292,6 +298,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           checked: platforms.includes(p), // 用户请求的默认勾选
         })),
       });
+
+      // ESC 取消
+      if (selectedPlatforms === PROMPT_CANCELLED) {
+        info('已取消');
+        return;
+      }
+
+      finalLinkPlatforms = selectedPlatforms as string[];
 
       if (finalLinkPlatforms.length === 0) {
         error('至少需要选择一个平台');
@@ -910,7 +924,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           `是否下载以上 ${missingItems.length} 个库?`,
           true
         );
-        if (!confirmed) {
+        // ESC 取消或确认 No
+        if (confirmed === PROMPT_CANCELLED || !confirmed) {
           warn('跳过下载缺失库');
           toDownload = [];
         }
@@ -1490,7 +1505,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               { name: `全部清理 (释放 ${formatSize(unreferencedSize)})`, value: 'all' },
             ]);
 
-            if (action !== 'skip') {
+            // ESC 取消视为跳过
+            if (action !== PROMPT_CANCELLED && action !== 'skip') {
               const toClean = action === 'half' ? halfCleanStores : unreferencedStores;
               blank();
               info('正在清理...');

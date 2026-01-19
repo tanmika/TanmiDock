@@ -9,7 +9,7 @@ import * as config from '../core/config.js';
 import { formatSize } from '../utils/disk.js';
 import { info, warn, success, hint, blank, separator, title, error } from '../utils/logger.js';
 import { withGlobalLock } from '../utils/global-lock.js';
-import { confirmAction, checkboxSelect } from '../utils/prompt.js';
+import { confirmAction, checkboxSelect, PROMPT_CANCELLED } from '../utils/prompt.js';
 import type { LibraryInfo, StoreEntry } from '../types/index.js';
 
 /**
@@ -108,13 +108,19 @@ export async function cleanLibraries(options: CleanOptions): Promise<void> {
     blank();
     const selected = await checkboxSelect('选择要清理的库:', choices);
 
+    // ESC 取消
+    if (selected === PROMPT_CANCELLED) {
+      info('已取消');
+      return;
+    }
+
     if (selected.length === 0) {
       info('未选择任何库');
       return;
     }
 
     // 警告有引用的库
-    const withRefs = selected.filter((key) => {
+    const withRefs = selected.filter((key: string) => {
       const entry = registry.getStore(key);
       return entry && entry.usedBy.length > 0;
     });
@@ -123,7 +129,8 @@ export async function cleanLibraries(options: CleanOptions): Promise<void> {
       blank();
       warn(`注意: ${withRefs.length} 个库仍被项目引用，删除后链接将失效`);
       const confirmed = await confirmAction('确定继续?', false);
-      if (!confirmed) {
+      // ESC 取消或确认 No
+      if (confirmed === PROMPT_CANCELLED || !confirmed) {
         info('已取消清理');
         return;
       }

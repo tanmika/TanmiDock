@@ -4,7 +4,6 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { Command } from 'commander';
-import { select } from '@inquirer/prompts';
 import { isCodepacInstalled } from '../core/codepac.js';
 import { getDiskInfo, formatSize } from '../utils/disk.js';
 import * as config from '../core/config.js';
@@ -20,7 +19,12 @@ import {
   title,
   separator,
 } from '../utils/logger.js';
-import { confirmAction, checkboxSelect } from '../utils/prompt.js';
+import {
+  selectWithCancel,
+  checkboxWithCancel,
+  confirmWithCancel,
+  PROMPT_CANCELLED,
+} from '../utils/prompt.js';
 
 // ============ 类型定义 ============
 
@@ -516,15 +520,21 @@ async function interactiveCheck(
 ): Promise<void> {
   blank();
 
-  const action = await select({
+  const action = await selectWithCancel({
     message: '选择操作',
     choices: [
-      { name: '修复所有问题', value: 'fix-all' },
-      { name: '选择性修复', value: 'select' },
-      { name: '查看详情', value: 'detail' },
-      { name: '退出', value: 'exit' },
+      { name: '修复所有问题', value: 'fix-all' as const },
+      { name: '选择性修复', value: 'select' as const },
+      { name: '查看详情', value: 'detail' as const },
+      { name: '退出', value: 'exit' as const },
     ],
   });
+
+  // ESC 取消 = 退出
+  if (action === PROMPT_CANCELLED) {
+    info('已取消');
+    return;
+  }
 
   switch (action) {
     case 'fix-all':
@@ -590,7 +600,16 @@ async function selectiveFix(
   }
 
   blank();
-  const selected = await checkboxSelect('选择要修复的问题:', choices);
+  const selected = await checkboxWithCancel({
+    message: '选择要修复的问题:',
+    choices,
+  });
+
+  // ESC 取消
+  if (selected === PROMPT_CANCELLED) {
+    info('已取消');
+    return;
+  }
 
   if (selected.length === 0) {
     info('未选择任何问题');
@@ -601,14 +620,19 @@ async function selectiveFix(
   let pruneOrphans = options.prune;
   if (selected.includes('orphanLibraries') && !options.prune) {
     blank();
-    const orphanAction = await select({
+    const orphanAction = await selectWithCancel({
       message: '孤立库处理方式',
       choices: [
-        { name: '登记到 Registry（保留文件）', value: 'register' },
-        { name: '删除文件（释放空间）', value: 'delete' },
+        { name: '登记到 Registry（保留文件）', value: 'register' as const },
+        { name: '删除文件（释放空间）', value: 'delete' as const },
       ],
     });
-    pruneOrphans = orphanAction === 'delete';
+    // ESC 取消 = 默认登记
+    if (orphanAction === PROMPT_CANCELLED) {
+      pruneOrphans = false;
+    } else {
+      pruneOrphans = orphanAction === 'delete';
+    }
   }
 
   // 筛选要修复的问题
@@ -700,11 +724,11 @@ async function fixAllIssues(
   // 确认
   if (!options.force) {
     blank();
-    const confirmed = await confirmAction(
-      `确认修复以上 ${totalIssues} 个问题?`,
-      false
-    );
-    if (!confirmed) {
+    const confirmed = await confirmWithCancel({
+      message: `确认修复以上 ${totalIssues} 个问题?`,
+      default: false,
+    });
+    if (confirmed === PROMPT_CANCELLED || !confirmed) {
       info('已取消修复');
       return;
     }

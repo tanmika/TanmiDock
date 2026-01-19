@@ -2,11 +2,16 @@
  * config 命令 - 查看/修改配置
  */
 import { Command } from 'commander';
-import { select, input, confirm } from '@inquirer/prompts';
 import { ensureInitialized } from '../core/guard.js';
 import * as config from '../core/config.js';
 import { shrinkHome, expandHome } from '../core/platform.js';
 import { info, error, success, title, blank, colorize } from '../utils/logger.js';
+import {
+  selectWithCancel,
+  confirmWithCancel,
+  inputWithCancel,
+  PROMPT_CANCELLED,
+} from '../utils/prompt.js';
 import type { DockConfig, CleanStrategy, LogLevel, ProxyConfig, UnverifiedLocalStrategy } from '../types/index.js';
 
 /**
@@ -271,12 +276,13 @@ async function interactiveConfig(cfg: DockConfig): Promise<void> {
       { value: '_exit' as const, name: colorize('退出', 'gray') },
     ];
 
-    const selected = await select({
+    const selected = await selectWithCancel({
       message: '选择要修改的配置项:',
       choices,
     });
 
-    if (selected === '_exit') {
+    // ESC 或选择退出都退出
+    if (selected === PROMPT_CANCELLED || selected === '_exit') {
       break;
     }
 
@@ -284,7 +290,7 @@ async function interactiveConfig(cfg: DockConfig): Promise<void> {
     const meta = CONFIG_META.find((m) => m.key === selected)!;
     const newValue = await editConfigValue(meta, cfg[meta.key]);
 
-    if (newValue !== undefined) {
+    if (newValue !== undefined && newValue !== PROMPT_CANCELLED) {
       try {
         await config.set(meta.key, newValue as never);
         cfg[meta.key] = newValue as never;
@@ -308,10 +314,11 @@ async function editConfigValue(meta: ConfigMeta, currentValue: unknown): Promise
 
   switch (meta.type) {
     case 'string': {
-      const result = await input({
+      const result = await inputWithCancel({
         message: `输入新的 ${meta.label}:`,
         default: currentValue as string | undefined,
       });
+      if (result === PROMPT_CANCELLED) return PROMPT_CANCELLED;
       if (meta.key === 'storePath') {
         return expandHome(result);
       }
@@ -327,7 +334,7 @@ async function editConfigValue(meta: ConfigMeta, currentValue: unknown): Promise
             ? String(Math.round((currentValue as number) / (1024 * 1024 * 1024)))
             : String(currentValue)
           : '';
-      const result = await input({
+      const result = await inputWithCancel({
         message: `输入新的 ${meta.label}${isThreshold ? ' (GB)' : ''}:`,
         default: defaultValue,
         validate: (val) => {
@@ -337,6 +344,7 @@ async function editConfigValue(meta: ConfigMeta, currentValue: unknown): Promise
           return true;
         },
       });
+      if (result === PROMPT_CANCELLED) return PROMPT_CANCELLED;
       if (!result) return undefined;
       const num = parseInt(result, 10);
       // unreferencedThreshold 转换为字节存储
@@ -344,18 +352,19 @@ async function editConfigValue(meta: ConfigMeta, currentValue: unknown): Promise
     }
 
     case 'boolean': {
-      return await confirm({
+      return await confirmWithCancel({
         message: `${meta.label}?`,
         default: currentValue as boolean,
       });
     }
 
     case 'select': {
-      const result = await select({
+      const result = await selectWithCancel({
         message: `选择 ${meta.label}:`,
         choices: meta.options!,
         default: meta.key === 'concurrency' ? String(currentValue) : (currentValue as string),
       });
+      if (result === PROMPT_CANCELLED) return PROMPT_CANCELLED;
       // concurrency 需要转为数字
       if (meta.key === 'concurrency') {
         return parseInt(result, 10);
@@ -375,8 +384,8 @@ async function editConfigValue(meta: ConfigMeta, currentValue: unknown): Promise
 /**
  * 编辑代理配置
  */
-async function editProxyConfig(current: ProxyConfig | undefined): Promise<ProxyConfig | undefined> {
-  const action = await select({
+async function editProxyConfig(current: ProxyConfig | undefined): Promise<ProxyConfig | typeof PROMPT_CANCELLED | undefined> {
+  const action = await selectWithCancel({
     message: '代理设置:',
     choices: [
       { value: 'edit', name: '编辑' },
@@ -385,18 +394,22 @@ async function editProxyConfig(current: ProxyConfig | undefined): Promise<ProxyC
     ],
   });
 
-  if (action === 'cancel') {
-    return undefined;
+  if (action === PROMPT_CANCELLED || action === 'cancel') {
+    return PROMPT_CANCELLED;
   }
 
   if (action === 'clear') {
     return {};
   }
 
-  const http = await input({
+  const http = await inputWithCancel({
     message: 'HTTP/HTTPS 代理 (如 http://127.0.0.1:7890):',
     default: current?.http || '',
   });
+
+  if (http === PROMPT_CANCELLED) {
+    return PROMPT_CANCELLED;
+  }
 
   if (!http) {
     return {};
