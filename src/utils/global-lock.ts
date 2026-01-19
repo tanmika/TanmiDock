@@ -33,7 +33,7 @@ export async function acquireGlobalLock(): Promise<boolean> {
 
     globalLockRelease = await lockfile.lock(lockPath, {
       retries: 0, // 不重试，立即失败
-      stale: 60000, // 60秒后锁过期（防止进程异常退出后锁不释放）
+      stale: 30000, // 30秒后锁过期（防止进程异常退出后锁不释放）
     });
     return true;
   } catch {

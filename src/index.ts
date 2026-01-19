@@ -12,6 +12,7 @@ import { createCheckCommand } from './commands/check.js';
 import { createUpdateCommand } from './commands/update.js';
 import { showDashboard } from './commands/dashboard.js';
 import { Transaction } from './core/transaction.js';
+import { releaseGlobalLock } from './utils/global-lock.js';
 
 // 读取 package.json 版本
 const require = createRequire(import.meta.url);
@@ -41,6 +42,9 @@ async function gracefulShutdown(signal: string, exitCode: number): Promise<void>
   } catch (err) {
     console.error('[err] 清理失败:', (err as Error).message);
   }
+
+  // 释放全局锁
+  await releaseGlobalLock();
 
   process.exit(exitCode);
 }
