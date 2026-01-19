@@ -124,35 +124,39 @@ async function selectStorePath(): Promise<string | typeof PROMPT_CANCELLED> {
   }));
   choices.push({ name: '自定义路径...', value: '__custom__', description: undefined });
 
-  const selected = await selectOption('选择存储位置:', choices);
+  // 使用循环代替递归，避免栈增长
+  while (true) {
+    const selected = await selectOption('选择存储位置:', choices);
 
-  // ESC 取消
-  if (selected === PROMPT_CANCELLED) {
-    return PROMPT_CANCELLED;
-  }
-
-  if (selected === '__custom__') {
-    const customPath = await inputText('输入存储路径:', '~/.tanmi-dock/store', (v) => {
-      const expanded = expandHome(v);
-      const check = isPathSafe(expanded);
-      return check.safe || check.reason || '路径无效';
-    });
     // ESC 取消
-    if (customPath === PROMPT_CANCELLED) {
+    if (selected === PROMPT_CANCELLED) {
       return PROMPT_CANCELLED;
     }
-    return customPath;
-  }
 
-  // 确认选择
-  const confirmed = await confirmAction(`确认使用路径 '${shrinkHome(selected)}'?`, true);
-  // ESC 取消或确认 No
-  if (confirmed === PROMPT_CANCELLED || !confirmed) {
-    info('已取消，重新选择...');
-    return selectStorePath();
-  }
+    if (selected === '__custom__') {
+      const customPath = await inputText('输入存储路径:', '~/.tanmi-dock/store', (v) => {
+        const expanded = expandHome(v);
+        const check = isPathSafe(expanded);
+        return check.safe || check.reason || '路径无效';
+      });
+      // ESC 取消 - 返回重新选择
+      if (customPath === PROMPT_CANCELLED) {
+        info('已取消，重新选择...');
+        continue;
+      }
+      return customPath;
+    }
 
-  return selected;
+    // 确认选择
+    const confirmed = await confirmAction(`确认使用路径 '${shrinkHome(selected)}'?`, true);
+    // ESC 取消或确认 No - 继续循环重新选择
+    if (confirmed === PROMPT_CANCELLED || !confirmed) {
+      info('已取消，重新选择...');
+      continue;
+    }
+
+    return selected;
+  }
 }
 
 /**

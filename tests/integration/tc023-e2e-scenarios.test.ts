@@ -420,12 +420,15 @@ describe('TC-023: E2E 端到端测试', () => {
       // === Verify: 应该检测到孤立库 ===
       await runCommand('verify', {}, env);
 
-      // === Repair: 应该登记孤立库 ===
-      await runCommand('repair', { force: true, prune: false }, env);
+      // === Repair: 孤立库会被删除（而非登记）===
+      await runCommand('repair', { force: true }, env);
 
-      // 验证库已被登记
+      // 验证库文件已被删除
+      await expect(fs.access(commitDir)).rejects.toThrow();
+
+      // Registry 中仍然没有记录
       const afterRegistry = await loadRegistry(env);
-      expect(afterRegistry.libraries[libKey]).toBeDefined();
+      expect(afterRegistry.libraries[libKey]).toBeUndefined();
     });
 
     it('should detect and repair dangling links', async () => {

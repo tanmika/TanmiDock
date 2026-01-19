@@ -19,6 +19,7 @@ import {
   title,
   separator,
   colorize,
+  debug,
 } from '../utils/logger.js';
 import {
   selectWithCancel,
@@ -68,7 +69,6 @@ interface CheckOptions {
   fix: boolean;
   dryRun: boolean;
   json: boolean;
-  prune: boolean;
   force: boolean;
 }
 
@@ -80,7 +80,6 @@ export function createCheckCommand(): Command {
     .option('--fix', '直接修复所有问题')
     .option('--dry-run', '只显示问题，不修复')
     .option('--json', '输出 JSON 格式')
-    .option('--prune', '删除孤立库而非登记（与 --fix 配合使用）')
     .option('--force', '跳过确认')
     .action(async (options: CheckOptions) => {
       await runCheck(options);
@@ -127,10 +126,7 @@ async function runCheck(options: CheckOptions): Promise<void> {
 
   // --fix 模式：直接修复
   if (options.fix) {
-    await fixAllIssues(result.integrity, {
-      prune: options.prune,
-      force: options.force,
-    });
+    await fixAllIssues(result.integrity, { force: options.force });
     return;
   }
 
@@ -145,12 +141,10 @@ async function collectAllIssues(): Promise<CheckResult> {
   const integrity = await checkIntegrity();
 
   // 计算汇总
-  const envErrors = Object.values(environment).filter(
-    (c) => !c.ok && !('warn' in c && c.warn)
-  ).length;
-  const envWarnings = Object.values(environment).filter(
-    (c) => 'warn' in c && c.warn
-  ).length;
+  // 错误：检查项失败（ok === false），排除仅作为警告的项
+  // 警告：目前只有 disk 有 warn 字段（空间 < 5GB 但不影响功能）
+  const envErrors = Object.values(environment).filter((c) => !c.ok).length;
+  const envWarnings = environment.disk.warn ? 1 : 0;
 
   const integrityIssues =
     integrity.invalidProjects.length +
@@ -263,8 +257,9 @@ async function checkIntegrity(): Promise<IntegrityIssue> {
     registry = getRegistry();
     await registry.load();
     storePath = await store.getStorePath();
-  } catch {
+  } catch (err) {
     // 未初始化，跳过完整性检查
+    debug(`[check] Registry 加载失败，跳过完整性检查: ${(err as Error).message}`);
     return result;
   }
 
@@ -285,7 +280,12 @@ async function checkIntegrity(): Promise<IntegrityIssue> {
     // 检查依赖链接
     for (const dep of project.dependencies) {
       const linkPath = path.join(project.path, dep.linkedPath);
-      const verifyPlatform = dep.platform ?? project.platforms?.[0] ?? 'macOS';
+      const verifyPlatform = dep.platform ?? project.platforms?.[0];
+
+      // 如果无法确定平台，跳过此依赖的完整性检查（数据不完整）
+      if (!verifyPlatform) {
+        continue;
+      }
 
       try {
         const stat = await fs.lstat(linkPath);
@@ -343,8 +343,12 @@ async function checkIntegrity(): Promise<IntegrityIssue> {
         }
       }
     }
-  } catch {
-    // Store 目录不存在
+  } catch (err) {
+    // Store 目录不存在或无法访问
+    const e = err as NodeJS.ErrnoException;
+    if (e.code !== 'ENOENT') {
+      debug(`[check] 扫描 Store 目录失败: ${e.message}`);
+    }
   }
 
   // 3. 检查失效引用
@@ -396,8 +400,9 @@ async function checkIntegrity(): Promise<IntegrityIssue> {
               }
               if (hasValidLink) break;
             }
-          } catch {
-            // 忽略
+          } catch (err) {
+            // 检查子链接时出错，记录但继续
+            debug(`[check] 检查子链接失败: ${(err as Error).message}`);
           }
         }
       }
@@ -539,7 +544,7 @@ async function interactiveCheck(
 
   switch (action) {
     case 'fix-all':
-      await fixAllIssues(issues, { prune: options.prune, force: true });
+      await fixAllIssues(issues, { force: true });
       // 缺失库无法自动修复，需要提示用户
       if (issues.missingLibraries.length > 0) {
         blank();
@@ -622,25 +627,6 @@ async function selectiveFix(
     return;
   }
 
-  // 孤立库处理方式
-  let pruneOrphans = options.prune;
-  if (selected.includes('orphanLibraries') && !options.prune) {
-    blank();
-    const orphanAction = await selectWithCancel({
-      message: '孤立库处理方式',
-      choices: [
-        { name: '登记到 Registry（保留文件）', value: 'register' as const },
-        { name: '删除文件（释放空间）', value: 'delete' as const },
-      ],
-    });
-    // ESC 取消 = 默认登记
-    if (orphanAction === PROMPT_CANCELLED) {
-      pruneOrphans = false;
-    } else {
-      pruneOrphans = orphanAction === 'delete';
-    }
-  }
-
   // 筛选要修复的问题
   const toFix: IntegrityIssue = {
     invalidProjects: selected.includes('invalidProjects')
@@ -656,7 +642,7 @@ async function selectiveFix(
       : [],
   };
 
-  await fixAllIssues(toFix, { prune: pruneOrphans, force: options.force });
+  await fixAllIssues(toFix, { force: options.force });
 
   // 缺失库无法自动修复，需要提示用户
   if (issues.missingLibraries.length > 0) {
@@ -714,7 +700,6 @@ function showDetails(issues: IntegrityIssue): void {
 // ============ 修复执行 ============
 
 interface FixOptions {
-  prune: boolean;
   force: boolean;
 }
 
@@ -788,61 +773,21 @@ async function fixAllIssues(
     }
   }
 
-  // 3. 处理孤立库
+  // 3. 删除孤立库
   for (const lib of issues.orphanLibraries) {
     try {
-      if (options.prune) {
-        await fs.rm(lib.path, { recursive: true, force: true });
-        success(`[ok] 删除孤立库: ${lib.libName}/${lib.commit.slice(0, 7)}`);
-      } else {
-        // 登记到 Registry
-        registry.addLibrary({
-          libName: lib.libName,
-          commit: lib.commit,
-          branch: 'unknown',
-          url: 'unknown',
-          platforms: [],
-          size: lib.size,
-          referencedBy: [],
-          createdAt: new Date().toISOString(),
-          lastAccess: new Date().toISOString(),
-        });
-
-        // 扫描平台子目录
-        try {
-          const entries = await fs.readdir(lib.path, { withFileTypes: true });
-          for (const entry of entries) {
-            if (
-              entry.isDirectory() &&
-              !entry.name.startsWith('.') &&
-              entry.name !== '_shared'
-            ) {
-              const platform = entry.name;
-              const platformPath = path.join(lib.path, platform);
-              const platformSize = await getDirSizeRecursive(platformPath);
-              registry.addStore({
-                libName: lib.libName,
-                commit: lib.commit,
-                platform,
-                branch: 'unknown',
-                url: 'unknown',
-                size: platformSize,
-                usedBy: [],
-                createdAt: new Date().toISOString(),
-                lastAccess: new Date().toISOString(),
-              });
-            }
-          }
-        } catch {
-          // 忽略
-        }
-
-        success(`[ok] 登记孤立库: ${lib.libName}/${lib.commit.slice(0, 7)}`);
+      await fs.rm(lib.path, { recursive: true, force: true });
+      // 如果删除后 libName 目录为空，也一并删除
+      const libDir = path.dirname(lib.path);
+      const remaining = await fs.readdir(libDir).catch(() => ['placeholder']);
+      if (remaining.length === 0) {
+        await fs.rm(libDir, { recursive: true, force: true }).catch(() => {});
       }
+      success(`[ok] 删除孤立库: ${lib.libName}/${lib.commit.slice(0, 7)}`);
       fixed++;
     } catch (err) {
       error(
-        `[err] 处理孤立库失败: ${lib.libName}/${lib.commit.slice(0, 7)} - ${(err as Error).message}`
+        `[err] 删除孤立库失败: ${lib.libName}/${lib.commit.slice(0, 7)} - ${(err as Error).message}`
       );
     }
   }
@@ -892,8 +837,9 @@ async function getDirSizeRecursive(dirPath: string): Promise<number> {
         size += stat.size;
       }
     }
-  } catch {
-    // 忽略
+  } catch (err) {
+    // 计算大小时出错，返回已计算的部分
+    debug(`[check] 计算目录大小失败: ${(err as Error).message}`);
   }
   return size;
 }
@@ -913,7 +859,6 @@ export async function verifyIntegrity(): Promise<void> {
  */
 export async function repairIssues(options: {
   dryRun: boolean;
-  prune: boolean;
   force: boolean;
 }): Promise<void> {
   const result = await collectAllIssues();
@@ -933,10 +878,7 @@ export async function repairIssues(options: {
     return;
   }
 
-  await fixAllIssues(result.integrity, {
-    prune: options.prune,
-    force: options.force,
-  });
+  await fixAllIssues(result.integrity, { force: options.force });
 }
 
 export default createCheckCommand;

@@ -420,7 +420,6 @@ export interface StatusOptions {
 
 export interface RepairOptions {
   dryRun?: boolean;
-  prune?: boolean;
   force?: boolean;
 }
 
@@ -530,7 +529,6 @@ export async function runCommand(
       const repairOpts = options as RepairOptions;
       await repairIssues({
         dryRun: repairOpts.dryRun ?? false,
-        prune: repairOpts.prune ?? false,
         force: repairOpts.force ?? true, // 测试中默认跳过确认
       });
       break;

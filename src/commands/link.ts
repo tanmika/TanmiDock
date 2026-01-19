@@ -21,7 +21,7 @@ import * as store from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { setProxyConfig } from '../core/codepac.js';
-import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM } from '../core/platform.js';
+import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, pathsEqual } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize } from '../utils/fs-utils.js';
@@ -176,9 +176,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   const absConfigPath = path.resolve(normalizedRoot, getRelativeConfigPath(normalizedRoot, configPath));
   const allProjects = registry.listProjects();
   for (const proj of allProjects) {
-    if (proj.path === normalizedRoot) continue;
+    if (pathsEqual(proj.path, normalizedRoot)) continue;
     const projAbsConfig = path.resolve(proj.path, proj.configPath);
-    if (projAbsConfig === absConfigPath) {
+    if (pathsEqual(projAbsConfig, absConfigPath)) {
       info(`清理重复登记: ${proj.path}`);
       registry.removeProject(registry.hashPath(proj.path));
     }

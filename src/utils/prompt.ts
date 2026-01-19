@@ -74,6 +74,7 @@ export const selectWithCancel = createPrompt(
     const { loop = true, pageSize = 7 } = config;
     const theme = makeTheme(selectTheme);
     const [status, setStatus] = useState<Status>('idle');
+    const [cancelled, setCancelled] = useState(false);
     const prefix = usePrefix({ status, theme });
 
     const items = useMemo(
@@ -114,6 +115,7 @@ export const selectWithCancel = createPrompt(
 
     useKeypress((key) => {
       if (isEscapeKey(key)) {
+        setCancelled(true);
         setStatus('done');
         done(PROMPT_CANCELLED);
       } else if (isEnterKey(key)) {
@@ -165,7 +167,8 @@ export const selectWithCancel = createPrompt(
     });
 
     if (status === 'done') {
-      return `${prefix} ${config.message} ${styleText('cyan', selectedChoice?.name ?? '(cancelled)')}`;
+      const displayText = cancelled ? '(已取消)' : selectedChoice?.name ?? '';
+      return `${prefix} ${config.message} ${styleText('cyan', displayText)}`;
     }
 
     const helpTip = styleText(
@@ -202,6 +205,7 @@ export const checkboxWithCancel = createPrompt(
     const { pageSize = 7, loop = true, required = false } = config;
     const theme = makeTheme(selectTheme);
     const [status, setStatus] = useState<Status>('idle');
+    const [cancelled, setCancelled] = useState(false);
     const prefix = usePrefix({ status, theme });
 
     type InternalChoice = {
@@ -242,6 +246,7 @@ export const checkboxWithCancel = createPrompt(
 
     useKeypress((key) => {
       if (isEscapeKey(key)) {
+        setCancelled(true);
         setStatus('done');
         done(PROMPT_CANCELLED);
       } else if (isEnterKey(key)) {
@@ -316,6 +321,9 @@ export const checkboxWithCancel = createPrompt(
     });
 
     if (status === 'done') {
+      if (cancelled) {
+        return `${prefix} ${config.message} ${styleText('cyan', '(已取消)')}`;
+      }
       const selected = items
         .filter((item): item is InternalChoice => !Separator.isSeparator(item) && item.checked)
         .map((item) => item.name);
@@ -347,11 +355,13 @@ export const confirmWithCancel = createPrompt(
     const { default: defaultValue = false } = config;
     const theme = makeTheme(selectTheme);
     const [status, setStatus] = useState<Status>('idle');
+    const [cancelled, setCancelled] = useState(false);
     const [value, setValue] = useState<boolean | undefined>(undefined);
     const prefix = usePrefix({ status, theme });
 
     useKeypress((key) => {
       if (isEscapeKey(key)) {
+        setCancelled(true);
         setStatus('done');
         done(PROMPT_CANCELLED);
       } else if (isEnterKey(key)) {
@@ -369,6 +379,9 @@ export const confirmWithCancel = createPrompt(
       value === undefined ? '' : value ? styleText('green', 'Yes') : styleText('red', 'No');
 
     if (status === 'done') {
+      if (cancelled) {
+        return `${prefix} ${config.message} ${styleText('cyan', '(已取消)')}`;
+      }
       const finalValue = value ?? defaultValue;
       return `${prefix} ${config.message} ${finalValue ? styleText('green', 'Yes') : styleText('red', 'No')}`;
     }
@@ -396,10 +409,12 @@ export const inputWithCancel = createPrompt(
     const [status, setStatus] = useState<Status>('idle');
     const [value, setValue] = useState(config.default ?? '');
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [cancelled, setCancelled] = useState(false);
     const prefix = usePrefix({ status, theme });
 
     useKeypress(async (key, rl) => {
       if (isEscapeKey(key)) {
+        setCancelled(true);
         setStatus('done');
         done(PROMPT_CANCELLED);
       } else if (isEnterKey(key)) {
@@ -421,7 +436,8 @@ export const inputWithCancel = createPrompt(
     });
 
     if (status === 'done') {
-      return `${prefix} ${config.message} ${styleText('cyan', value || '(empty)')}`;
+      const displayText = cancelled ? '(已取消)' : value || '(empty)';
+      return `${prefix} ${config.message} ${styleText('cyan', displayText)}`;
     }
 
     const defaultHint = config.default ? styleText('dim', ` (${config.default})`) : '';

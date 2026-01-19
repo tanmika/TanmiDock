@@ -83,23 +83,41 @@ export async function cleanLibraries(options: CleanOptions): Promise<void> {
   const unusedDays = (await config.get('unusedDays')) ?? 30;
   const storePath = await store.getStorePath();
 
-  // 先清理无效项目（这是元数据清理，不受 dry-run 控制）
   info('扫描 Store...');
-  const staleHashes = await registry.cleanStaleProjects();
 
-  if (staleHashes.length > 0) {
-    info(`清理了 ${staleHashes.length} 个无效项目记录`);
-  }
+  // 元数据清理：清理无效项目和失效引用
+  // dry-run 模式下只统计不实际清理
+  if (options.dryRun) {
+    // dry-run: 只统计会清理多少，不实际修改
+    const projects = registry.listProjects();
+    let staleProjectCount = 0;
+    for (const project of projects) {
+      try {
+        await fs.access(project.path);
+      } catch {
+        staleProjectCount++;
+      }
+    }
+    if (staleProjectCount > 0) {
+      info(`将清理 ${staleProjectCount} 个无效项目记录`);
+    }
+  } else {
+    // 实际清理无效项目
+    const staleHashes = await registry.cleanStaleProjects();
+    if (staleHashes.length > 0) {
+      info(`清理了 ${staleHashes.length} 个无效项目记录`);
+    }
 
-  // 清理失效的 Store 引用（这是元数据清理，不受 dry-run 控制）
-  const staleRefs = await registry.cleanStaleReferences();
-  if (staleRefs > 0) {
-    info(`清理了 ${staleRefs} 个失效引用`);
-  }
+    // 实际清理失效引用
+    const staleRefs = await registry.cleanStaleReferences();
+    if (staleRefs > 0) {
+      info(`清理了 ${staleRefs} 个失效引用`);
+    }
 
-  // 保存元数据清理结果
-  if (staleHashes.length > 0 || staleRefs > 0) {
-    await registry.save();
+    // 保存元数据清理结果
+    if (staleHashes.length > 0 || staleRefs > 0) {
+      await registry.save();
+    }
   }
 
   // 获取孤立的 LibraryInfo（没有对应 StoreEntry 的库记录）

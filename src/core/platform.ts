@@ -212,6 +212,24 @@ export function isMacOS(): boolean {
 }
 
 /**
+ * 检查文件系统是否大小写不敏感
+ * Windows 和 macOS (默认 APFS/HFS+) 是大小写不敏感的
+ */
+export function isCaseInsensitiveFS(): boolean {
+  return isWindows() || isMacOS();
+}
+
+/**
+ * 比较两个路径是否相等（考虑文件系统大小写敏感性）
+ */
+export function pathsEqual(p1: string, p2: string): boolean {
+  if (isCaseInsensitiveFS()) {
+    return p1.toLowerCase() === p2.toLowerCase();
+  }
+  return p1 === p2;
+}
+
+/**
  * 规范化路径分隔符
  */
 export function normalizePath(p: string): string {

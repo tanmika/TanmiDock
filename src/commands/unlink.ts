@@ -72,24 +72,41 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
   info(`取消链接: ${shrinkHome(absolutePath)}`);
   blank();
 
-  let restored = 0;
-  let removed = 0;
+  // ========== 阶段 1: 收集依赖信息 ==========
+  // 在修改 Registry 之前，先收集所有需要处理的依赖信息
+  interface DepInfo {
+    libName: string;
+    commit: string;
+    libKey: string;
+    localPath: string;
+    storeKeys: string[];
+  }
+  const depsToProcess: DepInfo[] = [];
 
-  // 遍历项目的依赖
   for (const dep of projectInfo.dependencies) {
-    const localPath = path.join(absolutePath, dep.linkedPath);
-    const libKey = registry.getLibraryKey(dep.libName, dep.commit);
+    depsToProcess.push({
+      libName: dep.libName,
+      commit: dep.commit,
+      libKey: registry.getLibraryKey(dep.libName, dep.commit),
+      localPath: path.join(absolutePath, dep.linkedPath),
+      storeKeys: registry.getLibraryStoreKeys(dep.libName, dep.commit),
+    });
+  }
 
+  // ========== 阶段 2: 还原符号链接 ==========
+  let restored = 0;
+
+  for (const dep of depsToProcess) {
     // 检查是否为符号链接（支持单平台和多平台模式）
-    const isTopLevelLink = await linker.isSymlink(localPath);
+    const isTopLevelLink = await linker.isSymlink(dep.localPath);
     let hasInternalLinks = false;
 
     if (!isTopLevelLink) {
       // 检查内部是否有符号链接（多平台模式）
       try {
-        const entries = await fs.readdir(localPath, { withFileTypes: true });
+        const entries = await fs.readdir(dep.localPath, { withFileTypes: true });
         for (const entry of entries) {
-          if (await linker.isSymlink(path.join(localPath, entry.name))) {
+          if (await linker.isSymlink(path.join(dep.localPath, entry.name))) {
             hasInternalLinks = true;
             break;
           }
@@ -101,8 +118,7 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
 
     if (isTopLevelLink) {
       try {
-        // 单平台模式：顶层是符号链接，直接还原
-        await linker.restoreFromLink(localPath);
+        await linker.restoreFromLink(dep.localPath);
         success(`${dep.libName} (${dep.commit.slice(0, 7)}) - 已还原`);
         restored++;
       } catch (err) {
@@ -110,36 +126,36 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
       }
     } else if (hasInternalLinks) {
       try {
-        // 多平台模式：顶层是普通目录，内部有符号链接
-        await linker.restoreMultiPlatform(localPath);
+        await linker.restoreMultiPlatform(dep.localPath);
         success(`${dep.libName} (${dep.commit.slice(0, 7)}) - 已还原`);
         restored++;
       } catch (err) {
         warn(`${dep.libName} 还原失败: ${(err as Error).message}`);
       }
     }
+  }
 
-    // 移除 StoreEntry 引用（该库的所有平台）
-    // 注意：需要在 --remove 检查之前移除引用，以便正确判断是否还有其他项目引用
-    const depStoreKeys = registry.getLibraryStoreKeys(dep.libName, dep.commit);
-    for (const storeKey of depStoreKeys) {
-      registry.removeStoreReference(storeKey, projectHash);
-    }
+  // ========== 阶段 3: 移除项目记录和引用 ==========
+  // removeProject 会自动移除该项目对所有 StoreEntry 的引用
+  registry.removeProject(projectHash);
 
-    // 如果需要删除无引用的库
-    if (options.remove) {
-      // 复用 depStoreKeys，检查是否还有其他项目引用
-      const hasReferences = depStoreKeys.some((key) => {
+  // ========== 阶段 4: 清理无引用的 Store（可选）==========
+  let removed = 0;
+
+  if (options.remove) {
+    const storeModule = await import('../core/store.js');
+    const storePath = await storeModule.getStorePath();
+
+    for (const dep of depsToProcess) {
+      // 检查该库是否还有其他项目引用
+      const hasReferences = dep.storeKeys.some((key) => {
         const storeEntry = registry.getStore(key);
         return storeEntry && storeEntry.usedBy.length > 0;
       });
 
       if (!hasReferences) {
         try {
-          const storeModule = await import('../core/store.js');
-          const storePath = await storeModule.getStorePath();
-
-          // 从 StoreEntry 动态获取平台列表
+          // 删除所有平台的 Store 文件和记录
           const platforms = registry.getLibraryPlatforms(dep.libName, dep.commit);
           for (const platform of platforms) {
             await storeModule.remove(dep.libName, dep.commit, platform);
@@ -158,7 +174,7 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
             await fs.rm(libPath, { recursive: true, force: true }).catch(() => {});
           }
 
-          registry.removeLibrary(libKey);
+          registry.removeLibrary(dep.libKey);
           removed++;
           hint(`${dep.libName} (${dep.commit.slice(0, 7)}) - 已从 Store 删除`);
         } catch (err) {
@@ -168,8 +184,7 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
     }
   }
 
-  // 直接删除项目记录（不调用 removeProject 以避免重复移除引用）
-  registry.getRaw().projects[projectHash] && delete registry.getRaw().projects[projectHash];
+  // ========== 阶段 5: 保存并输出结果 ==========
   await registry.save();
 
   blank();
