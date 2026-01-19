@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-01-19
+
+### Added
+
+- **非 TTY 进度日志**: 下载监控器在非 TTY 环境下每 10 秒输出进度日志，方便 AI 等自动化工具监控
+
+### Fixed
+
+- **信号中断锁释放**: `gracefulShutdown` 正确释放全局锁，避免 Ctrl+C 后锁残留
+- **锁超时优化**: stale 超时从 60s 减到 30s，加快异常恢复
+
 ## [0.7.0] - 2026-01-19
 
 ### Changed
