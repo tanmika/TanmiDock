@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-01-19
+
+### Changed
+
+- **合并诊断命令**: `doctor`、`verify`、`repair` 合并为统一的 `check` 命令
+  - `td check` - 交互式健康检查和修复
+  - `td check --fix` - 自动修复所有问题
+  - `td check --dry-run` - 仅显示问题不修复
+
+### Added
+
+- **ESC 取消支持**: 所有交互页面支持 ESC 键取消/返回
+  - 显示帮助提示: `↑↓ 选择 • ⏎ 确认 • esc 取消`
+
+### Fixed
+
+- **项目重复登记**: 修复同一项目从不同子目录链接时的重复登记问题
+- **引用计数不一致**: 修复库引用计数与实际引用不匹配的问题
+- **暗色终端可见性**: 退出/取消按钮改用 dim 效果，解决 gray 在暗色终端下不可见的问题
+
 ## [0.6.4] - 2026-01-17
 
 ### Added
