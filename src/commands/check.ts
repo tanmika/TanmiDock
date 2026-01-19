@@ -467,8 +467,8 @@ function renderReport(result: CheckResult): void {
     integ.missingLibraries.length === 0,
     integ.missingLibraries.length === 0
       ? '无'
-      : `${integ.missingLibraries.length} 个库文件缺失`,
-    false
+      : `${integ.missingLibraries.length} 个 (需 td link 下载)`,
+    true // 显示为警告而非错误，因为需要用户手动下载
   );
   renderCheck(
     '引用关系',
@@ -540,6 +540,11 @@ async function interactiveCheck(
   switch (action) {
     case 'fix-all':
       await fixAllIssues(issues, { prune: options.prune, force: true });
+      // 缺失库无法自动修复，需要提示用户
+      if (issues.missingLibraries.length > 0) {
+        blank();
+        hint(`缺失库 (${issues.missingLibraries.length} 个) 需要通过 td link 重新下载`);
+      }
       break;
     case 'select':
       await selectiveFix(issues, options);
@@ -652,6 +657,12 @@ async function selectiveFix(
   };
 
   await fixAllIssues(toFix, { prune: pruneOrphans, force: options.force });
+
+  // 缺失库无法自动修复，需要提示用户
+  if (issues.missingLibraries.length > 0) {
+    blank();
+    hint(`缺失库 (${issues.missingLibraries.length} 个) 需要通过 td link 重新下载`);
+  }
 }
 
 function showDetails(issues: IntegrityIssue): void {
