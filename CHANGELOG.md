@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-01-19
+
+### Changed
+
+- **引用系统迁移**: 库引用关系从 `LibraryInfo.referencedBy` 迁移至 `StoreEntry.usedBy`
+  - 引用数据存储在 Store 层级而非 Library 层级
+  - 简化引用管理，提高数据一致性
+- **unlink 命令重构**: 重构为 5 阶段流程，使用标准 `removeProject()` 替代直接操作
+- **孤立库处理**: 孤立库直接删除，不再尝试登记
+- **check 命令简化**: 移除 `--prune` 选项
+
+### Added
+
+- **路径比较函数**: 新增 `pathsEqual()` 处理 macOS/Windows 大小写不敏感文件系统
+
+### Fixed
+
+- **dry-run 语义**: `clean --dry-run` 不再修改元数据
+- **ESC 取消显示**: 所有交互组件取消时显示 `(已取消)`
+- **平台检测**: check 命令不再硬编码 'macOS'，无法确定平台时跳过
+- **递归调用**: init 命令路径选择改为 while 循环
+- **调试日志**: 空 catch 块添加 DEBUG 级别日志
+
 ## [0.6.5] - 2026-01-19
 
 ### Changed
