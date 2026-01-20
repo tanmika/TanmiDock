@@ -676,3 +676,80 @@ export async function checkboxSelect<T extends string>(
   });
   return result;
 }
+
+// ============ 可选配置选择 ============
+
+/**
+ * 可选配置对象
+ */
+export interface OptionalConfig {
+  name: string;
+  path: string;
+}
+
+/**
+ * selectOptionalConfigs 的选项
+ */
+export interface SelectOptionalConfigsOptions {
+  isTTY: boolean;
+  specifiedConfigs: string[];
+}
+
+/**
+ * 选择可选配置文件
+ *
+ * @param configs 可选配置对象数组
+ * @param options 选项，包含 isTTY 和 specifiedConfigs
+ * @returns 选中的配置对象数组，TTY 模式下取消返回 PROMPT_CANCELLED
+ * @throws 非 TTY 无 specifiedConfigs 时抛出错误
+ * @throws specifiedConfigs 中的配置不存在时抛出错误
+ */
+export async function selectOptionalConfigs(
+  configs: OptionalConfig[],
+  options: SelectOptionalConfigsOptions
+): Promise<OptionalConfig[] | typeof PROMPT_CANCELLED> {
+  const { isTTY, specifiedConfigs } = options;
+
+  // 非 TTY 模式：必须通过 --config 指定配置
+  if (!isTTY) {
+    if (specifiedConfigs.length === 0) {
+      throw new Error('非交互模式下必须使用 --config 参数指定配置文件');
+    }
+
+    // 查找指定的配置
+    const result: OptionalConfig[] = [];
+    for (const specName of specifiedConfigs) {
+      const found = configs.find((c) => c.name === specName);
+      if (!found) {
+        throw new Error(`找不到指定的配置文件: ${specName}`);
+      }
+      result.push(found);
+    }
+    return result;
+  }
+
+  // TTY 模式：交互式选择
+  const specifiedSet = new Set(specifiedConfigs);
+
+  // 构建选项列表
+  const choices = configs.map((config) => ({
+    name: config.name,
+    value: config.name,
+    checked: specifiedSet.has(config.name),
+  }));
+
+  // 使用支持 ESC 的 checkbox
+  const selected = await checkboxWithCancel<string>({
+    message: '请选择要使用的可选配置:',
+    choices,
+    pageSize: 15,
+  });
+
+  if (selected === PROMPT_CANCELLED) {
+    return PROMPT_CANCELLED;
+  }
+
+  // 将选中的名称映射回配置对象
+  const selectedSet = new Set(selected);
+  return configs.filter((c) => selectedSet.has(c.name));
+}

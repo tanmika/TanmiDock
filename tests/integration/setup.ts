@@ -408,6 +408,7 @@ export interface LinkOptions {
   yes?: boolean;
   download?: boolean;
   dryRun?: boolean;
+  config?: string[];
 }
 
 export interface UnlinkOptions {
@@ -507,6 +508,7 @@ export async function runCommand(
         yes: linkOpts.yes ?? true, // 测试中默认跳过确认
         download: linkOpts.download ?? false,
         dryRun: linkOpts.dryRun ?? false,
+        config: linkOpts.config,
       });
       break;
     }

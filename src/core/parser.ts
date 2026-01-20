@@ -16,6 +16,26 @@ const CONFIG_FILENAME = 'codepac-dep.json';
 const SEARCH_DIRS = ['3rdparty', '.'];
 
 /**
+ * 可选配置文件信息
+ */
+export interface OptionalConfigInfo {
+  /** 配置名称（从文件名提取，如 codepac-dep-inner.json -> inner） */
+  name: string;
+  /** 配置文件完整路径 */
+  path: string;
+}
+
+/**
+ * 配置文件发现结果
+ */
+export interface ConfigDiscoveryResult {
+  /** 主配置文件路径 */
+  mainConfig: string;
+  /** 可选配置文件列表（不含主配置），按名称排序 */
+  optionalConfigs: OptionalConfigInfo[];
+}
+
+/**
  * 查找 codepac 配置文件
  * @param projectPath 项目路径
  * @returns 配置文件路径，不存在返回 null
@@ -257,6 +277,144 @@ export function getRelativeConfigPath(projectPath: string, configPath: string): 
   return path.relative(projectPath, configPath);
 }
 
+/**
+ * 从文件名提取配置名称
+ * 例如: codepac-dep-inner.json -> inner
+ * @param filename 文件名
+ * @returns 配置名称
+ */
+function extractConfigName(filename: string): string {
+  // 移除前缀 "codepac-dep-" 和后缀 ".json"
+  return filename.slice('codepac-dep-'.length, -'.json'.length);
+}
+
+/**
+ * 发现项目下所有 codepac 配置文件
+ * 扫描指定目录下的 codepac-dep.json 和 codepac-dep-*.json 文件
+ * @param projectPath 项目路径（可以是项目根目录或 3rdparty 目录）
+ * @returns 主配置和可选配置列表，无配置时返回 null
+ */
+export async function findAllCodepacConfigs(projectPath: string): Promise<ConfigDiscoveryResult | null> {
+  // 确定搜索目录：如果传入的是项目根目录，则在 3rdparty 子目录中查找
+  // 如果传入的已经是 3rdparty 目录，则直接在该目录查找
+  let searchDir = projectPath;
+
+  // 检查目录是否存在
+  try {
+    await fs.access(searchDir);
+  } catch {
+    // 目录不存在，返回 null
+    return null;
+  }
+
+  // 读取目录内容
+  let files: string[];
+  try {
+    files = await fs.readdir(searchDir);
+  } catch {
+    return null;
+  }
+
+  // 检查主配置是否存在
+  const mainConfigPath = path.join(searchDir, CONFIG_FILENAME);
+  let mainExists = false;
+  try {
+    await fs.access(mainConfigPath);
+    mainExists = true;
+  } catch {
+    // 主配置不存在
+  }
+
+  // 如果主配置不存在，返回 null
+  if (!mainExists) {
+    return null;
+  }
+
+  // 筛选可选配置文件：codepac-dep-*.json（排除主配置 codepac-dep.json）
+  const optionalConfigs: OptionalConfigInfo[] = files
+    .filter(file => {
+      // 匹配 codepac-dep-*.json 模式，但不包括 codepac-dep.json
+      return file.startsWith('codepac-dep-') && file.endsWith('.json');
+    })
+    .map(file => ({
+      name: extractConfigName(file),
+      path: path.join(searchDir, file),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name)); // 按名称排序
+
+  return {
+    mainConfig: mainConfigPath,
+    optionalConfigs,
+  };
+}
+
+/**
+ * 合并多个配置文件的依赖
+ * 读取主配置和可选配置文件，合并所有依赖并去重
+ * @param mainConfigPath 主配置文件路径
+ * @param optionalConfigPaths 可选配置文件路径列表
+ * @returns 合并后的依赖列表（按 libName 去重，后者覆盖前者）
+ */
+export async function mergeDependencies(
+  mainConfigPath: string,
+  optionalConfigPaths: string[]
+): Promise<ParsedDependency[]> {
+  // 使用 Map 按 libName 去重，后者覆盖前者
+  const dependencyMap = new Map<string, ParsedDependency>();
+
+  // 读取主配置
+  const mainConfig = await parseCodepacDep(mainConfigPath);
+  const mainDeps = extractDependencies(mainConfig);
+  for (const dep of mainDeps) {
+    dependencyMap.set(dep.libName, dep);
+  }
+
+  // 读取可选配置并合并
+  for (const optionalPath of optionalConfigPaths) {
+    const optionalConfig = await parseCodepacDep(optionalPath);
+    const optionalDeps = extractDependencies(optionalConfig);
+    for (const dep of optionalDeps) {
+      dependencyMap.set(dep.libName, dep); // 后者覆盖前者
+    }
+  }
+
+  return Array.from(dependencyMap.values());
+}
+
+/**
+ * 保存用户选择的可选配置偏好到 registry
+ * @param projectPath 项目路径
+ * @param configs 选择的可选配置文件名列表
+ */
+export async function saveOptionalConfigPreference(
+  projectPath: string,
+  configs: string[]
+): Promise<void> {
+  // 延迟导入避免循环依赖
+  const { getRegistry } = await import('./registry.js');
+  const registry = getRegistry();
+  await registry.load();
+  const pathHash = registry.hashPath(projectPath);
+  registry.updateProject(pathHash, { optionalConfigs: configs });
+  await registry.save();
+}
+
+/**
+ * 从 registry 加载已保存的可选配置偏好
+ * @param projectPath 项目路径
+ * @returns 保存的配置名称列表，无偏好时返回空数组
+ */
+export async function loadOptionalConfigPreference(
+  projectPath: string
+): Promise<string[]> {
+  // 延迟导入避免循环依赖
+  const { getRegistry } = await import('./registry.js');
+  const registry = getRegistry();
+  await registry.load();
+  const project = registry.getProjectByPath(projectPath);
+  return project?.optionalConfigs ?? [];
+}
+
 export default {
   findCodepacConfig,
   normalizeProjectRoot,
@@ -267,4 +425,8 @@ export default {
   extractNestedDependencies,
   parseProjectDependencies,
   getRelativeConfigPath,
+  findAllCodepacConfigs,
+  mergeDependencies,
+  saveOptionalConfigPreference,
+  loadOptionalConfigPreference,
 };

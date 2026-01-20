@@ -79,6 +79,7 @@ export interface ProjectInfo {
   lastLinked: string;
   platforms: string[];      // 项目使用的平台列表 (macOS, iOS, android...)
   dependencies: DependencyRef[];
+  optionalConfigs?: string[];  // 用户选择的可选配置文件名列表
 }
 
 /**

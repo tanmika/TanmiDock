@@ -237,6 +237,20 @@ class RegistryManager {
   }
 
   /**
+   * 更新项目的可选配置记忆
+   * @param projectPath 项目路径
+   * @param configs 选择的可选配置文件名列表
+   */
+  updateProjectOptionalConfigs(projectPath: string, configs: string[]): void {
+    this.ensureLoaded();
+    const pathHash = this.hashPath(projectPath);
+    const project = this.registry.projects[pathHash];
+    if (project) {
+      project.optionalConfigs = configs;
+    }
+  }
+
+  /**
    * 移除项目
    * 注意：会移除该项目对所有 StoreEntry 的引用（包括直接依赖和嵌套依赖）
    */

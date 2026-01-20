@@ -17,7 +17,10 @@ import {
   normalizeProjectRoot,
   findAllCodepacConfigs,
   extractDependencies,
+  saveOptionalConfigPreference,
+  loadOptionalConfigPreference,
 } from '../core/parser.js';
+import type { OptionalConfigInfo } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
 import type { NestedAbsorbInfo } from '../core/store.js';
@@ -34,7 +37,8 @@ import { verifyLocalCommit } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext } from '../types/index.js';
 import { withGlobalLock } from '../utils/global-lock.js';
-import { confirmAction, selectPlatforms, parsePlatformArgs, selectOption, PROMPT_CANCELLED } from '../utils/prompt.js';
+import { confirmAction, selectPlatforms, parsePlatformArgs, selectOption, selectOptionalConfigs, PROMPT_CANCELLED } from '../utils/prompt.js';
+import type { OptionalConfig, SelectOptionalConfigsOptions } from '../utils/prompt.js';
 import pLimit from 'p-limit';
 import { EXIT_CODES } from '../utils/exit-codes.js';
 
@@ -49,6 +53,7 @@ export function createLinkCommand(): Command {
     .option('-y, --yes', '跳过确认提示')
     .option('--no-download', '不自动下载缺失库')
     .option('--dry-run', '只显示将要执行的操作')
+    .option('--config <configs...>', '指定可选配置文件 (如 codepac-dep-inner.json)')
     .addHelpText(
       'after',
       `${getPlatformHelpText()}
@@ -59,7 +64,8 @@ export function createLinkCommand(): Command {
   td link -p mac                只链接 macOS 平台
   td link -p mac android        链接多个平台
   td link --dry-run             预览操作，不实际执行
-  td link -y                    跳过确认，自动执行`
+  td link -y                    跳过确认，自动执行
+  td link --config codepac-dep-inner.json   使用指定的可选配置`
     )
     .action(async (projectPath: string, options) => {
       await ensureInitialized();
@@ -80,6 +86,7 @@ interface LinkOptions {
   yes: boolean;
   download: boolean;
   dryRun: boolean;
+  config?: string[];
 }
 
 /**
@@ -141,6 +148,50 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     process.exit(EXIT_CODES.NOINPUT);
   }
 
+  // 发现可选配置文件（在 3rdparty 目录中查找）
+  const thirdpartyDir = path.join(absolutePath, '3rdparty');
+  const configDiscovery = await findAllCodepacConfigs(thirdpartyDir);
+  let selectedOptionalConfigs: OptionalConfigInfo[] = [];
+
+  if (configDiscovery && configDiscovery.optionalConfigs.length > 0) {
+    // 有可选配置
+    if (options.config && options.config.length > 0) {
+      // CLI 指定了配置文件名，按名称查找对应配置
+      for (const configName of options.config) {
+        const found = configDiscovery.optionalConfigs.find(c => c.name === configName);
+        if (!found) {
+          error(`找不到指定的配置: ${configName}`);
+          hint(`可用配置: ${configDiscovery.optionalConfigs.map(c => c.name).join(', ')}`);
+          process.exit(EXIT_CODES.MISUSE);
+        }
+        selectedOptionalConfigs.push(found);
+      }
+    } else if (options.yes) {
+      // --yes 模式：跳过可选配置选择（无论 TTY 还是非 TTY）
+      // selectedOptionalConfigs 保持为空
+    } else if (process.stdout.isTTY) {
+      // TTY 交互模式：显示配置选择
+      const rememberedConfigs = existingProject?.optionalConfigs ?? [];
+      const selectOptions: SelectOptionalConfigsOptions = {
+        isTTY: true,
+        specifiedConfigs: rememberedConfigs,
+      };
+      const selected = await selectOptionalConfigs(configDiscovery.optionalConfigs, selectOptions);
+      if (selected === PROMPT_CANCELLED) {
+        info('已取消');
+        return;
+      }
+      selectedOptionalConfigs = selected;
+    } else {
+      // 非 TTY 模式且没有 --yes 或 --config：必须指定 --config
+      error('发现可选配置文件，非交互模式下必须使用 --config 或 --yes 参数');
+      hint(`可用配置: ${configDiscovery.optionalConfigs.map(c => c.name).join(', ')}`);
+      hint('示例: td link --config inner');
+      hint('或使用 --yes 跳过可选配置');
+      process.exit(EXIT_CODES.MISUSE);
+    }
+  }
+
   // 解析依赖
   info(`分析 ${absolutePath}`);
   let dependencies: ParsedDependency[];
@@ -152,6 +203,20 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     dependencies = result.dependencies;
     configPath = result.configPath;
     configVars = result.vars;
+
+    // 如果选择了可选配置，合并额外的依赖
+    if (selectedOptionalConfigs.length > 0) {
+      for (const optionalConfig of selectedOptionalConfigs) {
+        try {
+          const optionalResult = await parseCodepacDep(optionalConfig.path);
+          const optionalDeps = extractDependencies(optionalResult);
+          dependencies = mergeDepLists(dependencies, optionalDeps);
+          info(`  + ${optionalConfig.name}: ${optionalDeps.length} 个依赖`);
+        } catch (optErr) {
+          warn(`无法解析可选配置 ${optionalConfig.name}: ${(optErr as Error).message}`);
+        }
+      }
+    }
   } catch (err) {
     error((err as Error).message);
     process.exit(EXIT_CODES.DATAERR);
@@ -1430,6 +1495,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       lastLinked: new Date().toISOString(),
       platforms: finalLinkPlatforms, // 记录实际链接的平台（包括用户选择的额外平台）
       dependencies: newDependencies,
+      optionalConfigs: selectedOptionalConfigs.length > 0 ? selectedOptionalConfigs.map(c => c.name) : undefined,
     });
 
     // 更新 Store 引用关系
@@ -2478,6 +2544,27 @@ async function linkNestedDependencies(
       warn(`${indent}  ${dep.libName} - 缺失 (跳过下载)`);
     }
   }
+}
+
+/**
+ * 合并多个配置的依赖列表，去重（后者覆盖前者）
+ * @param main 主配置的依赖列表
+ * @param optional 可选配置的依赖列表
+ * @returns 合并后的依赖列表
+ */
+function mergeDepLists(main: ParsedDependency[], optional: ParsedDependency[]): ParsedDependency[] {
+  // 使用 Map 按 libName 去重，后者覆盖前者
+  const depMap = new Map<string, ParsedDependency>();
+
+  for (const dep of main) {
+    depMap.set(dep.libName, dep);
+  }
+
+  for (const dep of optional) {
+    depMap.set(dep.libName, dep); // 后者覆盖前者
+  }
+
+  return Array.from(depMap.values());
 }
 
 export default createLinkCommand;
