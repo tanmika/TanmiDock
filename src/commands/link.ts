@@ -15,6 +15,8 @@ import {
   parseActionCommand,
   extractNestedDependencies,
   normalizeProjectRoot,
+  findAllCodepacConfigs,
+  extractDependencies,
 } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
@@ -22,7 +24,7 @@ import type { NestedAbsorbInfo } from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { setProxyConfig } from '../core/codepac.js';
-import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, pathsEqual } from '../core/platform.js';
+import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, pathsEqual, isSparseOnlyCommon } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize } from '../utils/fs-utils.js';
@@ -1077,8 +1079,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               }
 
               try {
-                // 2. 检测是否为 General 库（没有 sparse 配置且没有平台目录）
-                const isNewGeneral = !dependency.sparse && downloadResult.platformDirs.length === 0;
+                // 2. 检测是否为 General 库（没有 sparse 配置，或 sparse 只有 common，且没有平台目录）
+                const isNewGeneral = (!dependency.sparse || isSparseOnlyCommon(dependency.sparse)) && downloadResult.platformDirs.length === 0;
 
                 if (isNewGeneral) {
                   // General 库：把整个下载内容移到 _shared
@@ -2374,8 +2376,8 @@ async function linkNestedDependencies(
           hint(`${indent}  已过滤: ${downloadResult.cleanedPlatforms.join(', ')}`);
         }
 
-        // 检测是否为 General 库
-        const isNewGeneral = !dep.sparse && downloadResult.platformDirs.length === 0;
+        // 检测是否为 General 库（没有 sparse 配置，或 sparse 只有 common，且没有平台目录）
+        const isNewGeneral = (!dep.sparse || isSparseOnlyCommon(dep.sparse)) && downloadResult.platformDirs.length === 0;
 
         if (isNewGeneral) {
           // General 库处理

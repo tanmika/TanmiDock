@@ -14,6 +14,7 @@ import {
   resolvePath,
   isAbsolutePath,
   joinPath,
+  isSparseOnlyCommon,
 } from '../../src/core/platform.js';
 
 describe('platform', () => {
@@ -144,6 +145,34 @@ describe('platform', () => {
     it('should join path parts', () => {
       expect(joinPath('/foo', 'bar', 'baz')).toBe('/foo/bar/baz');
       expect(joinPath('a', 'b', 'c')).toBe('a/b/c');
+    });
+  });
+
+  describe('isSparseOnlyCommon', () => {
+    it('should return true when sparse only has common key', () => {
+      expect(isSparseOnlyCommon({ common: ['include'] })).toBe(true);
+      expect(isSparseOnlyCommon({ common: ['include', 'src'] })).toBe(true);
+    });
+
+    it('should return true when sparse is empty object', () => {
+      expect(isSparseOnlyCommon({})).toBe(true);
+    });
+
+    it('should return false when sparse has platform keys', () => {
+      expect(isSparseOnlyCommon({ common: ['include'], macOS: ['macOS'] })).toBe(false);
+      expect(isSparseOnlyCommon({ macOS: ['macOS'] })).toBe(false);
+      expect(isSparseOnlyCommon({ common: ['include'], android: ['android'], iOS: ['iOS'] })).toBe(false);
+    });
+
+    it('should return false when sparse is string (variable reference)', () => {
+      expect(isSparseOnlyCommon('${ALL_COMMON_SPARSE}')).toBe(false);
+      expect(isSparseOnlyCommon('${SOME_VAR}')).toBe(false);
+    });
+
+    it('should return false when sparse is undefined or null', () => {
+      expect(isSparseOnlyCommon(undefined)).toBe(false);
+      // @ts-expect-error - testing null case
+      expect(isSparseOnlyCommon(null)).toBe(false);
     });
   });
 });

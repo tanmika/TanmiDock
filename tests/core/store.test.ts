@@ -11,8 +11,17 @@ vi.mock('fs/promises', () => ({
     rmdir: vi.fn(),
     readdir: vi.fn(),
     stat: vi.fn(),
+    lstat: vi.fn(),
     copyFile: vi.fn(),
   },
+}));
+
+// Mock logger
+vi.mock('../../src/utils/logger.js', () => ({
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  error: vi.fn(),
 }));
 
 // Mock config
@@ -34,9 +43,11 @@ describe('store', () => {
     rmdir: ReturnType<typeof vi.fn>;
     readdir: ReturnType<typeof vi.fn>;
     stat: ReturnType<typeof vi.fn>;
+    lstat: ReturnType<typeof vi.fn>;
     copyFile: ReturnType<typeof vi.fn>;
   };
   let configMock: { getStorePath: ReturnType<typeof vi.fn> };
+  let loggerMock: { warn: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     vi.resetModules();
@@ -47,6 +58,10 @@ describe('store', () => {
     const config = await import('../../src/core/config.js');
     configMock = config as typeof configMock;
     configMock.getStorePath.mockReset();
+
+    const logger = await import('../../src/utils/logger.js');
+    loggerMock = logger as typeof loggerMock;
+    loggerMock.warn.mockReset();
   });
 
   afterEach(() => {
@@ -796,6 +811,97 @@ describe('store', () => {
 
       expect(result.existing).toEqual([]);
       expect(result.missing).toEqual(['macOS', 'Win']);
+    });
+  });
+
+  describe('absorbGeneral', () => {
+    it('should move libDir to _shared in Store', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      // _shared 不存在
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+      // libDir 没有嵌套 _shared
+      fsMock.lstat.mockRejectedValue(new Error('ENOENT'));
+      fsMock.rename.mockResolvedValue(undefined);
+
+      const { absorbGeneral } = await import('../../src/core/store.js');
+      const result = await absorbGeneral('/tmp/download/mylib', 'mylib', 'abc123');
+
+      expect(result).toBe(path.join('/store', 'mylib', 'abc123', '_shared'));
+      expect(fsMock.mkdir).toHaveBeenCalledWith(
+        path.join('/store', 'mylib', 'abc123'),
+        { recursive: true }
+      );
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        '/tmp/download/mylib',
+        path.join('/store', 'mylib', 'abc123', '_shared')
+      );
+    });
+
+    it('should skip when _shared already exists', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      // _shared 已存在
+      fsMock.access.mockResolvedValue(undefined);
+
+      const { absorbGeneral } = await import('../../src/core/store.js');
+      const result = await absorbGeneral('/tmp/download/mylib', 'mylib', 'abc123');
+
+      expect(result).toBe(path.join('/store', 'mylib', 'abc123', '_shared'));
+      // 不应该调用 rename
+      expect(fsMock.rename).not.toHaveBeenCalled();
+    });
+
+    it('should handle nested _shared to prevent double nesting', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      // _shared 不存在
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+      // libDir 包含嵌套 _shared 子目录
+      fsMock.lstat.mockResolvedValue({ isDirectory: () => true });
+      fsMock.rename.mockResolvedValue(undefined);
+      fsMock.rm.mockResolvedValue(undefined);
+
+      const { absorbGeneral } = await import('../../src/core/store.js');
+      const result = await absorbGeneral('/tmp/download/mylib', 'mylib', 'abc123');
+
+      expect(result).toBe(path.join('/store', 'mylib', 'abc123', '_shared'));
+      // 应该移动内层 _shared 而不是整个 libDir
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        path.join('/tmp/download/mylib', '_shared'),
+        path.join('/store', 'mylib', 'abc123', '_shared')
+      );
+      // 应该输出警告
+      expect(loggerMock.warn).toHaveBeenCalledWith(
+        expect.stringContaining('检测到源目录包含 _shared 子目录')
+      );
+      // 应该清理残留的空 libDir
+      expect(fsMock.rm).toHaveBeenCalledWith(
+        '/tmp/download/mylib',
+        { recursive: true, force: true }
+      );
+    });
+
+    it('should not treat file named _shared as nested directory', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      // _shared 不存在
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+      // libDir/_shared 是文件不是目录
+      fsMock.lstat.mockResolvedValue({ isDirectory: () => false });
+      fsMock.rename.mockResolvedValue(undefined);
+
+      const { absorbGeneral } = await import('../../src/core/store.js');
+      const result = await absorbGeneral('/tmp/download/mylib', 'mylib', 'abc123');
+
+      expect(result).toBe(path.join('/store', 'mylib', 'abc123', '_shared'));
+      // 应该移动整个 libDir（正常流程）
+      expect(fsMock.rename).toHaveBeenCalledWith(
+        '/tmp/download/mylib',
+        path.join('/store', 'mylib', 'abc123', '_shared')
+      );
+      // 不应该输出嵌套警告
+      expect(loggerMock.warn).not.toHaveBeenCalled();
     });
   });
 });

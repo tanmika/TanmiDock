@@ -164,6 +164,29 @@ export function normalizePlatformValue(name: string): string {
 export const GENERAL_PLATFORM = 'general';
 
 /**
+ * 检查 sparse 配置是否只有 common 内容（没有任何平台键）
+ * 用于识别应该被当作 General 库处理的有 sparse 配置的库
+ *
+ * @example
+ * // 返回 true - 只有 common
+ * isSparseOnlyCommon({ common: ["include"] })
+ *
+ * // 返回 false - 有平台键
+ * isSparseOnlyCommon({ common: ["include"], macOS: ["macOS"] })
+ *
+ * // 返回 false - 字符串形式的 sparse
+ * isSparseOnlyCommon("${ALL_COMMON_SPARSE}")
+ */
+export function isSparseOnlyCommon(sparse: object | string | undefined): boolean {
+  if (!sparse) return false;
+  if (typeof sparse === 'string') return false;
+
+  const keys = Object.keys(sparse);
+  // 只有 common 键，或者完全没有键
+  return keys.length === 0 || (keys.length === 1 && keys[0] === 'common');
+}
+
+/**
  * 获取配置目录路径
  * - 支持 TANMI_DOCK_HOME 环境变量覆盖（用于测试和开发）
  * - 默认: ~/.tanmi-dock (macOS) 或 %USERPROFILE%\.tanmi-dock (Windows)

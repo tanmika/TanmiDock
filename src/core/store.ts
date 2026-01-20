@@ -501,15 +501,45 @@ export async function absorbGeneral(
     // 不存在，继续
   }
 
-  // 直接把整个 libDir 移动到 _shared
+  // 防止嵌套：检查 libDir 是否已包含 _shared 子目录
+  const nestedSharedPath = path.join(libDir, '_shared');
+  let hasNestedShared = false;
   try {
-    await fs.rename(libDir, sharedPath);
-  } catch (renameErr) {
-    if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
-      // 跨文件系统，使用 safeMoveDir
-      await safeMoveDir(libDir, sharedPath);
-    } else {
-      throw renameErr;
+    const stat = await fs.lstat(nestedSharedPath);
+    hasNestedShared = stat.isDirectory();
+  } catch {
+    // 不存在
+  }
+
+  if (hasNestedShared) {
+    // 源目录已有 _shared 子目录，直接移动内层 _shared 到目标位置
+    // 这防止了 _shared/_shared 嵌套问题
+    logger.warn(`${libName}: 检测到源目录包含 _shared 子目录，自动修正嵌套结构`);
+    try {
+      await fs.rename(nestedSharedPath, sharedPath);
+    } catch (renameErr) {
+      if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+        await safeMoveDir(nestedSharedPath, sharedPath);
+      } else {
+        throw renameErr;
+      }
+    }
+    // 清理残留的空 libDir
+    try {
+      await fs.rm(libDir, { recursive: true, force: true });
+    } catch {
+      // 忽略清理失败
+    }
+  } else {
+    // 正常情况：直接把整个 libDir 移动到 _shared
+    try {
+      await fs.rename(libDir, sharedPath);
+    } catch (renameErr) {
+      if ((renameErr as NodeJS.ErrnoException).code === 'EXDEV') {
+        await safeMoveDir(libDir, sharedPath);
+      } else {
+        throw renameErr;
+      }
     }
   }
 
