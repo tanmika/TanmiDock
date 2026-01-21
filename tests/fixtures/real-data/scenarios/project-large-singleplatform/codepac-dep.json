@@ -1,0 +1,112 @@
+{
+  "version": "2.0",
+  "repos": {
+    "common": [
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/libTSCoreBase.git",
+        "commit": "c90859a43cb6f791bc4dc6ed7aee656b02ce9785",
+        "branch": "master",
+        "dir": "libTSCoreBase",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/libMemoryPool.git",
+        "commit": "283ab95c320fd2287b96ea85b305b7890dade372",
+        "branch": "master",
+        "dir": "libMemoryPool",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libTSpdlog.git",
+        "commit": "a5f9696768d65b3cd303af3cc3b8c1d39bcac741",
+        "branch": "master",
+        "dir": "libTSpdlog",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libopenssl.git",
+        "commit": "b36b0f91f43b8761168c0d1c5e14d27e0e3ef4bb",
+        "branch": "master",
+        "dir": "libopenssl",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicSource/eigen.git",
+        "commit": "9df21dc8b4b576a7aa5c0094daa8d7e8b8be60f0",
+        "branch": "master",
+        "dir": "eigen"
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/zlib.git",
+        "commit": "e8cbe37af8d9fba43e9e35f1327ace2c69677911",
+        "branch": "master",
+        "dir": "zlib",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libpng.git",
+        "commit": "5fc08173000ad07c34b8b70646a6805e3308d83b",
+        "branch": "master",
+        "dir": "libpng",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libjpeg.git",
+        "commit": "2f2fd6e380412fb8d8da4393e4ac02ed02682d6a",
+        "branch": "master",
+        "dir": "libjpeg",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libDngSDK.git",
+        "commit": "fa09c947bd21fca3a18c17a08c19c9d180c78d8d",
+        "branch": "master",
+        "dir": "libDngSDK",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/libImageCodec.git",
+        "commit": "9c6358fe648495bf6b7f92b6a9a05e4c26160152",
+        "branch": "master",
+        "dir": "libImageCodec",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/libTSAI.git",
+        "commit": "2fa0a2ae16671831703093b552fa009d6f351c8d",
+        "branch": "master",
+        "dir": "libTSAI",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libgtest.git",
+        "commit": "fbe94c0903c83fbc1d83282e3d62374e27d2a477",
+        "branch": "master",
+        "dir": "libgtest",
+        "sparse": {
+          "mac": ["macOS"]
+        }
+      }
+    ]
+  }
+}

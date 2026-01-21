@@ -1,0 +1,83 @@
+{
+  "version": "2.0",
+  "repos": {
+    "common": [
+      {
+        "url": "git@git.truesightai.com:TSPublicSource/eigen.git",
+        "commit": "9df21dc8b4b576a7aa5c0094daa8d7e8b8be60f0",
+        "branch": "master",
+        "dir": "eigen"
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/zlib.git",
+        "commit": "e8cbe37af8d9fba43e9e35f1327ace2c69677911",
+        "branch": "master",
+        "dir": "zlib",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libpng.git",
+        "commit": "5fc08173000ad07c34b8b70646a6805e3308d83b",
+        "branch": "master",
+        "dir": "libpng",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libjpeg.git",
+        "commit": "46c4c57efa1c55ad8ccb543a368993094f1bfd8a",
+        "branch": "master",
+        "dir": "libjpeg",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/libTSCoreBase.git",
+        "commit": "25fabbd39d2b1c55cc122867c9badf60e61e017f",
+        "branch": "master",
+        "dir": "libTSCoreBase",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libTSpdlog.git",
+        "commit": "2db4564765c565c00c284d65a7118fb37b56033c",
+        "branch": "master",
+        "dir": "libTSpdlog",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/Lz4.git",
+        "commit": "dc1bce25f43c2c888bd1133c3555b443559d523a",
+        "branch": "master",
+        "dir": "Lz4",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libgtest.git",
+        "commit": "320672d7e6aa297c2eaad03a2c7bb088612ef030",
+        "branch": "master",
+        "dir": "libgtest",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"]
+        }
+      }
+    ]
+  }
+}

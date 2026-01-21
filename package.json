@@ -39,6 +39,10 @@
     "test:integration": "vitest run tests/integration/",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:prepare": "tsx tests/fixtures/real-data/prepare.ts",
+    "test:verify": "cmake -P tests/fixtures/real-data/verify/CMakeLists.txt",
+    "test:clean-cache": "tsx tests/fixtures/real-data/prepare.ts --clean",
+    "test:real-data": "TANMI_DOCK_TEST_MODE=true TANMI_DOCK_CACHE=tests/fixtures/real-data/cache vitest run tests/integration/real-data/",
     "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [

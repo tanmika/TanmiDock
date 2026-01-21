@@ -1,0 +1,185 @@
+{
+  "version": "1.0",
+  "description": "Real data test library manifest for tanmi-dock",
+  "scenarios": {
+    "project-small-multiplatform": {
+      "description": "小项目多平台：6 个库，5 平台，无 actions",
+      "libraryCount": 6,
+      "platforms": ["macOS", "Windows", "iOS", "Android", "Linux"],
+      "hasActions": false
+    },
+    "project-large-singleplatform": {
+      "description": "大项目单平台：12 个库（嵌套后 20+），仅 macOS，有 actions",
+      "libraryCount": 12,
+      "platforms": ["macOS"],
+      "hasActions": true,
+      "actionsLibraries": ["libImageCodec", "libTSAI"]
+    },
+    "project-overlap": {
+      "description": "重叠项目：8 个库，macOS/Windows，与场景 1/2 有重叠",
+      "libraryCount": 8,
+      "platforms": ["macOS", "Windows"],
+      "hasActions": false,
+      "overlap": {
+        "sameCommit": ["eigen", "zlib", "libpng", "Lz4"],
+        "differentCommit": ["libjpeg", "libgtest", "libTSCoreBase", "libTSpdlog"]
+      }
+    }
+  },
+  "libraries": {
+    "eigen": {
+      "repository": "git@git.truesightai.com:TSPublicSource/eigen.git",
+      "commits": {
+        "9df21dc8b4b576a7aa5c0094daa8d7e8b8be60f0": {
+          "usedIn": ["project-small-multiplatform", "project-large-singleplatform", "project-overlap"],
+          "platforms": ["macOS"],
+          "type": "header-only"
+        }
+      }
+    },
+    "zlib": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/3rdparty/zlib.git",
+      "commits": {
+        "e8cbe37af8d9fba43e9e35f1327ace2c69677911": {
+          "usedIn": ["project-small-multiplatform", "project-large-singleplatform", "project-overlap"],
+          "platforms": ["Windows"],
+          "type": "binary"
+        }
+      }
+    },
+    "libpng": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/3rdparty/libpng.git",
+      "commits": {
+        "5fc08173000ad07c34b8b70646a6805e3308d83b": {
+          "usedIn": ["project-small-multiplatform", "project-large-singleplatform", "project-overlap"],
+          "platforms": ["macOS", "Windows", "iOS", "Android", "Linux"],
+          "type": "binary"
+        }
+      }
+    },
+    "libjpeg": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/3rdparty/libjpeg.git",
+      "commits": {
+        "2f2fd6e380412fb8d8da4393e4ac02ed02682d6a": {
+          "usedIn": ["project-small-multiplatform", "project-large-singleplatform"],
+          "platforms": ["macOS", "Windows", "iOS", "Android", "Linux"],
+          "type": "binary"
+        },
+        "46c4c57efa1c55ad8ccb543a368993094f1bfd8a": {
+          "usedIn": ["project-overlap"],
+          "platforms": ["macOS", "Windows"],
+          "type": "binary"
+        }
+      }
+    },
+    "Lz4": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/3rdparty/Lz4.git",
+      "commits": {
+        "dc1bce25f43c2c888bd1133c3555b443559d523a": {
+          "usedIn": ["project-small-multiplatform", "project-overlap"],
+          "platforms": ["macOS", "Windows", "iOS", "Android", "Linux"],
+          "type": "binary"
+        }
+      }
+    },
+    "libgtest": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/3rdparty/libgtest.git",
+      "commits": {
+        "fbe94c0903c83fbc1d83282e3d62374e27d2a477": {
+          "usedIn": ["project-small-multiplatform", "project-large-singleplatform"],
+          "platforms": ["macOS", "Windows", "iOS", "Android", "Linux"],
+          "type": "binary"
+        },
+        "320672d7e6aa297c2eaad03a2c7bb088612ef030": {
+          "usedIn": ["project-overlap"],
+          "platforms": ["macOS", "Windows"],
+          "type": "binary"
+        }
+      }
+    },
+    "libTSCoreBase": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/libTSCoreBase.git",
+      "commits": {
+        "c90859a43cb6f791bc4dc6ed7aee656b02ce9785": {
+          "usedIn": ["project-large-singleplatform"],
+          "platforms": ["macOS"],
+          "type": "binary"
+        },
+        "25fabbd39d2b1c55cc122867c9badf60e61e017f": {
+          "usedIn": ["project-overlap"],
+          "platforms": ["macOS", "Windows"],
+          "type": "binary"
+        }
+      }
+    },
+    "libMemoryPool": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/libMemoryPool.git",
+      "commits": {
+        "283ab95c320fd2287b96ea85b305b7890dade372": {
+          "usedIn": ["project-large-singleplatform"],
+          "platforms": ["macOS"],
+          "type": "binary"
+        }
+      }
+    },
+    "libTSpdlog": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/3rdparty/libTSpdlog.git",
+      "commits": {
+        "a5f9696768d65b3cd303af3cc3b8c1d39bcac741": {
+          "usedIn": ["project-large-singleplatform"],
+          "platforms": ["macOS"],
+          "type": "binary"
+        },
+        "2db4564765c565c00c284d65a7118fb37b56033c": {
+          "usedIn": ["project-overlap"],
+          "platforms": ["macOS", "Windows"],
+          "type": "binary"
+        }
+      }
+    },
+    "libopenssl": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/3rdparty/libopenssl.git",
+      "commits": {
+        "b36b0f91f43b8761168c0d1c5e14d27e0e3ef4bb": {
+          "usedIn": ["project-large-singleplatform"],
+          "platforms": ["macOS"],
+          "type": "binary"
+        }
+      }
+    },
+    "libDngSDK": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/3rdparty/libDngSDK.git",
+      "commits": {
+        "fa09c947bd21fca3a18c17a08c19c9d180c78d8d": {
+          "usedIn": ["project-large-singleplatform"],
+          "platforms": ["macOS"],
+          "type": "binary"
+        }
+      }
+    },
+    "libImageCodec": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/libImageCodec.git",
+      "commits": {
+        "9c6358fe648495bf6b7f92b6a9a05e4c26160152": {
+          "usedIn": ["project-large-singleplatform"],
+          "platforms": ["macOS"],
+          "type": "binary",
+          "hasActions": true,
+          "nestedDependencies": ["libjpeg", "libpng", "zlib"]
+        }
+      }
+    },
+    "libTSAI": {
+      "repository": "git@git.truesightai.com:TSPublicBinary/libTSAI.git",
+      "commits": {
+        "2fa0a2ae16671831703093b552fa009d6f351c8d": {
+          "usedIn": ["project-large-singleplatform"],
+          "platforms": ["macOS"],
+          "type": "binary",
+          "hasActions": true,
+          "nestedDependencies": ["libMNN", "libonnxruntime"]
+        }
+      }
+    }
+  }
+}

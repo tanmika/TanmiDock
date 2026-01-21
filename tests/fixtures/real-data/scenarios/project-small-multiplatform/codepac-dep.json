@@ -1,0 +1,78 @@
+{
+  "version": "2.0",
+  "repos": {
+    "common": [
+      {
+        "url": "git@git.truesightai.com:TSPublicSource/eigen.git",
+        "commit": "9df21dc8b4b576a7aa5c0094daa8d7e8b8be60f0",
+        "branch": "master",
+        "dir": "eigen"
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/zlib.git",
+        "commit": "e8cbe37af8d9fba43e9e35f1327ace2c69677911",
+        "branch": "master",
+        "dir": "zlib",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"],
+          "ios": ["iOS"],
+          "android": ["android"],
+          "linux": ["ubuntu"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libpng.git",
+        "commit": "5fc08173000ad07c34b8b70646a6805e3308d83b",
+        "branch": "master",
+        "dir": "libpng",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"],
+          "ios": ["iOS"],
+          "android": ["android"],
+          "linux": ["ubuntu"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libjpeg.git",
+        "commit": "2f2fd6e380412fb8d8da4393e4ac02ed02682d6a",
+        "branch": "master",
+        "dir": "libjpeg",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"],
+          "ios": ["iOS"],
+          "android": ["android"],
+          "linux": ["ubuntu"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/Lz4.git",
+        "commit": "dc1bce25f43c2c888bd1133c3555b443559d523a",
+        "branch": "master",
+        "dir": "Lz4",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"],
+          "ios": ["iOS"],
+          "android": ["android"],
+          "linux": ["ubuntu"]
+        }
+      },
+      {
+        "url": "git@git.truesightai.com:TSPublicBinary/3rdparty/libgtest.git",
+        "commit": "fbe94c0903c83fbc1d83282e3d62374e27d2a477",
+        "branch": "master",
+        "dir": "libgtest",
+        "sparse": {
+          "mac": ["macOS"],
+          "win": ["Win"],
+          "ios": ["iOS"],
+          "android": ["android"],
+          "linux": ["ubuntu"]
+        }
+      }
+    ]
+  }
+}

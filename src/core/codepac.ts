@@ -348,6 +348,8 @@ export interface DownloadResult {
   sharedFiles: string[];
   /** 被清理的平台目录名（codepac 下载了但用户未请求的） */
   cleanedPlatforms: string[];
+  /** 是否来自测试缓存 */
+  fromCache?: boolean;
 }
 
 /**
@@ -357,6 +359,83 @@ function generateTempDirName(): string {
   const timestamp = Date.now();
   const randomId = Math.random().toString(36).substring(2, 8);
   return `tanmi-dock-${timestamp}-${randomId}`;
+}
+
+/**
+ * 检查测试缓存是否存在
+ * @returns 缓存结果，如果缓存存在返回路径信息，否则返回 null
+ */
+async function checkTestCache(
+  libName: string,
+  commit: string,
+  platforms: string[]
+): Promise<DownloadResult | null> {
+  const testMode = process.env.TANMI_DOCK_TEST_MODE;
+  const cacheDir = process.env.TANMI_DOCK_CACHE;
+
+  if (!testMode || !cacheDir) {
+    return null;
+  }
+
+  const commitShort = commit.substring(0, 7);
+  const cacheLibDir = path.join(cacheDir, libName, commitShort);
+
+  try {
+    await fs.access(cacheLibDir);
+  } catch {
+    // 缓存目录不存在
+    const requireCache = process.env.TANMI_DOCK_REQUIRE_CACHE === 'true';
+    if (requireCache) {
+      throw new Error(
+        `测试缓存未命中: ${libName}@${commitShort}\n` +
+          `缓存目录: ${cacheLibDir}\n` +
+          `请运行 'npm run test:prepare' 准备测试数据`
+      );
+    }
+    return null;
+  }
+
+  // 缓存存在，分析平台目录和共享文件
+  const entries = await fs.readdir(cacheLibDir, { withFileTypes: true });
+  const platformDirs: string[] = [];
+  const sharedFiles: string[] = [];
+
+  for (const entry of entries) {
+    const name = entry.name;
+    if (isPlatformDir(name)) {
+      const normalized = normalizePlatformValue(name);
+      if (platforms.includes(normalized)) {
+        platformDirs.push(normalized);
+      }
+    } else {
+      sharedFiles.push(name);
+    }
+  }
+
+  // 检查是否有用户请求的平台
+  if (platformDirs.length === 0) {
+    const requireCache = process.env.TANMI_DOCK_REQUIRE_CACHE === 'true';
+    if (requireCache) {
+      throw new Error(
+        `测试缓存平台不匹配: ${libName}@${commitShort}\n` +
+          `请求平台: ${platforms.join(', ')}\n` +
+          `缓存目录: ${cacheLibDir}\n` +
+          `请运行 'npm run test:prepare' 重新准备测试数据`
+      );
+    }
+    return null;
+  }
+
+  logger.debug(`测试缓存命中: ${libName}@${commitShort} (${platformDirs.join(', ')})`);
+
+  return {
+    tempDir: cacheDir,
+    libDir: cacheLibDir,
+    platformDirs,
+    sharedFiles,
+    cleanedPlatforms: [],
+    fromCache: true,
+  };
 }
 
 /**
@@ -370,6 +449,12 @@ function generateTempDirName(): string {
  */
 export async function downloadToTemp(options: DownloadOptions): Promise<DownloadResult> {
   const { url, commit, branch, libName, platforms, sparse, vars, onProgress, onTempDirCreated } = options;
+
+  // 测试模式：优先检查缓存
+  const cacheResult = await checkTestCache(libName, commit, platforms);
+  if (cacheResult) {
+    return cacheResult;
+  }
 
   // 检查 codepac 是否安装
   if (!(await isCodepacInstalled())) {
