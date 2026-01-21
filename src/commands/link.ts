@@ -384,6 +384,70 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     }
   }
 
+  // 预扫描所有需要下载的项，统一询问用户
+  const downloadConfirmedLibs = new Set<string>(); // 用户确认下载的库
+  let skipAllDownloads = false; // 用户选择跳过所有下载
+
+  if (options.download && !options.yes) {
+    const needDownloadItems: Array<{ libName: string; commit: string; reason: string }> = [];
+
+    for (const item of classified) {
+      const { dependency, status } = item;
+
+      if (status === DependencyStatus.MISSING) {
+        needDownloadItems.push({
+          libName: dependency.libName,
+          commit: dependency.commit,
+          reason: '缺失',
+        });
+      } else if (status === DependencyStatus.LINK_NEW) {
+        // 检查是否有缺失平台
+        const { missing } = await store.checkPlatformCompleteness(
+          dependency.libName,
+          dependency.commit,
+          platforms
+        );
+        if (missing.length > 0) {
+          needDownloadItems.push({
+            libName: dependency.libName,
+            commit: dependency.commit,
+            reason: `补充平台 [${missing.join(', ')}]`,
+          });
+        }
+      }
+    }
+
+    if (needDownloadItems.length > 0) {
+      info(`发现 ${needDownloadItems.length} 个库需要下载:`);
+      for (const item of needDownloadItems) {
+        info(`  - ${item.libName} (${item.commit.slice(0, 7)}) - ${item.reason}`);
+      }
+      blank();
+
+      const { confirmAction, PROMPT_CANCELLED } = await import('../utils/prompt.js');
+      const confirmed = await confirmAction(
+        `是否下载以上 ${needDownloadItems.length} 个库?`,
+        true
+      );
+
+      if (confirmed === PROMPT_CANCELLED || !confirmed) {
+        warn('跳过所有下载');
+        skipAllDownloads = true;
+      } else {
+        // 用户确认下载，记录所有需要下载的库
+        for (const item of needDownloadItems) {
+          downloadConfirmedLibs.add(`${item.libName}@${item.commit}`);
+        }
+      }
+      blank();
+    }
+  } else if (options.download && options.yes) {
+    // --yes 模式：标记所有库为已确认
+    for (const item of classified) {
+      downloadConfirmedLibs.add(`${item.dependency.libName}@${item.dependency.commit}`);
+    }
+  }
+
   try {
     for (const item of classified) {
       const { dependency, status, localPath } = item;
@@ -830,8 +894,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
             platforms
           );
 
-          // 2. 如果有缺失平台，下载并吸收
-          if (missing.length > 0) {
+          // 2. 如果有缺失平台，检查是否已确认下载
+          const linkNewLibId = `${dependency.libName}@${dependency.commit}`;
+          if (missing.length > 0 && !skipAllDownloads && downloadConfirmedLibs.has(linkNewLibId)) {
             info(`${dependency.libName} 缺少平台 [${missing.join(', ')}]，开始下载...`);
 
             // 查找历史记录中的大小估算
@@ -987,27 +1052,12 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     const missingItems = classified.filter((c) => c.status === DependencyStatus.MISSING);
     const downloadedLibs: string[] = [];
 
-    if (missingItems.length > 0 && options.download) {
-      // 确认下载
-      let toDownload = missingItems;
-
-      if (!options.yes) {
-        info(`发现 ${missingItems.length} 个缺失库需要下载:`);
-        for (const item of missingItems) {
-          info(`  - ${item.dependency.libName} (${item.dependency.commit.slice(0, 7)})`);
-        }
-        blank();
-
-        const confirmed = await confirmAction(
-          `是否下载以上 ${missingItems.length} 个库?`,
-          true
-        );
-        // ESC 取消或确认 No
-        if (confirmed === PROMPT_CANCELLED || !confirmed) {
-          warn('跳过下载缺失库');
-          toDownload = [];
-        }
-      }
+    if (missingItems.length > 0 && options.download && !skipAllDownloads) {
+      // 根据预扫描阶段的确认结果筛选要下载的库
+      const toDownload = missingItems.filter((item) => {
+        const libId = `${item.dependency.libName}@${item.dependency.commit}`;
+        return downloadConfirmedLibs.has(libId);
+      });
 
       if (toDownload.length > 0) {
         info(`开始并行下载 ${toDownload.length} 个库 (最多 ${concurrency} 个并发)...`);

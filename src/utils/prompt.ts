@@ -153,8 +153,9 @@ export const selectWithCancel = createPrompt(
         }
 
         const cursor = isActive ? figures.pointer : ' ';
-        const color = isActive ? 'cyan' : 'white';
-        let output = `${cursor} ${styleText(color, line)}`;
+        let output = isActive
+          ? `${cursor} ${styleText('cyan', line)}`
+          : `${cursor} ${line}`;
 
         if (item.description && isActive) {
           output += `\n   ${styleText('cyan', item.description)}`;
@@ -176,7 +177,7 @@ export const selectWithCancel = createPrompt(
       '↑↓ 选择 • ⏎ 确认 • esc 取消'
     );
 
-    return `${prefix} ${config.message}\n${page}\n${helpTip}`;
+    return `${prefix} ${styleText('bold', config.message)}\n${page}\n${helpTip}`;
   }
 );
 
@@ -307,14 +308,16 @@ export const checkboxWithCancel = createPrompt(
         }
 
         const checkbox = item.checked ? figures.checkboxOn : figures.checkboxOff;
-        const color = isActive ? 'cyan' : 'white';
         const cursor = isActive ? figures.pointer : ' ';
 
         if (item.disabled) {
           return styleText('dim', `${cursor} ${checkbox} ${item.name}`);
         }
 
-        return `${cursor} ${styleText(color, `${checkbox} ${item.name}`)}`;
+        if (isActive) {
+          return `${cursor} ${styleText('cyan', `${checkbox} ${item.name}`)}`;
+        }
+        return `${cursor} ${checkbox} ${item.name}`;
       },
       pageSize,
       loop,
@@ -336,7 +339,7 @@ export const checkboxWithCancel = createPrompt(
       '↑↓ 移动 • space 选择 • a 全选 • ⏎ 确认 • esc 取消'
     );
 
-    return `${prefix} ${config.message}\n${page}\n${helpTip}`;
+    return `${prefix} ${styleText('bold', config.message)}\n${page}\n${helpTip}`;
   }
 );
 
@@ -388,7 +391,7 @@ export const confirmWithCancel = createPrompt(
 
     const helpTip = styleText('dim', 'y/n 选择 • ⏎ 确认 • esc 取消');
 
-    return `${prefix} ${config.message} ${hint} ${displayValue}\n${helpTip}`;
+    return `${prefix} ${styleText('bold', config.message)} ${hint} ${displayValue}\n${helpTip}`;
   }
 );
 
@@ -444,7 +447,7 @@ export const inputWithCancel = createPrompt(
     const errorDisplay = errorMsg ? `\n${styleText('red', `✖ ${errorMsg}`)}` : '';
     const helpTip = styleText('dim', '输入文本 • ⏎ 确认 • esc 取消');
 
-    return `${prefix} ${config.message}${defaultHint}\n> ${value}${errorDisplay}\n${helpTip}`;
+    return `${prefix} ${styleText('bold', config.message)}${defaultHint}\n> ${value}${errorDisplay}\n${helpTip}`;
   }
 );
 
@@ -740,7 +743,7 @@ export async function selectOptionalConfigs(
 
   // 使用支持 ESC 的 checkbox
   const selected = await checkboxWithCancel<string>({
-    message: '请选择要使用的可选配置:',
+    message: '是否使用额外可选配置? (回车跳过)',
     choices,
     pageSize: 15,
   });
