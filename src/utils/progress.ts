@@ -33,16 +33,44 @@ export interface ProgressBarOptions {
   total?: number;
   /** 是否显示速度 */
   showSpeed?: boolean;
+  /** 进度条宽度（字符数），默认 40 */
+  barWidth?: number;
+}
+
+/** 不确定模式下移动方块的宽度 */
+const MARQUEE_BLOCK_WIDTH = 6;
+
+/**
+ * 生成移动方块动画条（Windows XP 风格）
+ * @param position 当前位置 (0 到 barWidth)
+ * @param barWidth 进度条总宽度
+ * @returns 动画条字符串
+ */
+export function generateMarqueeBar(position: number, barWidth: number): string {
+  const blockWidth = MARQUEE_BLOCK_WIDTH;
+  const result: string[] = [];
+
+  for (let i = 0; i < barWidth; i++) {
+    // 方块位置范围: [position, position + blockWidth)
+    // 使用循环模式，方块可以从右边"环绕"到左边
+    const inBlock =
+      (i >= position && i < position + blockWidth) ||
+      (position + blockWidth > barWidth && i < (position + blockWidth) % barWidth);
+
+    result.push(inBlock ? '█' : '░');
+  }
+
+  return result.join('');
 }
 
 /**
  * 创建文件操作进度条
  *
  * 确定模式: [name] ████████░░ 45% | 100 MB / 220 MB
- * 不确定模式: [name] ████████ | 100 MB | 2.3 MB/s
+ * 不确定模式: [name] ░░░███░░░░░░░ | 100 MB | 2.3 MB/s (移动方块动画)
  */
 export function createProgressBar(options: ProgressBarOptions = {}): cliProgress.SingleBar {
-  const { name, total, showSpeed = false } = options;
+  const { name, total, showSpeed = false, barWidth = 40 } = options;
   const hasTotal = total !== undefined && total > 0;
 
   // 构建格式字符串
@@ -56,10 +84,10 @@ export function createProgressBar(options: ProgressBarOptions = {}): cliProgress
       format += ' | {speed}';
     }
   } else {
-    // 不确定模式：只显示已处理大小
+    // 不确定模式：使用自定义动画条
     format = name
-      ? `${name} {bar} | {current}`
-      : '{bar} | {current}';
+      ? `${name} {animBar} | {current}`
+      : '{animBar} | {current}';
     if (showSpeed) {
       format += ' | {speed}';
     }
@@ -69,6 +97,7 @@ export function createProgressBar(options: ProgressBarOptions = {}): cliProgress
     format,
     barCompleteChar: '█',
     barIncompleteChar: '░',
+    barsize: barWidth,
     hideCursor: true,
     clearOnComplete: false,
     stopOnComplete: true,
@@ -90,11 +119,14 @@ export class ProgressTracker {
   private currentSpeed: number = 0;
   private total: number;
   private hasTotal: boolean;
+  private barWidth: number;
+  private marqueePosition: number = 0;
 
   constructor(options: ProgressBarOptions = {}) {
     this.bar = createProgressBar(options);
     this.total = options.total ?? 0;
     this.hasTotal = this.total > 0;
+    this.barWidth = options.barWidth ?? 40;
     this.startTime = Date.now();
     this.lastUpdate = this.startTime;
     this.lastBytes = 0;
@@ -109,6 +141,7 @@ export class ProgressTracker {
     this.lastUpdate = this.startTime;
     this.lastBytes = 0;
     this.currentSpeed = 0;
+    this.marqueePosition = 0;
 
     if (this.hasTotal) {
       this.bar.start(100, 0, {
@@ -117,8 +150,9 @@ export class ProgressTracker {
         speed: formatSpeed(0),
       });
     } else {
-      // 不确定模式：使用一个"填充"动画
-      this.bar.start(100, 50, {
+      // 不确定模式：使用移动方块动画
+      this.bar.start(100, 0, {
+        animBar: generateMarqueeBar(0, this.barWidth),
         current: formatBytes(0),
         speed: formatSpeed(0),
       });
@@ -128,13 +162,15 @@ export class ProgressTracker {
   /**
    * 更新进度
    * @param currentBytes 当前已处理字节数
+   * @param forceSpeed 强制更新速度（用于 stop() 时的最后一次更新）
    */
-  update(currentBytes: number): void {
+  update(currentBytes: number, forceSpeed: boolean = false): void {
     const now = Date.now();
     const elapsed = (now - this.lastUpdate) / 1000;
 
-    // 计算速度（至少间隔 100ms 更新一次速度）
-    if (elapsed >= 0.1) {
+    // 计算速度（至少间隔 100ms 更新一次速度，或强制更新）
+    // 强制更新时只要 elapsed > 0 就计算速度
+    if (elapsed >= 0.1 || (forceSpeed && elapsed > 0)) {
       this.currentSpeed = (currentBytes - this.lastBytes) / elapsed;
       this.lastBytes = currentBytes;
       this.lastUpdate = now;
@@ -148,8 +184,10 @@ export class ProgressTracker {
         speed: formatSpeed(this.currentSpeed),
       });
     } else {
-      // 不确定模式：保持 50% 显示，更新大小和速度
-      this.bar.update(50, {
+      // 不确定模式：更新移动方块动画
+      this.marqueePosition = (this.marqueePosition + 2) % this.barWidth;
+      this.bar.update(0, {
+        animBar: generateMarqueeBar(this.marqueePosition, this.barWidth),
         current: formatBytes(currentBytes),
         speed: formatSpeed(this.currentSpeed),
       });
@@ -203,7 +241,7 @@ export interface DownloadMonitorOptions {
   estimatedSize?: number;
   /** 目录大小获取函数 */
   getDirSize: (dirPath: string) => Promise<number>;
-  /** 更新间隔 (ms)，默认 500ms */
+  /** 更新间隔 (ms)，默认 200ms */
   interval?: number;
   /** 非 TTY 模式下的日志输出间隔 (ms)，默认 10000ms */
   logInterval?: number;
@@ -235,7 +273,7 @@ export class DownloadMonitor {
     this.name = options.name ?? '下载';
     this.estimatedSize = options.estimatedSize ?? 0;
     this.getDirSize = options.getDirSize;
-    this.interval = options.interval ?? 500;
+    this.interval = options.interval ?? 200;
     this.logInterval = options.logInterval ?? 10000;
 
     // TTY 模式下使用进度条
@@ -339,7 +377,8 @@ export class DownloadMonitor {
     }
 
     if (this.isTTY && this.tracker) {
-      this.tracker.update(finalSize);
+      // 强制更新速度，确保最后一次 update 能计算出正确的速度
+      this.tracker.update(finalSize, true);
       this.tracker.stop();
     } else {
       // 非 TTY：输出完成日志

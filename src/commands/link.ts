@@ -17,8 +17,6 @@ import {
   normalizeProjectRoot,
   findAllCodepacConfigs,
   extractDependencies,
-  saveOptionalConfigPreference,
-  loadOptionalConfigPreference,
 } from '../core/parser.js';
 import type { OptionalConfigInfo } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
@@ -32,7 +30,7 @@ import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize } from '../utils/fs-utils.js';
 import { ProgressTracker, DownloadMonitor } from '../utils/progress.js';
-import { success, warn, error, info, hint, blank, separator } from '../utils/logger.js';
+import { success, warn, error, info, hint, blank, separator, debug } from '../utils/logger.js';
 import { verifyLocalCommit } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext } from '../types/index.js';
@@ -186,7 +184,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       // 非 TTY 模式且没有 --yes 或 --config：必须指定 --config
       error('发现可选配置文件，非交互模式下必须使用 --config 或 --yes 参数');
       hint(`可用配置: ${configDiscovery.optionalConfigs.map(c => c.name).join(', ')}`);
-      hint('示例: td link --config inner');
+      hint(`示例: td link --config ${configDiscovery.optionalConfigs[0].name}`);
       hint('或使用 --yes 跳过可选配置');
       process.exit(EXIT_CODES.MISUSE);
     }
@@ -1679,8 +1677,11 @@ async function registerNestedLibraries(
 ): Promise<void> {
   if (nestedLibraries.length === 0) return;
 
+  debug(`注册 ${nestedLibraries.length} 个嵌套依赖: ${nestedLibraries.map(n => n.libName).join(', ')}`);
   const registry = getRegistry();
 
+  // 注意：嵌套依赖从父库的 dependencies/ 目录递归发现，无法获取原始的 branch/url 信息
+  // 使用空字符串作为占位符，代码中使用 if (entry.branch) 检查时会正确返回 false
   for (const nested of nestedLibraries) {
     if (nested.isGeneral) {
       // General 库：单个 StoreEntry
@@ -1690,8 +1691,8 @@ async function registerNestedLibraries(
           libName: nested.libName,
           commit: nested.commit,
           platform: GENERAL_PLATFORM,
-          branch: '',  // 嵌套依赖无法获取 branch 信息
-          url: '',     // 嵌套依赖无法获取 url 信息
+          branch: '',
+          url: '',
           size: nested.size,
           usedBy: [],
           createdAt: new Date().toISOString(),
@@ -2611,7 +2612,12 @@ function mergeDepLists(main: ParsedDependency[], optional: ParsedDependency[]): 
   }
 
   for (const dep of optional) {
-    depMap.set(dep.libName, dep); // 后者覆盖前者
+    const existing = depMap.get(dep.libName);
+    if (existing && existing.commit !== dep.commit) {
+      // 同名库但 commit 不同，警告用户可选配置覆盖了主配置
+      warn(`${dep.libName}: 可选配置 commit (${dep.commit.slice(0, 7)}) 覆盖主配置 (${existing.commit.slice(0, 7)})`);
+    }
+    depMap.set(dep.libName, dep);
   }
 
   return Array.from(depMap.values());

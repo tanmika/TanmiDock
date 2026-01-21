@@ -3,6 +3,7 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
+import * as logger from '../utils/logger.js';
 import type { CodepacDep, ParsedDependency, ActionConfig, ParsedAction } from '../types/index.js';
 
 /**
@@ -311,7 +312,9 @@ export async function findAllCodepacConfigs(projectPath: string): Promise<Config
   let files: string[];
   try {
     files = await fs.readdir(searchDir);
-  } catch {
+  } catch (readdirErr) {
+    // 目录存在但读取失败（权限问题等），记录警告
+    logger.warn(`无法读取目录 ${searchDir}: ${(readdirErr as Error).message}`);
     return null;
   }
 
@@ -340,79 +343,13 @@ export async function findAllCodepacConfigs(projectPath: string): Promise<Config
       name: extractConfigName(file),
       path: path.join(searchDir, file),
     }))
+    .filter(config => config.name.length > 0) // 过滤掉空名称（如 codepac-dep-.json）
     .sort((a, b) => a.name.localeCompare(b.name)); // 按名称排序
 
   return {
     mainConfig: mainConfigPath,
     optionalConfigs,
   };
-}
-
-/**
- * 合并多个配置文件的依赖
- * 读取主配置和可选配置文件，合并所有依赖并去重
- * @param mainConfigPath 主配置文件路径
- * @param optionalConfigPaths 可选配置文件路径列表
- * @returns 合并后的依赖列表（按 libName 去重，后者覆盖前者）
- */
-export async function mergeDependencies(
-  mainConfigPath: string,
-  optionalConfigPaths: string[]
-): Promise<ParsedDependency[]> {
-  // 使用 Map 按 libName 去重，后者覆盖前者
-  const dependencyMap = new Map<string, ParsedDependency>();
-
-  // 读取主配置
-  const mainConfig = await parseCodepacDep(mainConfigPath);
-  const mainDeps = extractDependencies(mainConfig);
-  for (const dep of mainDeps) {
-    dependencyMap.set(dep.libName, dep);
-  }
-
-  // 读取可选配置并合并
-  for (const optionalPath of optionalConfigPaths) {
-    const optionalConfig = await parseCodepacDep(optionalPath);
-    const optionalDeps = extractDependencies(optionalConfig);
-    for (const dep of optionalDeps) {
-      dependencyMap.set(dep.libName, dep); // 后者覆盖前者
-    }
-  }
-
-  return Array.from(dependencyMap.values());
-}
-
-/**
- * 保存用户选择的可选配置偏好到 registry
- * @param projectPath 项目路径
- * @param configs 选择的可选配置文件名列表
- */
-export async function saveOptionalConfigPreference(
-  projectPath: string,
-  configs: string[]
-): Promise<void> {
-  // 延迟导入避免循环依赖
-  const { getRegistry } = await import('./registry.js');
-  const registry = getRegistry();
-  await registry.load();
-  const pathHash = registry.hashPath(projectPath);
-  registry.updateProject(pathHash, { optionalConfigs: configs });
-  await registry.save();
-}
-
-/**
- * 从 registry 加载已保存的可选配置偏好
- * @param projectPath 项目路径
- * @returns 保存的配置名称列表，无偏好时返回空数组
- */
-export async function loadOptionalConfigPreference(
-  projectPath: string
-): Promise<string[]> {
-  // 延迟导入避免循环依赖
-  const { getRegistry } = await import('./registry.js');
-  const registry = getRegistry();
-  await registry.load();
-  const project = registry.getProjectByPath(projectPath);
-  return project?.optionalConfigs ?? [];
 }
 
 export default {
@@ -426,7 +363,4 @@ export default {
   parseProjectDependencies,
   getRelativeConfigPath,
   findAllCodepacConfigs,
-  mergeDependencies,
-  saveOptionalConfigPreference,
-  loadOptionalConfigPreference,
 };

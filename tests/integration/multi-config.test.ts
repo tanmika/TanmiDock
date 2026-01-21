@@ -475,15 +475,16 @@ describe('TC-025: 多配置文件支持集成测试', () => {
       await saveRegistry(env, registry);
 
       // 重置 registry 单例，使其重新从文件加载
-      const { resetRegistry } = await import('../../src/core/registry.js');
+      const { resetRegistry, getRegistry } = await import('../../src/core/registry.js');
       resetRegistry();
 
-      // 导入并测试加载偏好功能
-      const { loadOptionalConfigPreference } = await import('../../src/core/parser.js');
-      const savedPrefs = await loadOptionalConfigPreference(env.projectDir);
+      // 直接通过 registry API 验证偏好已保存
+      const reg = getRegistry();
+      await reg.load();
+      const project = reg.getProjectByPath(env.projectDir);
 
       // 验证返回保存的偏好
-      expect(savedPrefs).toEqual(['inner']);
+      expect(project?.optionalConfigs).toEqual(['inner']);
     });
 
     it('should clear saved preference when user selects different configs', async () => {

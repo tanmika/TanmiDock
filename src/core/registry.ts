@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { getRegistryPath } from './platform.js';
 import { ensureConfigDir } from './config.js';
 import { withFileLock } from '../utils/lock.js';
+import * as logger from '../utils/logger.js';
 import type { Registry, ProjectInfo, LibraryInfo, StoreEntry } from '../types/index.js';
 import { EMPTY_REGISTRY } from '../types/index.js';
 
@@ -237,20 +238,6 @@ class RegistryManager {
   }
 
   /**
-   * 更新项目的可选配置记忆
-   * @param projectPath 项目路径
-   * @param configs 选择的可选配置文件名列表
-   */
-  updateProjectOptionalConfigs(projectPath: string, configs: string[]): void {
-    this.ensureLoaded();
-    const pathHash = this.hashPath(projectPath);
-    const project = this.registry.projects[pathHash];
-    if (project) {
-      project.optionalConfigs = configs;
-    }
-  }
-
-  /**
    * 移除项目
    * 注意：会移除该项目对所有 StoreEntry 的引用（包括直接依赖和嵌套依赖）
    */
@@ -260,10 +247,16 @@ class RegistryManager {
     if (project) {
       // 移除所有 StoreEntry 中对该项目的引用
       // 这包括直接依赖和通过 registerNestedLibraries 注册的嵌套依赖
+      let removedCount = 0;
       for (const storeKey of Object.keys(this.registry.stores)) {
-        this.removeStoreReference(storeKey, pathHash);
+        const store = this.registry.stores[storeKey];
+        if (store.usedBy?.includes(pathHash)) {
+          this.removeStoreReference(storeKey, pathHash);
+          removedCount++;
+        }
       }
       delete this.registry.projects[pathHash];
+      logger.debug(`移除项目 ${project.path}: 清理了 ${removedCount} 个 Store 引用`);
     }
   }
 

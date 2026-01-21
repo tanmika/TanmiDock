@@ -340,10 +340,14 @@ export async function absorbLib(
                   if (nestedPlatformDirs.length > 0) {
                     // 有平台目录，递归吸收到 Store
                     const nestedResult = await absorbLib(depSourcePath, nestedPlatformDirs, depEntry.name, nestedCommit);
-                    // 计算吸收后的大小
+                    // 计算吸收后的大小（容错处理，失败时计为 0）
                     let nestedSize = 0;
                     for (const platform of nestedPlatformDirs) {
-                      nestedSize += await getSize(depEntry.name, nestedCommit, platform);
+                      try {
+                        nestedSize += await getSize(depEntry.name, nestedCommit, platform);
+                      } catch {
+                        // 获取大小失败，忽略
+                      }
                     }
                     nestedLibraries.push({
                       libName: depEntry.name,
@@ -527,8 +531,8 @@ export async function absorbGeneral(
     // 清理残留的空 libDir
     try {
       await fs.rm(libDir, { recursive: true, force: true });
-    } catch {
-      // 忽略清理失败
+    } catch (cleanupErr) {
+      logger.debug(`清理残留目录失败 ${libDir}: ${(cleanupErr as Error).message}`);
     }
   } else {
     // 正常情况：直接把整个 libDir 移动到 _shared

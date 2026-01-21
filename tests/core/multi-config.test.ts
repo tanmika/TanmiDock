@@ -146,78 +146,9 @@ describe('multi-config: findAllCodepacConfigs', () => {
     });
   });
 
-  describe('S-1.3: 依赖合并去重', () => {
-    it('should merge dependencies from multiple configs', async () => {
-      // Given: 主配置和可选配置有不同的依赖
-      const mainConfig = {
-        version: '1.0.0',
-        repos: {
-          common: [
-            { url: 'https://github.com/test/lib1.git', commit: 'abc123', branch: 'main', dir: 'lib1' },
-          ],
-        },
-      };
-      const optionalConfig = {
-        version: '1.0.0',
-        repos: {
-          common: [
-            { url: 'https://github.com/test/lib2.git', commit: 'def456', branch: 'main', dir: 'lib2' },
-          ],
-        },
-      };
-
-      fsMock.readFile
-        .mockResolvedValueOnce(JSON.stringify(mainConfig))
-        .mockResolvedValueOnce(JSON.stringify(optionalConfig));
-
-      // When: 调用 mergeDependencies
-      const { mergeDependencies } = await import('../../src/core/parser.js');
-      const result = await mergeDependencies(
-        '/project/3rdparty/codepac-dep.json',
-        ['/project/3rdparty/codepac-dep-inner.json']
-      );
-
-      // Then: 返回合并后的依赖列表
-      expect(result).toHaveLength(2);
-      expect(result.map(d => d.libName)).toContain('lib1');
-      expect(result.map(d => d.libName)).toContain('lib2');
-    });
-
-    it('should deduplicate dependencies with same libName', async () => {
-      // Given: 主配置和可选配置有相同的库（不同 commit）
-      const mainConfig = {
-        version: '1.0.0',
-        repos: {
-          common: [
-            { url: 'https://github.com/test/lib1.git', commit: 'abc123', branch: 'main', dir: 'lib1' },
-          ],
-        },
-      };
-      const optionalConfig = {
-        version: '1.0.0',
-        repos: {
-          common: [
-            { url: 'https://github.com/test/lib1.git', commit: 'xyz789', branch: 'main', dir: 'lib1' },
-          ],
-        },
-      };
-
-      fsMock.readFile
-        .mockResolvedValueOnce(JSON.stringify(mainConfig))
-        .mockResolvedValueOnce(JSON.stringify(optionalConfig));
-
-      // When: 调用 mergeDependencies
-      const { mergeDependencies } = await import('../../src/core/parser.js');
-      const result = await mergeDependencies(
-        '/project/3rdparty/codepac-dep.json',
-        ['/project/3rdparty/codepac-dep-inner.json']
-      );
-
-      // Then: 只保留一份（后者覆盖前者或保留前者，取决于实现）
-      expect(result).toHaveLength(1);
-      expect(result[0].libName).toBe('lib1');
-    });
-  });
+  // 注意：S-1.3 依赖合并去重测试已移除
+  // mergeDependencies 函数为死代码已被删除
+  // 依赖合并逻辑现在在 link.ts 的 mergeDepLists 函数中（内部函数）
 });
 
 describe('multi-config: selectOptionalConfigs', () => {
@@ -305,71 +236,7 @@ describe('multi-config: selectOptionalConfigs', () => {
     });
   });
 
-  describe('S-1.5: 记忆偏好', () => {
-    it('should save selected configs to registry', async () => {
-      // Given: 用户选择了可选配置
-      // 使用 vi.doMock 而非 vi.mock，因为 vi.mock 会被提升到文件顶部
-      vi.doMock('../../src/core/registry.js', () => ({
-        getRegistry: vi.fn().mockReturnValue({
-          load: vi.fn(),
-          save: vi.fn(),
-          getProjectByPath: vi.fn().mockReturnValue(null),
-          addProject: vi.fn(),
-          updateProject: vi.fn(),
-          hashPath: vi.fn().mockReturnValue('abc123'),
-        }),
-      }));
-
-      const { saveOptionalConfigPreference } = await import('../../src/core/parser.js');
-
-      // When: 保存偏好
-      await saveOptionalConfigPreference('/project', ['inner', 'testcase']);
-
-      // Then: 应该保存到 registry
-      const { getRegistry } = await import('../../src/core/registry.js');
-      const registry = getRegistry();
-      expect(registry.updateProject).toHaveBeenCalled();
-    });
-
-    it('should load saved configs as default selection', async () => {
-      // Given: registry 中有保存的偏好
-      vi.doMock('../../src/core/registry.js', () => ({
-        getRegistry: vi.fn().mockReturnValue({
-          load: vi.fn(),
-          getProjectByPath: vi.fn().mockReturnValue({
-            path: '/project',
-            optionalConfigs: ['inner'],
-          }),
-          hashPath: vi.fn().mockReturnValue('abc123'),
-        }),
-      }));
-
-      const { loadOptionalConfigPreference } = await import('../../src/core/parser.js');
-
-      // When: 加载偏好
-      const result = await loadOptionalConfigPreference('/project');
-
-      // Then: 应该返回保存的配置
-      expect(result).toEqual(['inner']);
-    });
-
-    it('should return empty array when no preference saved', async () => {
-      // Given: registry 中没有保存的偏好
-      vi.doMock('../../src/core/registry.js', () => ({
-        getRegistry: vi.fn().mockReturnValue({
-          load: vi.fn(),
-          getProjectByPath: vi.fn().mockReturnValue(null),
-          hashPath: vi.fn().mockReturnValue('abc123'),
-        }),
-      }));
-
-      const { loadOptionalConfigPreference } = await import('../../src/core/parser.js');
-
-      // When: 加载偏好
-      const result = await loadOptionalConfigPreference('/project');
-
-      // Then: 应该返回空数组
-      expect(result).toEqual([]);
-    });
-  });
+  // 注意：S-1.5 记忆偏好测试已移除
+  // saveOptionalConfigPreference/loadOptionalConfigPreference 函数为死代码已被删除
+  // 可选配置偏好现在通过 registry.addProject({optionalConfigs: [...]}) 保存
 });
