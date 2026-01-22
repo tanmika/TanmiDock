@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-01-22
+
+### Added
+
+- **多配置文件支持**: 支持 `codepac-dep-*.json` 多配置文件，自动发现并交互式选择
+
+### Changed
+
+- **下载进度条改进**: 优化下载时的进度显示，清理死代码
+
+### Fixed
+
+- **交互式提示优化**: 优化交互式提示的可读性和用户体验
+- **sparse-only-common 库识别**: 修复 sparse-only-common 库的 General 识别及 `_shared` 嵌套问题
+- **unlink 嵌套依赖清理**: unlink 时正确清理嵌套依赖的 Registry 引用
+
 ## [0.7.1] - 2026-01-19
 
 ### Added
