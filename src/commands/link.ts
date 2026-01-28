@@ -2242,6 +2242,9 @@ async function processAction(
     indent,
   });
 
+  // 同步嵌套配置文件的 cache（兼容 checkValid.js 检测）
+  await syncCacheFile(nestedConfigPath);
+
   // 8. 递归处理嵌套 actions（如果没有 disable_action）
   // 注意：递归时 thirdPartyDir 应该更新为当前嵌套依赖的目标目录
   if (!parsed.disableAction && nestedActions.length > 0) {
