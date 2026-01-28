@@ -29,7 +29,7 @@ import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, pathsEqual, isSpars
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize } from '../utils/fs-utils.js';
-import { ProgressTracker, DownloadMonitor } from '../utils/progress.js';
+import { ProgressTracker, DownloadMonitor, MultiBarManager } from '../utils/progress.js';
 import { success, warn, error, info, hint, blank, separator, debug } from '../utils/logger.js';
 import { verifyLocalCommit } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
@@ -1061,6 +1061,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
         info(`开始并行下载 ${toDownload.length} 个库 (最多 ${concurrency} 个并发)...`);
         blank();
 
+        // TTY 模式下使用 MultiBarManager 统一管理并行进度条
+        const isTTY = process.stdout.isTTY ?? false;
+        const multiBarManager = isTTY ? new MultiBarManager() : null;
+
         // 并行控制器
         const downloadLimit = pLimit(concurrency);
 
@@ -1068,6 +1072,15 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
         const downloadTasks = toDownload.map((item) =>
           downloadLimit(async () => {
             const { dependency, localPath } = item;
+
+            // 并行下载日志代理：通过 multibar.log() 安全输出，避免干扰进度条
+            const pLog = {
+              info: (msg: string) => multiBarManager ? multiBarManager.log(`[info] ${msg}`) : info(msg),
+              success: (msg: string) => multiBarManager ? multiBarManager.log(`[ok] ${msg}`) : success(msg),
+              hint: (msg: string) => multiBarManager ? multiBarManager.log(`[hint] ${msg}`) : hint(msg),
+              warn: (msg: string) => multiBarManager ? multiBarManager.log(`[warn] ${msg}`) : warn(msg),
+              error: (msg: string) => multiBarManager ? multiBarManager.log(`[error] ${msg}`) : error(msg),
+            };
 
             try {
               const storeCommitPath = path.join(storePath, dependency.libName, dependency.commit);
@@ -1081,7 +1094,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 
               // 如果全部平台已存在，直接 linkLib，无需下载
               if (missing.length === 0) {
-                info(`${dependency.libName} 所有平台已存在，直接链接...`);
+                pLog.info(`${dependency.libName} 所有平台已存在，直接链接...`);
                 tx.recordOp('link', localPath, storeCommitPath);
                 await linker.linkLib(localPath, storeCommitPath, platforms);
 
@@ -1124,7 +1137,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                     lastAccess: new Date().toISOString(),
                   });
                 }
-                success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 链接完成 [${platforms.join(', ')}]`);
+                pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 链接完成 [${platforms.join(', ')}]`);
                 return {
                   success: true,
                   name: dependency.libName,
@@ -1145,7 +1158,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               // 如果所有缺失平台都已知不可用，跳过下载
               if (toDownload.length === 0) {
                 if (knownUnavailable.length > 0) {
-                  warn(`${dependency.libName} 平台 [${knownUnavailable.join(', ')}] 不支持（远程不存在）`);
+                  pLog.warn(`${dependency.libName} 平台 [${knownUnavailable.join(', ')}] 不支持（远程不存在）`);
                 }
                 return {
                   success: false,
@@ -1157,7 +1170,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               }
 
               // 只下载未知状态的平台
-              info(`下载 ${dependency.libName} [${toDownload.join(', ')}]...`);
+              pLog.info(`下载 ${dependency.libName} [${toDownload.join(', ')}]...`);
 
               const estimatedSize = historyLib?.size;
 
@@ -1166,6 +1179,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                 name: `  ${dependency.libName}`,
                 estimatedSize,
                 getDirSize,
+                manager: multiBarManager ?? undefined,
               });
 
               // 1. 调用 downloadToTemp 只下载需要的平台（排除已知不可用的）
@@ -1188,7 +1202,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 
               // 提示清理的平台（如果有）
               if (downloadResult.cleanedPlatforms.length > 0) {
-                hint(`  已过滤: ${downloadResult.cleanedPlatforms.join(', ')}`);
+                pLog.hint(`  已过滤: ${downloadResult.cleanedPlatforms.join(', ')}`);
               }
 
               try {
@@ -1243,7 +1257,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   // 记录为 General 库
                   generalLibs.add(dependency.libName);
 
-                  success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，下载完成`);
+                  pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，下载完成`);
 
                   return {
                     success: true,
@@ -1280,7 +1294,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                       lastAccess: new Date().toISOString(),
                     });
                   }
-                  warn(`${dependency.libName} 平台 [${newUnavailable.join(', ')}] 远程不存在，已记录`);
+                  pLog.warn(`${dependency.libName} 平台 [${newUnavailable.join(', ')}] 远程不存在，已记录`);
                 }
 
                 // 5. 调用 absorbLib 将临时目录内容移入 Store（如果有下载成功的平台）
@@ -1346,7 +1360,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   // 记录为 General 库
                   generalLibs.add(dependency.libName);
 
-                  success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，下载完成`);
+                  pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，下载完成`);
 
                   return {
                     success: true,
@@ -1413,7 +1427,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 
                 // 计算未能链接的平台（用户请求但未下载也未在 Store 中的）
                 const notLinkedPlatforms = platforms.filter((p) => !linkPlatforms.includes(p));
-                success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 下载完成 [${linkPlatforms.join(', ')}]`);
+                pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 下载完成 [${linkPlatforms.join(', ')}]`);
 
                 return {
                   success: true,
@@ -1426,13 +1440,17 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                 await fs.rm(downloadResult.tempDir, { recursive: true, force: true }).catch(() => {});
               }
             } catch (err) {
-              error(`${dependency.libName} 下载失败: ${(err as Error).message}`);
+              pLog.error(`${dependency.libName} 下载失败: ${(err as Error).message}`);
               return { success: false, name: dependency.libName, error: (err as Error).message };
             }
           })
         );
 
         const results = await Promise.all(downloadTasks);
+
+        // 停止多进度条管理器
+        multiBarManager?.stop();
+
         const succeeded = results.filter((r) => r.success);
         const failed = results.filter((r) => !r.success && !('skipped' in r && r.skipped));
 

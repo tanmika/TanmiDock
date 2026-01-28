@@ -64,16 +64,12 @@ export function generateMarqueeBar(position: number, barWidth: number): string {
 }
 
 /**
- * 创建文件操作进度条
- *
- * 确定模式: [name] ████████░░ 45% | 100 MB / 220 MB
- * 不确定模式: [name] ░░░███░░░░░░░ | 100 MB | 2.3 MB/s (移动方块动画)
+ * 构建进度条格式字符串
  */
-export function createProgressBar(options: ProgressBarOptions = {}): cliProgress.SingleBar {
-  const { name, total, showSpeed = false, barWidth = 40 } = options;
+function buildProgressFormat(options: ProgressBarOptions): string {
+  const { name, total, showSpeed = false } = options;
   const hasTotal = total !== undefined && total > 0;
 
-  // 构建格式字符串
   let format: string;
   if (hasTotal) {
     // 确定模式：显示百分比
@@ -93,6 +89,19 @@ export function createProgressBar(options: ProgressBarOptions = {}): cliProgress
     }
   }
 
+  return format;
+}
+
+/**
+ * 创建文件操作进度条
+ *
+ * 确定模式: [name] ████████░░ 45% | 100 MB / 220 MB
+ * 不确定模式: [name] ░░░███░░░░░░░ | 100 MB | 2.3 MB/s (移动方块动画)
+ */
+export function createProgressBar(options: ProgressBarOptions = {}): cliProgress.SingleBar {
+  const { barWidth = 40 } = options;
+  const format = buildProgressFormat(options);
+
   const bar = new cliProgress.SingleBar({
     format,
     barCompleteChar: '█',
@@ -108,11 +117,48 @@ export function createProgressBar(options: ProgressBarOptions = {}): cliProgress
 }
 
 /**
+ * 多进度条管理器
+ * 使用 cli-progress MultiBar 统一管理并行进度条的终端显示
+ */
+export class MultiBarManager {
+  private multibar: cliProgress.MultiBar;
+
+  constructor() {
+    this.multibar = new cliProgress.MultiBar({
+      barCompleteChar: '█',
+      barIncompleteChar: '░',
+      hideCursor: true,
+      clearOnComplete: false,
+      forceRedraw: true,
+    });
+  }
+
+  getMultiBar(): cliProgress.MultiBar {
+    return this.multibar;
+  }
+
+  /**
+   * 在进度条上方安全输出消息
+   */
+  log(message: string): void {
+    this.multibar.log(message + '\n');
+  }
+
+  /**
+   * 停止所有进度条
+   */
+  stop(): void {
+    this.multibar.stop();
+  }
+}
+
+/**
  * 进度追踪器
  * 用于计算速度和管理进度条更新
  */
 export class ProgressTracker {
   private bar: cliProgress.SingleBar;
+  private multibar: cliProgress.MultiBar | null;
   private startTime: number;
   private lastUpdate: number;
   private lastBytes: number;
@@ -121,9 +167,17 @@ export class ProgressTracker {
   private hasTotal: boolean;
   private barWidth: number;
   private marqueePosition: number = 0;
+  private options: ProgressBarOptions;
 
-  constructor(options: ProgressBarOptions = {}) {
-    this.bar = createProgressBar(options);
+  constructor(options: ProgressBarOptions = {}, multibar?: cliProgress.MultiBar) {
+    this.multibar = multibar ?? null;
+    this.options = options;
+    if (multibar) {
+      // multibar 模式：先创建占位 bar，start() 时再初始化
+      this.bar = null as unknown as cliProgress.SingleBar;
+    } else {
+      this.bar = createProgressBar(options);
+    }
     this.total = options.total ?? 0;
     this.hasTotal = this.total > 0;
     this.barWidth = options.barWidth ?? 40;
@@ -143,7 +197,16 @@ export class ProgressTracker {
     this.currentSpeed = 0;
     this.marqueePosition = 0;
 
-    if (this.hasTotal) {
+    if (this.multibar) {
+      // multibar 模式：通过 multibar.create() 创建子进度条
+      const format = buildProgressFormat(this.options);
+      this.bar = this.multibar.create(100, 0, {
+        current: formatBytes(0),
+        total: formatBytes(this.total),
+        speed: formatSpeed(0),
+        animBar: this.hasTotal ? undefined : generateMarqueeBar(0, this.barWidth),
+      }, { format, barsize: this.barWidth });
+    } else if (this.hasTotal) {
       this.bar.start(100, 0, {
         current: formatBytes(0),
         total: formatBytes(this.total),
@@ -215,7 +278,11 @@ export class ProgressTracker {
         speed: formatSpeed(this.currentSpeed),
       });
     }
-    this.bar.stop();
+    if (this.multibar) {
+      this.multibar.remove(this.bar);
+    } else {
+      this.bar.stop();
+    }
   }
 }
 
@@ -245,6 +312,8 @@ export interface DownloadMonitorOptions {
   interval?: number;
   /** 非 TTY 模式下的日志输出间隔 (ms)，默认 10000ms */
   logInterval?: number;
+  /** 多进度条管理器，用于并行下载 */
+  manager?: MultiBarManager;
 }
 
 /**
@@ -278,11 +347,12 @@ export class DownloadMonitor {
 
     // TTY 模式下使用进度条
     if (this.isTTY) {
+      const multibar = options.manager?.getMultiBar();
       this.tracker = new ProgressTracker({
         name: options.name,
         total: options.estimatedSize,
         showSpeed: true,
-      });
+      }, multibar);
     }
   }
 
@@ -391,6 +461,7 @@ export default {
   formatBytes,
   formatSpeed,
   createProgressBar,
+  MultiBarManager,
   ProgressTracker,
   createProgressCallback,
   DownloadMonitor,
