@@ -12,6 +12,7 @@ vi.mock('fs/promises', () => ({
 
 vi.mock('../../src/core/config.js', () => ({
   ensureConfigDir: vi.fn().mockResolvedValue(undefined),
+  getStorePath: vi.fn().mockResolvedValue('/mock/store'),
 }));
 
 // Mock lock utility - execute function immediately without actual locking

@@ -132,6 +132,7 @@ class RegistryManager {
   private async migrateSharedStores(): Promise<void> {
     const storePath = await getStorePath();
     if (!storePath) return;
+    if (!this.registry.stores) return;
 
     // 收集所有需要检查的 libName:commit 组合
     const libCommitPairs = new Set<string>();
