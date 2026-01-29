@@ -3,10 +3,12 @@
  * 注册表文件位置: ~/.tanmi-dock/registry.json
  */
 import fs from 'fs/promises';
+import path from 'path';
 import crypto from 'crypto';
-import { getRegistryPath } from './platform.js';
-import { ensureConfigDir } from './config.js';
+import { getRegistryPath, SHARED_PLATFORM } from './platform.js';
+import { ensureConfigDir, getStorePath } from './config.js';
 import { withFileLock } from '../utils/lock.js';
+import { getDirSize } from '../utils/fs-utils.js';
 import * as logger from '../utils/logger.js';
 import type { Registry, ProjectInfo, LibraryInfo, StoreEntry } from '../types/index.js';
 import { EMPTY_REGISTRY } from '../types/index.js';
@@ -46,6 +48,8 @@ class RegistryManager {
     this.loaded = true;
     // 自动迁移旧版引用数据（如果有需要迁移的数据，会立即保存）
     await this.migrateReferences();
+    // 迁移 _shared 目录到 StoreEntry（为现有平台库补充 _shared 记录）
+    await this.migrateSharedStores();
   }
 
   /**
@@ -117,6 +121,82 @@ class RegistryManager {
     // 迁移后立即保存，避免重复迁移
     if (migrated) {
       await this.save();
+    }
+  }
+
+  /**
+   * 迁移 _shared 目录到 StoreEntry
+   * 为现有的平台库补充 _shared 记录，解决空间统计不准确的问题
+   * 只处理有平台 StoreEntry 但没有 _shared StoreEntry 的库
+   */
+  private async migrateSharedStores(): Promise<void> {
+    const storePath = await getStorePath();
+    if (!storePath) return;
+
+    // 收集所有需要检查的 libName:commit 组合
+    const libCommitPairs = new Set<string>();
+    for (const storeKey of Object.keys(this.registry.stores)) {
+      // 解析 storeKey: libName:commit:platform
+      const lastColon = storeKey.lastIndexOf(':');
+      if (lastColon === -1) continue;
+      const platform = storeKey.slice(lastColon + 1);
+      // 跳过 _shared 和 general（general 库不需要 _shared）
+      if (platform === SHARED_PLATFORM || platform === 'general') continue;
+      const libCommit = storeKey.slice(0, lastColon);
+      libCommitPairs.add(libCommit);
+    }
+
+    let migrated = false;
+    for (const libCommit of libCommitPairs) {
+      const sharedKey = `${libCommit}:${SHARED_PLATFORM}`;
+      // 如果已有 _shared 记录，跳过
+      if (this.registry.stores[sharedKey]) continue;
+
+      // 解析 libName 和 commit
+      const colonIndex = libCommit.lastIndexOf(':');
+      if (colonIndex === -1) continue;
+      const libName = libCommit.slice(0, colonIndex);
+      const commit = libCommit.slice(colonIndex + 1);
+
+      // 检查磁盘上是否存在 _shared 目录
+      const sharedPath = path.join(storePath, libName, commit, '_shared');
+      try {
+        const stat = await fs.stat(sharedPath);
+        if (!stat.isDirectory()) continue;
+
+        // 检查目录是否有内容
+        const entries = await fs.readdir(sharedPath);
+        if (entries.length === 0) continue;
+
+        // 计算大小并创建 StoreEntry
+        const sharedSize = await getDirSize(sharedPath);
+
+        // 从已有的平台 StoreEntry 获取元数据
+        const platformKeys = this.getLibraryStoreKeys(libName, commit);
+        const firstPlatformEntry = platformKeys.length > 0 ? this.registry.stores[platformKeys[0]] : null;
+
+        this.registry.stores[sharedKey] = {
+          libName,
+          commit,
+          platform: SHARED_PLATFORM,
+          branch: firstPlatformEntry?.branch ?? '',
+          url: firstPlatformEntry?.url ?? '',
+          size: sharedSize,
+          usedBy: [], // _shared 不追踪引用，跟随平台
+          createdAt: firstPlatformEntry?.createdAt ?? new Date().toISOString(),
+          lastAccess: new Date().toISOString(),
+        };
+
+        migrated = true;
+        logger.debug(`迁移 _shared: ${libName}:${commit.slice(0, 8)} (${sharedSize} bytes)`);
+      } catch {
+        // 目录不存在或无法访问，跳过
+      }
+    }
+
+    if (migrated) {
+      await this.save();
+      logger.debug('_shared 迁移完成');
     }
   }
 
@@ -401,24 +481,30 @@ class RegistryManager {
    * 获取指定库的所有平台（从 StoreEntry 动态获取，比 LibraryInfo.platforms 更准确）
    * @param libName 库名
    * @param commit commit hash
-   * @returns 平台列表
+   * @returns 平台列表（不包含 _shared 伪平台）
    */
   getLibraryPlatforms(libName: string, commit: string): string[] {
     const storeKeys = this.getLibraryStoreKeys(libName, commit);
     const prefix = `${libName}:${commit}:`;
-    return storeKeys.map((key) => key.slice(prefix.length));
+    return storeKeys
+      .map((key) => key.slice(prefix.length))
+      .filter((platform) => platform !== SHARED_PLATFORM);
   }
 
   /**
    * 获取无引用的 Store 条目
+   * 注意：过滤掉 _shared 伪平台，因为它的生命周期跟随真正的平台
    */
   getUnreferencedStores(): StoreEntry[] {
     this.ensureLoaded();
-    return this.listStores().filter((entry) => entry.usedBy.length === 0);
+    return this.listStores().filter(
+      (entry) => entry.usedBy.length === 0 && entry.platform !== SHARED_PLATFORM
+    );
   }
 
   /**
    * 获取可清理的 unused 库（无引用超过指定天数）
+   * 注意：过滤掉 _shared 伪平台，因为它的生命周期跟随真正的平台
    * @param unusedDays 无引用天数阈值
    */
   getUnusedStores(unusedDays: number): StoreEntry[] {
@@ -427,6 +513,7 @@ class RegistryManager {
     return this.listStores().filter(
       (entry) =>
         entry.usedBy.length === 0 &&
+        entry.platform !== SHARED_PLATFORM &&
         entry.unlinkedAt !== undefined &&
         entry.unlinkedAt < threshold
     );
@@ -434,6 +521,7 @@ class RegistryManager {
 
   /**
    * 获取无引用但未过期的库（供 status 显示）
+   * 注意：过滤掉 _shared 伪平台，因为它的生命周期跟随真正的平台
    * @param unusedDays 无引用天数阈值
    */
   getPendingUnusedStores(
@@ -445,6 +533,7 @@ class RegistryManager {
       .filter(
         (e) =>
           e.usedBy.length === 0 &&
+          e.platform !== SHARED_PLATFORM &&
           e.unlinkedAt !== undefined &&
           e.unlinkedAt >= threshold
       )

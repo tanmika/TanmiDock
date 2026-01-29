@@ -164,6 +164,13 @@ export function normalizePlatformValue(name: string): string {
 export const GENERAL_PLATFORM = 'general';
 
 /**
+ * 共享内容的伪平台标识
+ * 用于追踪平台库的 _shared 目录大小
+ * 注意：这不是真正的平台，不应该出现在用户可见的平台列表中
+ */
+export const SHARED_PLATFORM = '_shared';
+
+/**
  * 检查 sparse 配置是否只有 common 内容（没有任何平台键）
  * 用于识别应该被当作 General 库处理的有 sparse 配置的库
  *

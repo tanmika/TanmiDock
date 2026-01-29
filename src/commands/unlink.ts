@@ -7,7 +7,7 @@ import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
 import { getRegistry } from '../core/registry.js';
 import * as linker from '../core/linker.js';
-import { resolvePath, shrinkHome } from '../core/platform.js';
+import { resolvePath, shrinkHome, SHARED_PLATFORM } from '../core/platform.js';
 import { info, warn, success, error, hint, blank, separator } from '../utils/logger.js';
 
 /**
@@ -161,6 +161,12 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
             await storeModule.remove(dep.libName, dep.commit, platform);
             const storeKey = registry.getStoreKey(dep.libName, dep.commit, platform);
             registry.removeStore(storeKey);
+          }
+
+          // 删除 _shared 的 StoreEntry（如果存在）
+          const sharedKey = registry.getStoreKey(dep.libName, dep.commit, SHARED_PLATFORM);
+          if (registry.getStore(sharedKey)) {
+            registry.removeStore(sharedKey);
           }
 
           // 清理整个 commit 目录（包括 _shared）

@@ -8,6 +8,7 @@ import { ensureInitialized } from '../core/guard.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
 import * as config from '../core/config.js';
+import { SHARED_PLATFORM } from '../core/platform.js';
 import { formatSize } from '../utils/disk.js';
 import { info, warn, success, hint, blank, separator, title, error } from '../utils/logger.js';
 import { withGlobalLock } from '../utils/global-lock.js';
@@ -282,6 +283,13 @@ export async function cleanLibraries(options: CleanOptions): Promise<void> {
       // 检查是否还有该库的其他平台，如果没有则清理整个 commit 目录
       const remainingPlatforms = registry.getLibraryPlatforms(entry.libName, entry.commit);
       if (remainingPlatforms.length === 0) {
+        // 删除 _shared 的 StoreEntry（如果存在）
+        const sharedKey = registry.getStoreKey(entry.libName, entry.commit, SHARED_PLATFORM);
+        const sharedEntry = registry.getStore(sharedKey);
+        if (sharedEntry) {
+          registry.removeStore(sharedKey);
+          freedSize += sharedEntry.size;
+        }
         await cleanCommitDirectory(storePath, entry.libName, entry.commit);
         // 移除 LibraryInfo
         const libKey = registry.getLibraryKey(entry.libName, entry.commit);

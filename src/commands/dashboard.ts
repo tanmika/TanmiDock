@@ -7,7 +7,7 @@ import type RegistryManager from '../core/registry.js';
 import * as config from '../core/config.js';
 import * as store from '../core/store.js';
 import { colorize, blank } from '../utils/logger.js';
-import { shrinkHome } from '../core/platform.js';
+import { shrinkHome, SHARED_PLATFORM } from '../core/platform.js';
 import { formatBytes } from '../utils/progress.js';
 import { createRequire } from 'module';
 import type { DockConfig } from '../types/index.js';
@@ -102,9 +102,11 @@ async function showStoreStatus(cfg: DockConfig, registry: RegistryManager | null
 
   if (registry) {
     const stores = registry.listStores();
+    // 过滤掉 _shared 伪平台，只统计真正的库
+    const realStores = stores.filter((s) => s.platform !== SHARED_PLATFORM);
     const totalSize = await store.getTotalSize();
     const spaceStats = registry.getSpaceStats();
-    console.log(`   库数量      ${colorize(String(stores.length), 'cyan')}`);
+    console.log(`   库数量      ${colorize(String(realStores.length), 'cyan')}`);
     console.log(`   占用空间    ${colorize(formatBytes(totalSize), 'cyan')}`);
     if (spaceStats.savedSize > 0) {
       console.log(`   节省空间    ${colorize(formatBytes(spaceStats.savedSize), 'green')}`);

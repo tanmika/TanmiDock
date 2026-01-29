@@ -25,7 +25,7 @@ import type { NestedAbsorbInfo } from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { setProxyConfig } from '../core/codepac.js';
-import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, pathsEqual, isSparseOnlyCommon } from '../core/platform.js';
+import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, SHARED_PLATFORM, pathsEqual, isSparseOnlyCommon } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize } from '../utils/fs-utils.js';
@@ -777,6 +777,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               }
             }
 
+            // 注册 _shared 目录（如果存在）
+            await registerSharedStore(dependency.libName, dependency.commit, dependency.branch, dependency.url);
+
             // 注册嵌套依赖
             await registerNestedLibraries(absorbResult.nestedLibraries, projectHash);
 
@@ -1037,6 +1040,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               registry.addStoreReference(storeKey, projectHash);
             }
 
+            // 注册 _shared 目录（如果存在）
+            await registerSharedStore(dependency.libName, dependency.commit, dependency.branch, dependency.url);
+
             success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 创建链接 [${linkNewExisting.join(', ')}]`);
           }
           break;
@@ -1117,6 +1123,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   }
                   registry.addStoreReference(storeKey, projectHash);
                 }
+
+                // 注册 _shared 目录（如果存在）
+                await registerSharedStore(dependency.libName, dependency.commit, dependency.branch, dependency.url);
 
                 // 兼容旧结构：也添加 LibraryInfo
                 const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
@@ -1405,6 +1414,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   registry.addStoreReference(storeKey, projectHash);
                 }
 
+                // 注册 _shared 目录（如果存在）
+                await registerSharedStore(dependency.libName, dependency.commit, dependency.branch, dependency.url);
+
                 // 兼容旧结构：也添加 LibraryInfo
                 const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
                 if (!registry.getLibrary(libKey)) {
@@ -1686,6 +1698,63 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 }
 
 /**
+ * 注册 _shared 目录的 StoreEntry（如果存在）
+ * 用于追踪平台库的共享内容大小
+ *
+ * @param libName 库名
+ * @param commit commit hash
+ * @param branch 分支名（可选，嵌套依赖可能没有）
+ * @param url Git URL（可选，嵌套依赖可能没有）
+ * @returns 是否成功注册（_shared 目录存在且有内容）
+ */
+async function registerSharedStore(
+  libName: string,
+  commit: string,
+  branch: string = '',
+  url: string = ''
+): Promise<boolean> {
+  const registry = getRegistry();
+  const storeKey = registry.getStoreKey(libName, commit, SHARED_PLATFORM);
+
+  // 如果已存在，不重复注册
+  if (registry.getStore(storeKey)) {
+    return true;
+  }
+
+  // 检查 _shared 目录是否存在
+  const storePath = await config.getStorePath();
+  if (!storePath) return false;
+
+  const sharedPath = path.join(storePath, libName, commit, '_shared');
+  try {
+    await fs.access(sharedPath);
+    const entries = await fs.readdir(sharedPath);
+    if (entries.length === 0) {
+      return false; // 空目录不注册
+    }
+  } catch {
+    return false; // 目录不存在
+  }
+
+  // 计算 _shared 大小并注册
+  const sharedSize = await getDirSize(sharedPath);
+  registry.addStore({
+    libName,
+    commit,
+    platform: SHARED_PLATFORM,
+    branch,
+    url,
+    size: sharedSize,
+    usedBy: [], // _shared 不追踪引用，生命周期跟随平台
+    createdAt: new Date().toISOString(),
+    lastAccess: new Date().toISOString(),
+  });
+
+  debug(`注册 _shared: ${libName}:${commit.slice(0, 8)} (${formatSize(sharedSize)})`);
+  return true;
+}
+
+/**
  * 注册嵌套依赖到 Registry
  * absorbLib 递归吸收嵌套依赖时只做文件操作，此函数负责 Registry 注册
  */
@@ -1754,6 +1823,9 @@ async function registerNestedLibraries(
         }
         registry.addStoreReference(storeKey, projectHash);
       }
+
+      // 注册 _shared 目录（如果存在）
+      await registerSharedStore(nested.libName, nested.commit, '', '');
 
       // 兼容旧结构：LibraryInfo
       const libKey = registry.getLibraryKey(nested.libName, nested.commit);
@@ -2058,6 +2130,9 @@ async function supplementMissingPlatforms(
             });
           }
         }
+
+        // 注册 _shared 目录（如果存在）
+        await registerSharedStore(dependency.libName, dependency.commit, dependency.branch, dependency.url);
 
         success(`${dependency.libName} 已补充平台 [${downloaded.join(', ')}]`);
       }
