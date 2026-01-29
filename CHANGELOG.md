@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-01-29
+
+### Fixed
+
+- **空间统计准确性**: 追踪平台库 `_shared` 目录大小，修复空间统计偏差约 50% 的问题
+  - 将 `_shared` 作为伪平台纳入 StoreEntry 管理
+  - 新增自动迁移功能为现有库补充 `_shared` 记录
+  - link/clean/unlink 操作同步维护 `_shared` StoreEntry
+- **并行下载进度条**: 使用 MultiBar 统一管理进度条，修复多个进度条互相干扰导致显示错乱的问题
+- **嵌套依赖 cache 同步**: 修复 td link 处理嵌套依赖时未同步 `.cache/codepac-dep.json` 的问题，避免 cmake checkValid.js 检测失败
+
 ## [0.7.2] - 2026-01-22
 
 ### Added
