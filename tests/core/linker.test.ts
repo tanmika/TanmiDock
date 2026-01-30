@@ -21,7 +21,19 @@ vi.mock('fs/promises', () => ({
 // Mock platform
 vi.mock('../../src/core/platform.js', () => ({
   isWindows: vi.fn(() => false),
-  KNOWN_PLATFORM_VALUES: ['macOS', 'macOS-asan', 'Win', 'iOS', 'iOS-asan', 'android', 'android-asan', 'android-hwasan', 'ubuntu', 'wasm', 'ohos'],
+  KNOWN_PLATFORM_VALUES: [
+    'macOS',
+    'macOS-asan',
+    'Win',
+    'iOS',
+    'iOS-asan',
+    'android',
+    'android-asan',
+    'android-hwasan',
+    'ubuntu',
+    'wasm',
+    'ohos',
+  ],
 }));
 
 // Mock fs-utils
@@ -64,13 +76,7 @@ describe('linker', () => {
       fsMock.mkdir.mockResolvedValue(undefined);
       fsMock.symlink.mockResolvedValue(undefined);
 
-      await linkLibrary(
-        '/project/3rdparty/mylib',
-        '/store',
-        'mylib',
-        'abc123',
-        ['macOS']
-      );
+      await linkLibrary('/project/3rdparty/mylib', '/store', 'mylib', 'abc123', ['macOS']);
 
       // Should create symlink to single platform
       expect(fsMock.symlink).toHaveBeenCalledWith(
@@ -105,13 +111,7 @@ describe('linker', () => {
         { name: 'CMakeLists.txt', isDirectory: () => false },
       ]);
 
-      await linkLibrary(
-        '/project/3rdparty/mylib',
-        '/store',
-        'mylib',
-        'abc123',
-        ['macOS', 'iOS']
-      );
+      await linkLibrary('/project/3rdparty/mylib', '/store', 'mylib', 'abc123', ['macOS', 'iOS']);
 
       // Should create real directory and symlinks inside
       expect(fsMock.rm).toHaveBeenCalled();
@@ -138,13 +138,10 @@ describe('linker', () => {
         { name: 'CMakeLists.txt', isDirectory: () => false },
       ]);
 
-      await linkMultiPlatform(
-        '/project/3rdparty/mylib',
-        '/store',
-        'mylib',
-        'abc123',
-        ['macOS', 'iOS']
-      );
+      await linkMultiPlatform('/project/3rdparty/mylib', '/store', 'mylib', 'abc123', [
+        'macOS',
+        'iOS',
+      ]);
 
       // Should have created multiple symlinks (macOS, iOS in primary, dependencies, CMakeLists.txt, iOS again from step 4)
       expect(fsMock.symlink.mock.calls.length).toBeGreaterThanOrEqual(4);
@@ -172,11 +169,7 @@ describe('linker', () => {
       fsMock.symlink.mockResolvedValue(undefined);
       copyDirMock.mockResolvedValue(undefined);
 
-      await linkLib(
-        '/project/3rdParty/libtest',
-        '/store/libtest/abc123',
-        ['macOS', 'Win']
-      );
+      await linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS', 'Win']);
 
       // 验证平台目录符号链接被创建
       expect(fsMock.symlink).toHaveBeenCalledWith(
@@ -191,7 +184,7 @@ describe('linker', () => {
       );
     });
 
-    it('should copy shared files (not symlink) and symlink .git', async () => {
+    it('should symlink shared folders and copy files', async () => {
       const { linkLib } = await import('../../src/core/linker.js');
 
       fsMock.rm.mockResolvedValue(undefined);
@@ -203,15 +196,21 @@ describe('linker', () => {
       // Mock readdir for _shared: 返回 .git 目录、其他目录和文件
       fsMock.readdir.mockResolvedValue([
         { name: '.git', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
-        { name: 'cmake', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
-        { name: 'config.json', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+        {
+          name: 'cmake',
+          isDirectory: () => true,
+          isFile: () => false,
+          isSymbolicLink: () => false,
+        },
+        {
+          name: 'config.json',
+          isDirectory: () => false,
+          isFile: () => true,
+          isSymbolicLink: () => false,
+        },
       ]);
 
-      await linkLib(
-        '/project/3rdParty/libtest',
-        '/store/libtest/abc123',
-        ['macOS']
-      );
+      await linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS']);
 
       // 验证 .git 目录被符号链接
       expect(fsMock.symlink).toHaveBeenCalledWith(
@@ -219,17 +218,19 @@ describe('linker', () => {
         path.join('/project/3rdParty/libtest', '.git'),
         'dir'
       );
-      // 验证其他目录被复制
-      expect(copyDirMock).toHaveBeenCalledWith(
+      // 验证其他目录也被符号链接（新优化行为）
+      expect(fsMock.symlink).toHaveBeenCalledWith(
         path.join('/store/libtest/abc123', '_shared', 'cmake'),
         path.join('/project/3rdParty/libtest', 'cmake'),
-        { preserveSymlinks: true }
+        'dir'
       );
       // 验证文件被复制
       expect(fsMock.copyFile).toHaveBeenCalledWith(
         path.join('/store/libtest/abc123', '_shared', 'config.json'),
         path.join('/project/3rdParty/libtest', 'config.json')
       );
+      // 验证复制没有被调用（因为使用符号链接）
+      expect(copyDirMock).not.toHaveBeenCalled();
     });
 
     it('should skip non-existent platforms without error', async () => {
@@ -247,11 +248,7 @@ describe('linker', () => {
 
       // 不应该抛出错误
       await expect(
-        linkLib(
-          '/project/3rdParty/libtest',
-          '/store/libtest/abc123',
-          ['macOS', 'Win']
-        )
+        linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS', 'Win'])
       ).resolves.not.toThrow();
 
       // 只有 macOS 被链接
@@ -275,11 +272,7 @@ describe('linker', () => {
       fsMock.symlink.mockResolvedValue(undefined);
       copyDirMock.mockResolvedValue(undefined);
 
-      await linkLib(
-        '/project/3rdParty/libtest',
-        '/store/libtest/abc123',
-        ['macOS']
-      );
+      await linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS']);
 
       // _shared 不存在时不应调用 copyDir
       expect(copyDirMock).not.toHaveBeenCalled();
@@ -296,21 +289,14 @@ describe('linker', () => {
       fsMock.symlink.mockResolvedValue(undefined);
       copyDirMock.mockResolvedValue(undefined);
 
-      await linkLib(
-        '/project/3rdParty/libtest',
-        '/store/libtest/abc123',
-        ['macOS']
-      );
+      await linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS']);
 
       // 验证先删除再创建
-      expect(fsMock.rm).toHaveBeenCalledWith(
-        '/project/3rdParty/libtest',
-        { recursive: true, force: true }
-      );
-      expect(fsMock.mkdir).toHaveBeenCalledWith(
-        '/project/3rdParty/libtest',
-        { recursive: true }
-      );
+      expect(fsMock.rm).toHaveBeenCalledWith('/project/3rdParty/libtest', {
+        recursive: true,
+        force: true,
+      });
+      expect(fsMock.mkdir).toHaveBeenCalledWith('/project/3rdParty/libtest', { recursive: true });
     });
 
     it('should cleanup on symlink failure', async () => {
@@ -325,19 +311,15 @@ describe('linker', () => {
       copyDirMock.mockResolvedValue(undefined);
 
       await expect(
-        linkLib(
-          '/project/3rdParty/libtest',
-          '/store/libtest/abc123',
-          ['macOS']
-        )
+        linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS'])
       ).rejects.toThrow('symlink failed');
 
       // 验证失败后清理
       expect(fsMock.rm).toHaveBeenCalledTimes(2);
-      expect(fsMock.rm).toHaveBeenLastCalledWith(
-        '/project/3rdParty/libtest',
-        { recursive: true, force: true }
-      );
+      expect(fsMock.rm).toHaveBeenLastCalledWith('/project/3rdParty/libtest', {
+        recursive: true,
+        force: true,
+      });
     });
 
     it('should handle empty platforms array', async () => {
@@ -351,16 +333,17 @@ describe('linker', () => {
       copyDirMock.mockResolvedValue(undefined);
       // Mock readdir for _shared
       fsMock.readdir.mockResolvedValue([
-        { name: 'config.json', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+        {
+          name: 'config.json',
+          isDirectory: () => false,
+          isFile: () => true,
+          isSymbolicLink: () => false,
+        },
       ]);
 
       // 空平台列表应该正常执行（只处理 _shared）
       await expect(
-        linkLib(
-          '/project/3rdParty/libtest',
-          '/store/libtest/abc123',
-          []
-        )
+        linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', [])
       ).resolves.not.toThrow();
 
       // 无平台，不创建平台符号链接（但 _shared 中的 .git 可能会创建）
@@ -376,10 +359,7 @@ describe('linker', () => {
       fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true, isDirectory: () => false });
       fsMock.readlink.mockResolvedValue('/store/mylib/abc123/macOS');
 
-      const status = await getPathStatus(
-        '/project/3rdparty/mylib',
-        '/store/mylib/abc123/macOS'
-      );
+      const status = await getPathStatus('/project/3rdparty/mylib', '/store/mylib/abc123/macOS');
 
       expect(status).toBe('linked');
     });
@@ -390,10 +370,7 @@ describe('linker', () => {
       fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true, isDirectory: () => false });
       fsMock.readlink.mockResolvedValue('/store/mylib/abc123/iOS');
 
-      const status = await getPathStatus(
-        '/project/3rdparty/mylib',
-        '/store/mylib/abc123/macOS'
-      );
+      const status = await getPathStatus('/project/3rdparty/mylib', '/store/mylib/abc123/macOS');
 
       expect(status).toBe('wrong_link');
     });
@@ -403,10 +380,7 @@ describe('linker', () => {
 
       fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false, isDirectory: () => true });
 
-      const status = await getPathStatus(
-        '/project/3rdparty/mylib',
-        '/store/mylib/abc123/macOS'
-      );
+      const status = await getPathStatus('/project/3rdparty/mylib', '/store/mylib/abc123/macOS');
 
       expect(status).toBe('directory');
     });
@@ -416,10 +390,7 @@ describe('linker', () => {
 
       fsMock.lstat.mockRejectedValue({ code: 'ENOENT' });
 
-      const status = await getPathStatus(
-        '/project/3rdparty/mylib',
-        '/store/mylib/abc123/macOS'
-      );
+      const status = await getPathStatus('/project/3rdparty/mylib', '/store/mylib/abc123/macOS');
 
       expect(status).toBe('missing');
     });
@@ -434,10 +405,10 @@ describe('linker', () => {
 
       await linkGeneral('/project/3rdparty/eigen', '/store/eigen/abc123/_shared');
 
-      expect(fsMock.rm).toHaveBeenCalledWith(
-        '/project/3rdparty/eigen',
-        { recursive: true, force: true }
-      );
+      expect(fsMock.rm).toHaveBeenCalledWith('/project/3rdparty/eigen', {
+        recursive: true,
+        force: true,
+      });
       expect(fsMock.symlink).toHaveBeenCalledWith(
         '/store/eigen/abc123/_shared',
         '/project/3rdparty/eigen',
@@ -455,10 +426,10 @@ describe('linker', () => {
       await linkGeneral('/project/3rdparty/eigen', '/store/eigen/abc123/_shared');
 
       // 应该先删除旧目录
-      expect(fsMock.rm).toHaveBeenCalledWith(
-        '/project/3rdparty/eigen',
-        { recursive: true, force: true }
-      );
+      expect(fsMock.rm).toHaveBeenCalledWith('/project/3rdparty/eigen', {
+        recursive: true,
+        force: true,
+      });
 
       // 然后创建符号链接
       expect(fsMock.symlink).toHaveBeenCalledWith(
@@ -475,7 +446,19 @@ describe('linker', () => {
       // 临时修改 isWindows 返回值
       vi.doMock('../../src/core/platform.js', () => ({
         isWindows: vi.fn(() => true),
-        KNOWN_PLATFORM_VALUES: ['macOS', 'macOS-asan', 'Win', 'iOS', 'iOS-asan', 'android', 'android-asan', 'android-hwasan', 'ubuntu', 'wasm', 'ohos'],
+        KNOWN_PLATFORM_VALUES: [
+          'macOS',
+          'macOS-asan',
+          'Win',
+          'iOS',
+          'iOS-asan',
+          'android',
+          'android-asan',
+          'android-hwasan',
+          'ubuntu',
+          'wasm',
+          'ohos',
+        ],
       }));
 
       const fs = await import('fs/promises');

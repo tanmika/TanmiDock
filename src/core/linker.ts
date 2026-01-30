@@ -8,6 +8,7 @@ import path from 'path';
 import { isWindows, KNOWN_PLATFORM_VALUES } from './platform.js';
 import { copyDir } from '../utils/fs-utils.js';
 import * as logger from '../utils/logger.js';
+import * as config from './config.js';
 
 /**
  * 创建符号链接
@@ -22,6 +23,51 @@ export async function link(target: string, linkPath: string): Promise<void> {
   // Windows 使用 junction，macOS 使用 dir 类型的 symlink
   const type = isWindows() ? 'junction' : 'dir';
   await fs.symlink(target, linkPath, type);
+}
+
+/**
+ * 尝试创建符号链接，失败时回退到复制
+ * 主要用于处理跨文件系统场景（EXDEV 错误）
+ * @param sourcePath 源路径
+ * @param destPath 目标路径
+ * @param isDirectory 是否为目录
+ * @param libName 库名（用于日志）
+ * @param entryName 条目名（用于日志）
+ */
+export async function trySymlinkOrCopy(
+  sourcePath: string,
+  destPath: string,
+  isDirectory: boolean,
+  libName: string,
+  entryName: string
+): Promise<void> {
+  try {
+    if (isDirectory) {
+      // 尝试创建目录符号链接
+      const type = isWindows() ? 'junction' : 'dir';
+      await fs.symlink(sourcePath, destPath, type);
+      logger.debug(`${libName}: 已创建符号链接 ${entryName}`);
+    } else {
+      // 文件直接复制（不在 _shared 优化范围内）
+      await fs.copyFile(sourcePath, destPath);
+    }
+  } catch (err) {
+    const errorCode = (err as NodeJS.ErrnoException).code;
+
+    // EXDEV: 跨文件系统错误，回退到复制
+    if (errorCode === 'EXDEV') {
+      logger.warn(`${libName}: 跨文件系统，回退到复制 ${entryName}`);
+      if (isDirectory) {
+        await copyDir(sourcePath, destPath, { preserveSymlinks: true });
+      } else {
+        await fs.copyFile(sourcePath, destPath);
+      }
+    } else {
+      // 其他错误，记录并抛出
+      logger.error(`${libName}: 创建符号链接失败 ${entryName}: ${(err as Error).message}`);
+      throw err;
+    }
+  }
 }
 
 /**
@@ -350,6 +396,9 @@ export async function linkLib(
   storeCommitPath: string,
   platforms: string[]
 ): Promise<void> {
+  // 0. 读取配置
+  const sharedSymlinkFolders = (await config.get('sharedSymlinkFolders')) ?? true;
+
   // 1. 清理旧内容
   await fs.rm(localPath, { recursive: true, force: true });
 
@@ -398,15 +447,27 @@ export async function linkLib(
             await fs.symlink(sourcePath, destPath, type);
           } else if (entry.isFile()) {
             // .git 是文件（worktree/submodule 场景）：复制并警告
-            logger.warn(`${path.basename(localPath)}: .git 是文件（可能是 worktree/submodule），git 验证可能失败`);
+            logger.warn(
+              `${path.basename(localPath)}: .git 是文件（可能是 worktree/submodule），git 验证可能失败`
+            );
             await fs.copyFile(sourcePath, destPath);
           } else if (entry.isSymbolicLink()) {
             // .git 是符号链接（异常情况）：记录并跳过
             logger.debug(`${path.basename(localPath)}: .git 是符号链接，已跳过`);
           }
         } else if (entry.isDirectory()) {
-          // 其他目录：复制
-          await copyDir(sourcePath, destPath, { preserveSymlinks: true });
+          // 其他目录：根据配置选择符号链接或复制
+          if (sharedSymlinkFolders) {
+            await trySymlinkOrCopy(
+              sourcePath,
+              destPath,
+              true,
+              path.basename(localPath),
+              entry.name
+            );
+          } else {
+            await copyDir(sourcePath, destPath, { preserveSymlinks: true });
+          }
         } else if (entry.isSymbolicLink()) {
           // 符号链接：保留
           const linkTarget = await fs.readlink(sourcePath);
@@ -428,10 +489,7 @@ export async function linkLib(
  * 为 General 类型库创建整目录符号链接
  * 将 localPath 整个变为符号链接，指向 Store 的 _shared
  */
-export async function linkGeneral(
-  localPath: string,
-  storeSharedPath: string
-): Promise<void> {
+export async function linkGeneral(localPath: string, storeSharedPath: string): Promise<void> {
   await fs.rm(localPath, { recursive: true, force: true });
   const type = isWindows() ? 'junction' : 'dir';
   await fs.symlink(storeSharedPath, localPath, type);

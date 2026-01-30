@@ -19,15 +19,16 @@ export interface DockConfig {
   initialized: boolean;
   storePath: string;
   cleanStrategy: CleanStrategy;
-  unusedDays: number;           // unused 策略的天数阈值
+  unusedDays: number; // unused 策略的天数阈值
   unreferencedThreshold?: number; // capacity 策略的容量阈值（字节）
   maxStoreSize?: number;
   autoDownload: boolean;
   // 新增配置项
-  concurrency: number;          // 并发下载数，默认 5
-  logLevel: LogLevel;           // 日志级别，默认 'info'
-  proxy?: ProxyConfig;          // 代理配置，可选
-  unverifiedLocalStrategy: UnverifiedLocalStrategy;  // 无法验证commit的本地库处理策略
+  concurrency: number; // 并发下载数，默认 5
+  logLevel: LogLevel; // 日志级别，默认 'info'
+  proxy?: ProxyConfig; // 代理配置，可选
+  unverifiedLocalStrategy: UnverifiedLocalStrategy; // 无法验证commit的本地库处理策略
+  sharedSymlinkFolders?: boolean; // _shared目录是否使用符号链接，默认true
 }
 
 export type CleanStrategy = 'unreferenced' | 'unused' | 'manual' | 'capacity';
@@ -38,9 +39,9 @@ export type UnverifiedLocalStrategy = 'download' | 'absorb';
  * 代理配置
  */
 export interface ProxyConfig {
-  http?: string;                // HTTP 代理，如 http://127.0.0.1:7890
-  https?: string;               // HTTPS 代理，如 http://127.0.0.1:7890
-  noProxy?: string[];           // 不走代理的域名列表
+  http?: string; // HTTP 代理，如 http://127.0.0.1:7890
+  https?: string; // HTTPS 代理，如 http://127.0.0.1:7890
+  noProxy?: string[]; // 不走代理的域名列表
 }
 
 /**
@@ -56,6 +57,7 @@ export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
   concurrency: 5,
   logLevel: 'info',
   unverifiedLocalStrategy: 'download',
+  sharedSymlinkFolders: true,
 };
 
 // ============ 注册表相关 ============
@@ -66,8 +68,8 @@ export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
 export interface Registry {
   version: string;
   projects: Record<string, ProjectInfo>;
-  libraries: Record<string, LibraryInfo>;  // 旧字段，兼容读取
-  stores: Record<string, StoreEntry>;       // 新字段，按平台存储
+  libraries: Record<string, LibraryInfo>; // 旧字段，兼容读取
+  stores: Record<string, StoreEntry>; // 新字段，按平台存储
 }
 
 /**
@@ -77,9 +79,9 @@ export interface ProjectInfo {
   path: string;
   configPath: string;
   lastLinked: string;
-  platforms: string[];      // 项目使用的平台列表 (macOS, iOS, android...)
+  platforms: string[]; // 项目使用的平台列表 (macOS, iOS, android...)
   dependencies: DependencyRef[];
-  optionalConfigs?: string[];  // 用户选择的可选配置文件名列表
+  optionalConfigs?: string[]; // 用户选择的可选配置文件名列表
 }
 
 /**
@@ -88,7 +90,7 @@ export interface ProjectInfo {
 export interface DependencyRef {
   libName: string;
   commit: string;
-  platform: string;         // 该依赖对应的平台
+  platform: string; // 该依赖对应的平台
   linkedPath: string;
 }
 
@@ -121,12 +123,12 @@ export interface LibraryInfo {
 export interface StoreEntry {
   libName: string;
   commit: string;
-  platform: string;           // 平台目录名 (macOS, iOS, android...)
+  platform: string; // 平台目录名 (macOS, iOS, android...)
   branch: string;
   url: string;
   size: number;
-  usedBy: string[];           // 项目 hash 列表
-  unlinkedAt?: number;        // 变成无引用的时间戳
+  usedBy: string[]; // 项目 hash 列表
+  unlinkedAt?: number; // 变成无引用的时间戳
   createdAt: string;
   lastAccess: string;
 }
