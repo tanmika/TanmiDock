@@ -28,12 +28,12 @@ import { setProxyConfig } from '../core/codepac.js';
 import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, SHARED_PLATFORM, pathsEqual, isSparseOnlyCommon } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
-import { getDirSize } from '../utils/fs-utils.js';
+import { getDirSize, getDirectoryIntegrity } from '../utils/fs-utils.js';
 import { ProgressTracker, DownloadMonitor, MultiBarManager } from '../utils/progress.js';
 import { success, warn, error, info, hint, blank, separator, debug } from '../utils/logger.js';
 import { verifyLocalCommit } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
-import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext } from '../types/index.js';
+import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext, StoreEntry } from '../types/index.js';
 import { withGlobalLock } from '../utils/global-lock.js';
 import { confirmAction, selectPlatforms, parsePlatformArgs, selectOption, selectOptionalConfigs, PROMPT_CANCELLED } from '../utils/prompt.js';
 import type { OptionalConfig, SelectOptionalConfigsOptions } from '../utils/prompt.js';
@@ -762,14 +762,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
             for (const platform of absorbLinkPlatforms) {
               const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
               if (!registry.getStore(storeKey)) {
-                const platformSize = await store.getSize(dependency.libName, dependency.commit, platform);
+                const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
                 registry.addStore({
                   libName: dependency.libName,
                   commit: dependency.commit,
                   platform,
                   branch: dependency.branch,
                   url: dependency.url,
-                  size: platformSize,
+                  ...integrity,
                   usedBy: [],
                   createdAt: new Date().toISOString(),
                   lastAccess: new Date().toISOString(),
@@ -837,14 +837,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               // Registry: StoreEntry 记录
               const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
               if (!registry.getStore(storeKey)) {
-                const sharedSize = await getDirSize(sharedPath);
+                const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
                 registry.addStore({
                   libName: dependency.libName,
                   commit: dependency.commit,
                   platform: GENERAL_PLATFORM,
                   branch: dependency.branch,
                   url: dependency.url,
-                  size: sharedSize,
+                  ...integrity,
                   usedBy: [],
                   createdAt: new Date().toISOString(),
                   lastAccess: new Date().toISOString(),
@@ -971,14 +971,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
             // StoreEntry 记录
             const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
             if (!registry.getStore(storeKey)) {
-              const sharedSize = await getDirSize(sharedPath);
+              const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
               registry.addStore({
                 libName: dependency.libName,
                 commit: dependency.commit,
                 platform: GENERAL_PLATFORM,
                 branch: dependency.branch,
                 url: dependency.url,
-                size: sharedSize,
+                ...integrity,
                 usedBy: [],
                 createdAt: new Date().toISOString(),
                 lastAccess: new Date().toISOString(),
@@ -1024,14 +1024,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
               const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
               // 如果 StoreEntry 不存在，创建它
               if (!registry.getStore(storeKey)) {
-                const platformSize = await store.getSize(dependency.libName, dependency.commit, platform);
+                const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
                 registry.addStore({
                   libName: dependency.libName,
                   commit: dependency.commit,
                   platform,
                   branch: dependency.branch,
                   url: dependency.url,
-                  size: platformSize,
+                  ...integrity,
                   usedBy: [],
                   createdAt: new Date().toISOString(),
                   lastAccess: new Date().toISOString(),
@@ -1108,14 +1108,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                 for (const platform of platforms) {
                   const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
                   if (!registry.getStore(storeKey)) {
-                    const platformSize = await store.getSize(dependency.libName, dependency.commit, platform);
+                    const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
                     registry.addStore({
                       libName: dependency.libName,
                       commit: dependency.commit,
                       platform,
                       branch: dependency.branch,
                       url: dependency.url,
-                      size: platformSize,
+                      ...integrity,
                       usedBy: [],
                       createdAt: new Date().toISOString(),
                       lastAccess: new Date().toISOString(),
@@ -1231,14 +1231,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   // StoreEntry 记录
                   const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
                   if (!registry.getStore(storeKey)) {
-                    const sharedSize = await getDirSize(sharedPath);
+                    const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
                     registry.addStore({
                       libName: dependency.libName,
                       commit: dependency.commit,
                       platform: GENERAL_PLATFORM,
                       branch: dependency.branch,
                       url: dependency.url,
-                      size: sharedSize,
+                      ...integrity,
                       usedBy: [],
                       createdAt: new Date().toISOString(),
                       lastAccess: new Date().toISOString(),
@@ -1334,14 +1334,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   // StoreEntry 记录
                   const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
                   if (!registry.getStore(storeKey)) {
-                    const sharedSize = await getDirSize(sharedPath);
+                    const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
                     registry.addStore({
                       libName: dependency.libName,
                       commit: dependency.commit,
                       platform: GENERAL_PLATFORM,
                       branch: dependency.branch,
                       url: dependency.url,
-                      size: sharedSize,
+                      ...integrity,
                       usedBy: [],
                       createdAt: new Date().toISOString(),
                       lastAccess: new Date().toISOString(),
@@ -1398,14 +1398,14 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                 for (const platform of linkPlatforms) {
                   const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
                   if (!registry.getStore(storeKey)) {
-                    const platformSize = await store.getSize(dependency.libName, dependency.commit, platform);
+                    const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
                     registry.addStore({
                       libName: dependency.libName,
                       commit: dependency.commit,
                       platform,
                       branch: dependency.branch,
                       url: dependency.url,
-                      size: platformSize,
+                      ...integrity,
                       usedBy: [],
                       createdAt: new Date().toISOString(),
                       lastAccess: new Date().toISOString(),
@@ -1736,21 +1736,21 @@ async function registerSharedStore(
     return false; // 目录不存在
   }
 
-  // 计算 _shared 大小并注册
-  const sharedSize = await getDirSize(sharedPath);
+  // 计算 _shared 完整性信息并注册
+  const integrity = await store.captureIntegrity(libName, commit, SHARED_PLATFORM);
   registry.addStore({
     libName,
     commit,
     platform: SHARED_PLATFORM,
     branch,
     url,
-    size: sharedSize,
+    ...integrity,
     usedBy: [], // _shared 不追踪引用，生命周期跟随平台
     createdAt: new Date().toISOString(),
     lastAccess: new Date().toISOString(),
   });
 
-  debug(`注册 _shared: ${libName}:${commit.slice(0, 8)} (${formatSize(sharedSize)})`);
+  debug(`注册 _shared: ${libName}:${commit.slice(0, 8)} (${formatSize(integrity.size)})`);
   return true;
 }
 
@@ -1774,13 +1774,14 @@ async function registerNestedLibraries(
       // General 库：单个 StoreEntry
       const storeKey = registry.getStoreKey(nested.libName, nested.commit, GENERAL_PLATFORM);
       if (!registry.getStore(storeKey)) {
+        const integrity = await store.captureIntegrity(nested.libName, nested.commit, GENERAL_PLATFORM);
         registry.addStore({
           libName: nested.libName,
           commit: nested.commit,
           platform: GENERAL_PLATFORM,
           branch: '',
           url: '',
-          size: nested.size,
+          ...integrity,
           usedBy: [],
           createdAt: new Date().toISOString(),
           lastAccess: new Date().toISOString(),
@@ -1808,14 +1809,14 @@ async function registerNestedLibraries(
       for (const platform of nested.platforms) {
         const storeKey = registry.getStoreKey(nested.libName, nested.commit, platform);
         if (!registry.getStore(storeKey)) {
-          const platformSize = await store.getSize(nested.libName, nested.commit, platform);
+          const integrity = await store.captureIntegrity(nested.libName, nested.commit, platform);
           registry.addStore({
             libName: nested.libName,
             commit: nested.commit,
             platform,
             branch: '',
             url: '',
-            size: platformSize,
+            ...integrity,
             usedBy: [],
             createdAt: new Date().toISOString(),
             lastAccess: new Date().toISOString(),
@@ -1872,7 +1873,23 @@ async function classifyDependencies(
     const storeLibPath = store.getLibraryPath(storePath, dep.libName, dep.commit, primaryPlatform);
 
     // 检查 Store 中是否有任意请求的平台（而非只检查主平台）
-    const { existing } = await store.checkPlatformCompleteness(dep.libName, dep.commit, platforms);
+    const { existing: rawExisting } = await store.checkPlatformCompleteness(dep.libName, dep.commit, platforms);
+
+    // 完整性校验：验证 existing 平台的文件完整性
+    const { valid: verifiedExisting, corrupted } = await verifyExistingPlatforms(dep.libName, dep.commit, rawExisting);
+
+    // 清除损坏的平台数据
+    if (corrupted.length > 0) {
+      const registry = getRegistry();
+      for (const platform of corrupted) {
+        const storeKey = registry.getStoreKey(dep.libName, dep.commit, platform);
+        registry.removeStore(storeKey);
+        const platformPath = store.getLibraryPath(storePath, dep.libName, dep.commit, platform);
+        await fs.rm(platformPath, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+
+    const existing = verifiedExisting;
     // 也检查是否为 General 库（有 _shared 且有内容）
     const isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
     const inStore = existing.length > 0 || isGeneral;
@@ -2116,14 +2133,14 @@ async function supplementMissingPlatforms(
         for (const platform of downloaded) {
           const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
           if (!registry.getStore(storeKey)) {
-            const platformSize = await store.getSize(dependency.libName, dependency.commit, platform);
+            const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
             registry.addStore({
               libName: dependency.libName,
               commit: dependency.commit,
               platform,
               branch: dependency.branch,
               url: dependency.url,
-              size: platformSize,
+              ...integrity,
               usedBy: [],
               createdAt: new Date().toISOString(),
               lastAccess: new Date().toISOString(),
@@ -2402,12 +2419,32 @@ async function linkNestedDependencies(
     const knownUnavailable = platforms.filter(p => unavailablePlatforms.includes(p));
 
     let storeHas = false;
+    const existingPlatforms: string[] = [];
     for (const p of availablePlatforms) {
       if (await store.exists(dep.libName, dep.commit, p)) {
+        existingPlatforms.push(p);
         storeHas = true;
-        break;
       }
     }
+
+    // 完整性校验：验证 existing 平台的文件完整性（与 classifyDependencies 同逻辑）
+    if (existingPlatforms.length > 0) {
+      const { valid: verifiedPlatforms, corrupted } = await verifyExistingPlatforms(
+        dep.libName, dep.commit, existingPlatforms
+      );
+      if (corrupted.length > 0) {
+        for (const p of corrupted) {
+          const storeKey = registry.getStoreKey(dep.libName, dep.commit, p);
+          registry.removeStore(storeKey);
+          const platformPath = store.getLibraryPath(
+            await store.getStorePath(), dep.libName, dep.commit, p
+          );
+          await fs.rm(platformPath, { recursive: true, force: true }).catch(() => {});
+        }
+        storeHas = verifiedPlatforms.length > 0;
+      }
+    }
+
     let isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
 
     // 如果所有平台都已知不可用，跳过
@@ -2717,6 +2754,76 @@ function mergeDepLists(main: ParsedDependency[], optional: ParsedDependency[]): 
   }
 
   return Array.from(depMap.values());
+}
+
+/**
+ * 校验已有平台的完整性
+ * 遍历 existing 平台列表，查询 Registry 中的 StoreEntry，
+ * 如果有 fileCount，调用 quickVerify 校验；匹配则保留，不匹配则标记为 corrupted。
+ * 没有 fileCount 的条目跳过校验（视为合法）。
+ *
+ * @param libName 库名
+ * @param commit commit hash
+ * @param existingPlatforms Store 中已有的平台列表
+ * @returns { valid: string[]; corrupted: string[] } 合法和损坏的平台列表
+ */
+export async function verifyExistingPlatforms(
+  libName: string,
+  commit: string,
+  existingPlatforms: string[]
+): Promise<{ valid: string[]; corrupted: string[] }> {
+  const valid: string[] = [];
+  const corrupted: string[] = [];
+  const registry = getRegistry();
+
+  for (const platform of existingPlatforms) {
+    const storeKey = registry.getStoreKey(libName, commit, platform);
+    const entry = registry.getStore(storeKey);
+
+    // 没有 StoreEntry 或没有 fileCount 的条目，跳过校验视为合法
+    if (!entry || entry.fileCount == null) {
+      valid.push(platform);
+      continue;
+    }
+
+    const result = await store.quickVerify(libName, commit, platform, {
+      size: entry.size,
+      fileCount: entry.fileCount,
+    });
+
+    if (result.valid) {
+      valid.push(platform);
+    } else {
+      corrupted.push(platform);
+      warn(`${libName} (${commit.slice(0, 7)}) ${platform}: 完整性校验失败 - ${result.reason}`);
+    }
+  }
+
+  return { valid, corrupted };
+}
+
+/**
+ * 创建带完整性信息的 StoreEntry
+ * 在 addStore 时自动采集 fileCount 和 contentHash
+ * @param params StoreEntry 基础参数（不含 fileCount/contentHash）
+ * @returns 包含完整性信息的 StoreEntry
+ */
+export async function createStoreEntryWithIntegrity(params: {
+  libName: string;
+  commit: string;
+  platform: string;
+  branch: string;
+  url: string;
+  size: number;
+}): Promise<StoreEntry> {
+  const integrity = await store.captureIntegrity(params.libName, params.commit, params.platform);
+  return {
+    ...params,
+    ...integrity,
+    usedBy: [],
+    createdAt: new Date().toISOString(),
+    lastAccess: new Date().toISOString(),
+  };
 }
 
 export default createLinkCommand;

@@ -4,6 +4,8 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
+import crypto from 'crypto';
+import { createReadStream } from 'node:fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -150,10 +152,143 @@ export async function removeDir(dirPath: string): Promise<void> {
   await fs.rm(dirPath, { recursive: true, force: true });
 }
 
+/**
+ * 递归统计目录下的文件总数
+ * @param dirPath 目录路径
+ * @returns 文件总数，目录不存在返回 0
+ */
+export async function countFiles(dirPath: string): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync('find', [dirPath, '-type', 'f'], {
+      timeout: 30000,
+    });
+    // find 输出每行一个文件路径，空输出表示 0 个文件
+    const trimmed = stdout.trim();
+    if (trimmed === '') return 0;
+    return trimmed.split('\n').length;
+  } catch {
+    // find 命令失败，回退到递归方式
+  }
+
+  return countFilesFallback(dirPath);
+}
+
+/**
+ * 递归统计文件数（回退方案）
+ */
+async function countFilesFallback(dirPath: string): Promise<number> {
+  let count = 0;
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        count += await countFilesFallback(fullPath);
+      } else if (entry.isFile()) {
+        count++;
+      }
+    }
+  } catch {
+    // 目录不存在或无法访问
+  }
+  return count;
+}
+
+/**
+ * 计算目录内容的 MD5 哈希
+ * 基于排序后的相对路径和文件内容，保证确定性
+ * @param dirPath 目录路径
+ * @returns MD5 哈希字符串
+ */
+export async function hashDirectory(dirPath: string): Promise<string> {
+  // 收集所有文件的相对路径
+  const files = await collectFilePaths(dirPath);
+  files.sort();
+
+  const hash = crypto.createHash('md5');
+
+  for (const relPath of files) {
+    hash.update(relPath);
+    const absPath = path.join(dirPath, relPath);
+    // 流式读取文件内容
+    await new Promise<void>((resolve, reject) => {
+      const stream = createReadStream(absPath);
+      stream.on('data', (chunk: Buffer | string) => hash.update(chunk));
+      stream.on('end', resolve);
+      stream.on('error', reject);
+    });
+  }
+
+  return hash.digest('hex');
+}
+
+/**
+ * 递归收集目录下所有文件的相对路径
+ */
+async function collectFilePaths(dirPath: string): Promise<string[]> {
+  const files: string[] = [];
+  try {
+    const { stdout } = await execFileAsync('find', [dirPath, '-type', 'f'], {
+      timeout: 30000,
+    });
+    const trimmed = stdout.trim();
+    if (trimmed === '') return files;
+    for (const line of trimmed.split('\n')) {
+      files.push(path.relative(dirPath, line));
+    }
+  } catch {
+    // find 命令失败，回退到递归方式
+    await collectFilePathsFallback(dirPath, dirPath, files);
+  }
+  return files;
+}
+
+/**
+ * 递归收集文件路径（回退方案）
+ */
+async function collectFilePathsFallback(
+  basePath: string,
+  currentPath: string,
+  files: string[]
+): Promise<void> {
+  try {
+    const entries = await fs.readdir(currentPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentPath, entry.name);
+      if (entry.isDirectory()) {
+        await collectFilePathsFallback(basePath, fullPath, files);
+      } else if (entry.isFile()) {
+        files.push(path.relative(basePath, fullPath));
+      }
+    }
+  } catch {
+    // 目录不存在或无法访问
+  }
+}
+
+/**
+ * 获取目录完整性信息（size + fileCount + contentHash）
+ * @param dirPath 目录路径
+ * @returns 完整性信息对象
+ */
+export async function getDirectoryIntegrity(dirPath: string): Promise<{
+  size: number; fileCount: number; contentHash: string;
+}> {
+  const [size, fileCount, contentHash] = await Promise.all([
+    getDirSize(dirPath),
+    countFiles(dirPath),
+    hashDirectory(dirPath),
+  ]);
+  return { size, fileCount, contentHash };
+}
+
 export default {
   copyDir,
   copyDirWithProgress,
   getDirSize,
   ensureDir,
   removeDir,
+  countFiles,
+  hashDirectory,
+  getDirectoryIntegrity,
 };

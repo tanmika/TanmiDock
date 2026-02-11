@@ -8,7 +8,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as config from './config.js';
 import { withFileLock } from '../utils/lock.js';
-import { copyDir, getDirSize, copyDirWithProgress, removeDir } from '../utils/fs-utils.js';
+import { copyDir, getDirSize, copyDirWithProgress, removeDir, countFiles, hashDirectory, getDirectoryIntegrity } from '../utils/fs-utils.js';
 import { KNOWN_PLATFORM_VALUES, GENERAL_PLATFORM, isPlatformDir, normalizePlatformValue } from './platform.js';
 import * as logger from '../utils/logger.js';
 
@@ -876,6 +876,93 @@ export async function isGeneralLib(libName: string, commit: string): Promise<boo
   }
 }
 
+/**
+ * 采集平台目录的完整性信息（size + fileCount + contentHash）
+ * @param libName 库名
+ * @param commit commit hash
+ * @param platform 平台名
+ * @returns 完整性信息
+ */
+export async function captureIntegrity(
+  libName: string, commit: string, platform: string
+): Promise<{ size: number; fileCount: number; contentHash: string }> {
+  const storePath = await getStorePath();
+  const platformPath = getLibraryPath(storePath, libName, commit, platform);
+  return getDirectoryIntegrity(platformPath);
+}
+
+/**
+ * 快速校验：仅比较 size 和 fileCount
+ * @param libName 库名
+ * @param commit commit hash
+ * @param platform 平台名
+ * @param expected 期望值
+ * @returns 校验结果
+ */
+export async function quickVerify(
+  libName: string, commit: string, platform: string,
+  expected: { size: number; fileCount?: number }
+): Promise<{ valid: boolean; reason?: string; actual?: { fileCount: number; size: number } }> {
+  if (expected.fileCount == null) {
+    return { valid: true };
+  }
+
+  const storePath = await getStorePath();
+  const platformPath = getLibraryPath(storePath, libName, commit, platform);
+
+  const [actualFileCount, actualSize] = await Promise.all([
+    countFiles(platformPath),
+    getDirSize(platformPath),
+  ]);
+
+  const actual = { fileCount: actualFileCount, size: actualSize };
+
+  if (actualFileCount !== expected.fileCount) {
+    return { valid: false, reason: `fileCount mismatch: expected ${expected.fileCount}, got ${actualFileCount}`, actual };
+  }
+  if (actualSize !== expected.size) {
+    return { valid: false, reason: `size mismatch: expected ${expected.size}, got ${actualSize}`, actual };
+  }
+
+  return { valid: true, actual };
+}
+
+/**
+ * 完整校验：比较 size、fileCount 和 contentHash
+ * @param libName 库名
+ * @param commit commit hash
+ * @param platform 平台名
+ * @param expected 期望值
+ * @returns 校验结果
+ */
+export async function fullVerify(
+  libName: string, commit: string, platform: string,
+  expected: { size: number; fileCount?: number; contentHash?: string }
+): Promise<{ valid: boolean; reason?: string; actual?: { fileCount: number; size: number; contentHash?: string } }> {
+  // 先做快速校验
+  const quickResult = await quickVerify(libName, commit, platform, expected);
+  if (!quickResult.valid) {
+    return quickResult;
+  }
+
+  // 如果没有 contentHash，直接通过
+  if (expected.contentHash == null) {
+    return { valid: true, actual: quickResult.actual };
+  }
+
+  const storePath = await getStorePath();
+  const platformPath = getLibraryPath(storePath, libName, commit, platform);
+  const actualHash = await hashDirectory(platformPath);
+
+  const actual = { ...quickResult.actual!, contentHash: actualHash };
+
+  if (actualHash !== expected.contentHash) {
+    return { valid: false, reason: `contentHash mismatch: expected ${expected.contentHash}, got ${actualHash}`, actual };
+  }
+
+  return { valid: true, actual };
+}
+
 export default {
   getLibraryPath,
   getStorePath,
@@ -895,4 +982,7 @@ export default {
   ensureCompatibleStore,
   checkPlatformCompleteness,
   isGeneralLib,
+  captureIntegrity,
+  quickVerify,
+  fullVerify,
 };

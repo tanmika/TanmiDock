@@ -34,6 +34,18 @@ vi.mock('../../src/utils/lock.js', () => ({
   withFileLock: vi.fn(async (_path: string, fn: () => Promise<unknown>) => fn()),
 }));
 
+// Mock fs-utils - 保留原始实现，按需覆盖
+vi.mock('../../src/utils/fs-utils.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../src/utils/fs-utils.js')>();
+  return {
+    ...original,
+    getDirSize: vi.fn().mockResolvedValue(0),
+    countFiles: vi.fn().mockResolvedValue(0),
+    hashDirectory: vi.fn().mockResolvedValue('mock-hash'),
+    getDirectoryIntegrity: vi.fn().mockResolvedValue({ size: 0, fileCount: 0, contentHash: 'mock-hash' }),
+  };
+});
+
 describe('store', () => {
   let fsMock: {
     access: ReturnType<typeof vi.fn>;
@@ -48,6 +60,12 @@ describe('store', () => {
   };
   let configMock: { getStorePath: ReturnType<typeof vi.fn> };
   let loggerMock: { warn: ReturnType<typeof vi.fn> };
+  let fsUtilsMock: {
+    getDirSize: ReturnType<typeof vi.fn>;
+    countFiles: ReturnType<typeof vi.fn>;
+    hashDirectory: ReturnType<typeof vi.fn>;
+    getDirectoryIntegrity: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(async () => {
     vi.resetModules();
@@ -62,6 +80,13 @@ describe('store', () => {
     const logger = await import('../../src/utils/logger.js');
     loggerMock = logger as typeof loggerMock;
     loggerMock.warn.mockReset();
+
+    const fsUtils = await import('../../src/utils/fs-utils.js');
+    fsUtilsMock = fsUtils as unknown as typeof fsUtilsMock;
+    fsUtilsMock.getDirSize.mockReset().mockResolvedValue(0);
+    fsUtilsMock.countFiles.mockReset().mockResolvedValue(0);
+    fsUtilsMock.hashDirectory.mockReset().mockResolvedValue('mock-hash');
+    fsUtilsMock.getDirectoryIntegrity.mockReset().mockResolvedValue({ size: 0, fileCount: 0, contentHash: 'mock-hash' });
   });
 
   afterEach(() => {
@@ -902,6 +927,180 @@ describe('store', () => {
       );
       // 不应该输出嵌套警告
       expect(loggerMock.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('captureIntegrity', () => {
+    it('should call getDirectoryIntegrity with platform path', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.getDirectoryIntegrity.mockResolvedValue({
+        size: 2048, fileCount: 15, contentHash: 'abc123',
+      });
+
+      const { captureIntegrity } = await import('../../src/core/store.js');
+      const result = await captureIntegrity('mylib', 'abc123', 'macOS');
+
+      expect(result).toEqual({ size: 2048, fileCount: 15, contentHash: 'abc123' });
+      expect(fsUtilsMock.getDirectoryIntegrity).toHaveBeenCalledWith(
+        path.join('/store', 'mylib', 'abc123', 'macOS')
+      );
+    });
+  });
+
+  describe('quickVerify', () => {
+    it('should return valid:true when fileCount is null', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+
+      const { quickVerify } = await import('../../src/core/store.js');
+      const result = await quickVerify('mylib', 'abc123', 'macOS', { size: 1024 });
+
+      expect(result).toEqual({ valid: true });
+    });
+
+    it('should return valid:true when counts match', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.countFiles.mockResolvedValue(10);
+      fsUtilsMock.getDirSize.mockResolvedValue(1024);
+
+      const { quickVerify } = await import('../../src/core/store.js');
+      const result = await quickVerify('mylib', 'abc123', 'macOS', { size: 1024, fileCount: 10 });
+
+      expect(result.valid).toBe(true);
+      expect(result.actual).toEqual({ fileCount: 10, size: 1024 });
+    });
+
+    it('should return valid:false when fileCount mismatches', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.countFiles.mockResolvedValue(5);
+      fsUtilsMock.getDirSize.mockResolvedValue(1024);
+
+      const { quickVerify } = await import('../../src/core/store.js');
+      const result = await quickVerify('mylib', 'abc123', 'macOS', { size: 1024, fileCount: 10 });
+
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('fileCount mismatch');
+    });
+
+    it('should return valid:false when size mismatches', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.countFiles.mockResolvedValue(10);
+      fsUtilsMock.getDirSize.mockResolvedValue(2048);
+
+      const { quickVerify } = await import('../../src/core/store.js');
+      const result = await quickVerify('mylib', 'abc123', 'macOS', { size: 1024, fileCount: 10 });
+
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('size mismatch');
+    });
+
+    it('should return valid:false when Store directory does not exist (fileCount=0)', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      // 目录不存在时 countFiles 返回 0，getDirSize 返回 0
+      fsUtilsMock.countFiles.mockResolvedValue(0);
+      fsUtilsMock.getDirSize.mockResolvedValue(0);
+
+      const { quickVerify } = await import('../../src/core/store.js');
+      const result = await quickVerify('mylib', 'abc123', 'macOS', { size: 1024, fileCount: 10 });
+
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('fileCount mismatch');
+    });
+
+    it('should handle _shared platform same as regular platform', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.countFiles.mockResolvedValue(5);
+      fsUtilsMock.getDirSize.mockResolvedValue(512);
+
+      const { quickVerify } = await import('../../src/core/store.js');
+      const result = await quickVerify('mylib', 'abc123', '_shared', { size: 512, fileCount: 5 });
+
+      expect(result.valid).toBe(true);
+      expect(result.actual).toEqual({ fileCount: 5, size: 512 });
+      // 确认路径构造正确
+      expect(fsUtilsMock.countFiles).toHaveBeenCalledWith(
+        path.join('/store', 'mylib', 'abc123', '_shared')
+      );
+    });
+  });
+
+  describe('fullVerify', () => {
+    it('should return valid:true when no contentHash expected', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+
+      const { fullVerify } = await import('../../src/core/store.js');
+      const result = await fullVerify('mylib', 'abc123', 'macOS', { size: 1024 });
+
+      expect(result).toEqual({ valid: true });
+    });
+
+    it('should return valid:true when all fields match', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.countFiles.mockResolvedValue(10);
+      fsUtilsMock.getDirSize.mockResolvedValue(1024);
+      fsUtilsMock.hashDirectory.mockResolvedValue('abc123def456');
+
+      const { fullVerify } = await import('../../src/core/store.js');
+      const result = await fullVerify('mylib', 'abc123', 'macOS', {
+        size: 1024,
+        fileCount: 10,
+        contentHash: 'abc123def456',
+      });
+
+      expect(result.valid).toBe(true);
+      expect(result.actual).toEqual({ fileCount: 10, size: 1024, contentHash: 'abc123def456' });
+    });
+
+    it('should return valid:false when contentHash mismatches', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.countFiles.mockResolvedValue(10);
+      fsUtilsMock.getDirSize.mockResolvedValue(1024);
+      fsUtilsMock.hashDirectory.mockResolvedValue('different-hash');
+
+      const { fullVerify } = await import('../../src/core/store.js');
+      const result = await fullVerify('mylib', 'abc123', 'macOS', {
+        size: 1024,
+        fileCount: 10,
+        contentHash: 'abc123def456',
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('contentHash mismatch');
+    });
+
+    it('should fail fast on quickVerify failure without checking hash', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.countFiles.mockResolvedValue(5);
+      fsUtilsMock.getDirSize.mockResolvedValue(1024);
+
+      const { fullVerify } = await import('../../src/core/store.js');
+      const result = await fullVerify('mylib', 'abc123', 'macOS', {
+        size: 1024,
+        fileCount: 10,
+        contentHash: 'abc123def456',
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain('fileCount mismatch');
+      // hashDirectory 不应该被调用
+      expect(fsUtilsMock.hashDirectory).not.toHaveBeenCalled();
+    });
+
+    it('should return valid:false when Store directory does not exist (all zeros)', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsUtilsMock.countFiles.mockResolvedValue(0);
+      fsUtilsMock.getDirSize.mockResolvedValue(0);
+      fsUtilsMock.hashDirectory.mockResolvedValue('empty-hash');
+
+      const { fullVerify } = await import('../../src/core/store.js');
+      const result = await fullVerify('mylib', 'abc123', 'macOS', {
+        size: 1024,
+        fileCount: 10,
+        contentHash: 'expected-hash',
+      });
+
+      expect(result.valid).toBe(false);
+      // 应该在 quickVerify 阶段就失败
+      expect(result.reason).toContain('fileCount mismatch');
     });
   });
 });

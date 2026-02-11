@@ -52,6 +52,14 @@ interface IntegrityIssue {
   }[];
   missingLibraries: { libName: string; commit: string; project: string }[];
   staleReferences: { libKey: string; projectHash: string; projectPath: string }[];
+  corruptedStores: {
+    libName: string;
+    commit: string;
+    platform: string;
+    reason: string;
+    expected: { fileCount?: number; size?: number; contentHash?: string };
+    actual: { fileCount: number; size: number; contentHash?: string };
+  }[];
 }
 
 interface CheckResult {
@@ -70,6 +78,7 @@ interface CheckOptions {
   dryRun: boolean;
   json: boolean;
   force: boolean;
+  integrity: boolean;
 }
 
 // ============ 命令创建 ============
@@ -81,6 +90,7 @@ export function createCheckCommand(): Command {
     .option('--dry-run', '只显示问题，不修复')
     .option('--json', '输出 JSON 格式')
     .option('--force', '跳过确认')
+    .option('--integrity', '校验 Store 文件完整性（fileCount + contentHash）')
     .action(async (options: CheckOptions) => {
       await runCheck(options);
     });
@@ -89,7 +99,7 @@ export function createCheckCommand(): Command {
 // ============ 主流程 ============
 
 async function runCheck(options: CheckOptions): Promise<void> {
-  const result = await collectAllIssues();
+  const result = await collectAllIssues({ integrity: options.integrity });
 
   // JSON 输出
   if (options.json) {
@@ -136,9 +146,9 @@ async function runCheck(options: CheckOptions): Promise<void> {
 
 // ============ 数据收集 ============
 
-async function collectAllIssues(): Promise<CheckResult> {
+async function collectAllIssues(options?: { integrity?: boolean }): Promise<CheckResult> {
   const environment = await checkEnvironment();
-  const integrity = await checkIntegrity();
+  const integrity = await checkIntegrity(options);
 
   // 计算汇总
   // 错误：检查项失败（ok === false），排除仅作为警告的项
@@ -151,7 +161,8 @@ async function collectAllIssues(): Promise<CheckResult> {
     integrity.danglingLinks.length +
     integrity.orphanLibraries.length +
     integrity.missingLibraries.length +
-    integrity.staleReferences.length;
+    integrity.staleReferences.length +
+    integrity.corruptedStores.length;
 
   const reclaimableSize = integrity.orphanLibraries.reduce(
     (sum, lib) => sum + lib.size,
@@ -241,13 +252,14 @@ async function checkEnvironment(): Promise<EnvironmentCheck> {
   return result;
 }
 
-async function checkIntegrity(): Promise<IntegrityIssue> {
+async function checkIntegrity(options?: { integrity?: boolean }): Promise<IntegrityIssue> {
   const result: IntegrityIssue = {
     invalidProjects: [],
     danglingLinks: [],
     orphanLibraries: [],
     missingLibraries: [],
     staleReferences: [],
+    corruptedStores: [],
   };
 
   // 尝试加载 registry
@@ -417,6 +429,47 @@ async function checkIntegrity(): Promise<IntegrityIssue> {
     }
   }
 
+  // 4. --integrity 模式：校验 StoreEntry 文件完整性
+  if (options?.integrity) {
+    const stores = registry.listStores();
+    for (const entry of stores) {
+      if (entry.fileCount != null) {
+        // 有 fileCount 的做 fullVerify
+        const expectedData = {
+          size: entry.size,
+          fileCount: entry.fileCount,
+          contentHash: entry.contentHash,
+        };
+        const verifyResult = await store.fullVerify(entry.libName, entry.commit, entry.platform, expectedData);
+        if (!verifyResult.valid) {
+          result.corruptedStores.push({
+            libName: entry.libName,
+            commit: entry.commit,
+            platform: entry.platform,
+            reason: verifyResult.reason || 'unknown',
+            expected: expectedData,
+            actual: verifyResult.actual ?? { fileCount: 0, size: 0 },
+          });
+        }
+      } else {
+        // 无 fileCount 的做回填（captureIntegrity）
+        try {
+          const integrity = await store.captureIntegrity(entry.libName, entry.commit, entry.platform);
+          const storeKey = registry.getStoreKey(entry.libName, entry.commit, entry.platform);
+          registry.updateStore(storeKey, {
+            size: integrity.size,
+            fileCount: integrity.fileCount,
+            contentHash: integrity.contentHash,
+          });
+        } catch {
+          debug(`[check] 回填完整性数据失败: ${entry.libName}:${entry.commit}:${entry.platform}`);
+        }
+      }
+    }
+    // 保存回填的数据
+    await registry.save();
+  }
+
   return result;
 }
 
@@ -481,6 +534,14 @@ function renderReport(result: CheckResult): void {
     integ.staleReferences.length === 0
       ? '一致'
       : `${integ.staleReferences.length} 个失效引用`,
+    false
+  );
+  renderCheck(
+    'Store 完整性',
+    integ.corruptedStores.length === 0,
+    integ.corruptedStores.length === 0
+      ? '完整'
+      : `${integ.corruptedStores.length} 个损坏的 Store 条目`,
     false
   );
 
@@ -605,6 +666,14 @@ async function selectiveFix(
     });
   }
 
+  if (issues.corruptedStores.length > 0) {
+    choices.push({
+      name: `清除 ${issues.corruptedStores.length} 个损坏的 Store 条目`,
+      value: 'corruptedStores',
+      checked: true,
+    });
+  }
+
   if (choices.length === 0) {
     success('没有可修复的问题');
     return;
@@ -639,6 +708,9 @@ async function selectiveFix(
     missingLibraries: [], // 缺失库无法修复
     staleReferences: selected.includes('staleReferences')
       ? issues.staleReferences
+      : [],
+    corruptedStores: selected.includes('corruptedStores')
+      ? issues.corruptedStores
       : [],
   };
 
@@ -695,6 +767,16 @@ function showDetails(issues: IntegrityIssue): void {
     }
     blank();
   }
+
+  if (issues.corruptedStores.length > 0) {
+    info(`损坏的 Store 条目 (${issues.corruptedStores.length}):`);
+    for (const item of issues.corruptedStores) {
+      hint(`  - ${item.libName}/${item.commit.slice(0, 7)}/${item.platform}: ${item.reason}`);
+      hint(`    期望: fileCount=${item.expected.fileCount ?? '?'}, size=${item.expected.size ?? '?'}, hash=${item.expected.contentHash?.slice(0, 8) ?? '?'}`);
+      hint(`    实际: fileCount=${item.actual.fileCount}, size=${item.actual.size}, hash=${item.actual.contentHash?.slice(0, 8) ?? '?'}`);
+    }
+    blank();
+  }
 }
 
 // ============ 修复执行 ============
@@ -711,7 +793,8 @@ async function fixAllIssues(
     issues.invalidProjects.length +
     issues.danglingLinks.length +
     issues.orphanLibraries.length +
-    issues.staleReferences.length;
+    issues.staleReferences.length +
+    issues.corruptedStores.length;
 
   if (totalIssues === 0) {
     success('没有需要修复的问题');
@@ -815,6 +898,20 @@ async function fixAllIssues(
     }
   }
 
+  // 5. 清理损坏的 Store 条目
+  for (const item of issues.corruptedStores) {
+    try {
+      const storeKey = registry.getStoreKey(item.libName, item.commit, item.platform);
+      registry.removeStore(storeKey);
+      const platformPath = path.join(storePath, item.libName, item.commit, item.platform);
+      await fs.rm(platformPath, { recursive: true, force: true });
+      success(`[ok] 清理损坏 Store: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform}`);
+      fixed++;
+    } catch (err) {
+      error(`[err] 清理损坏 Store 失败: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform} - ${(err as Error).message}`);
+    }
+  }
+
   await registry.save();
 
   blank();
@@ -879,6 +976,93 @@ export async function repairIssues(options: {
   }
 
   await fixAllIssues(result.integrity, { force: options.force });
+}
+
+/**
+ * 校验所有 Store 条目的文件完整性
+ * 遍历 registry 中的 StoreEntry，校验 fileCount/contentHash
+ * --integrity 模式下调用，非 --integrity 不执行
+ *
+ * @returns 损坏的 Store 条目列表
+ */
+export async function checkStoreIntegrity(): Promise<IntegrityIssue['corruptedStores']> {
+  const corrupted: IntegrityIssue['corruptedStores'] = [];
+
+  let registry;
+  try {
+    registry = getRegistry();
+    await registry.load();
+  } catch {
+    return corrupted;
+  }
+
+  const stores = registry.listStores();
+  for (const entry of stores) {
+    if (entry.fileCount != null) {
+      const expectedData = {
+        size: entry.size,
+        fileCount: entry.fileCount,
+        contentHash: entry.contentHash,
+      };
+      const verifyResult = await store.fullVerify(entry.libName, entry.commit, entry.platform, expectedData);
+      if (!verifyResult.valid) {
+        corrupted.push({
+          libName: entry.libName,
+          commit: entry.commit,
+          platform: entry.platform,
+          reason: verifyResult.reason || 'unknown',
+          expected: expectedData,
+          actual: verifyResult.actual ?? { fileCount: 0, size: 0 },
+        });
+      }
+    } else {
+      // 无 fileCount 的做回填
+      try {
+        const integrity = await store.captureIntegrity(entry.libName, entry.commit, entry.platform);
+        const storeKey = registry.getStoreKey(entry.libName, entry.commit, entry.platform);
+        registry.updateStore(storeKey, {
+          size: integrity.size,
+          fileCount: integrity.fileCount,
+          contentHash: integrity.contentHash,
+        });
+      } catch {
+        debug(`[check] 回填完整性数据失败: ${entry.libName}:${entry.commit}:${entry.platform}`);
+      }
+    }
+  }
+
+  await registry.save();
+  return corrupted;
+}
+
+/**
+ * 修复损坏的 Store 条目
+ * 清除损坏条目并从 Registry 中移除，使得下次 link 时重新下载
+ *
+ * @param corrupted 损坏条目列表
+ */
+export async function fixCorruptedStores(
+  corrupted: IntegrityIssue['corruptedStores']
+): Promise<void> {
+  if (corrupted.length === 0) return;
+
+  const registry = getRegistry();
+  await registry.load();
+  const storePath = await store.getStorePath();
+
+  for (const item of corrupted) {
+    try {
+      const storeKey = registry.getStoreKey(item.libName, item.commit, item.platform);
+      registry.removeStore(storeKey);
+      const platformPath = path.join(storePath, item.libName, item.commit, item.platform);
+      await fs.rm(platformPath, { recursive: true, force: true });
+      success(`[ok] 清理损坏 Store: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform}`);
+    } catch (err) {
+      error(`[err] 清理损坏 Store 失败: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform} - ${(err as Error).message}`);
+    }
+  }
+
+  await registry.save();
 }
 
 export default createCheckCommand;

@@ -127,6 +127,8 @@ export interface StoreEntry {
   branch: string;
   url: string;
   size: number;
+  fileCount?: number;        // 平台目录下递归文件总数
+  contentHash?: string;      // 平台目录内容 MD5
   usedBy: string[]; // 项目 hash 列表
   unlinkedAt?: number; // 变成无引用的时间戳
   createdAt: string;
