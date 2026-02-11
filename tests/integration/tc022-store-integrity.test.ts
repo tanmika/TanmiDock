@@ -126,8 +126,7 @@ describe('TC-022: Store 完整性校验', () => {
         expect(platformStat.isSymbolicLink()).toBe(true);
       }
 
-      // 6. 验证：LINK_NEW 不会重新采集完整性数据（旧 StoreEntry 保持原样）
-      //    计划设计：升级后首次 link 跳过校验正常链接，完整性数据由 td check --integrity 回填
+      // 6. 验证：link 时会自动回填旧 StoreEntry 的完整性数据
       const entryAfter = await getStoreEntry(
         env,
         'zlib',
@@ -135,12 +134,12 @@ describe('TC-022: Store 完整性校验', () => {
         'macOS'
       );
       expect(entryAfter).toBeDefined();
-      // 旧 StoreEntry 仍然没有 fileCount/contentHash（这是正确行为）
-      expect(entryAfter!.fileCount).toBeUndefined();
-      expect(entryAfter!.contentHash).toBeUndefined();
+      // 旧 StoreEntry 现在应该被回填了 fileCount 和 contentHash
+      expect(entryAfter!.fileCount).toBeTypeOf('number');
+      expect(entryAfter!.contentHash).toBeTypeOf('string');
     });
 
-    it('旧数据 verifyExistingPlatforms 应视为合法', async () => {
+    it('旧数据 verifyExistingPlatforms 应视为合法并回填完整性数据', async () => {
       env = await createTestEnv();
 
       // 导入被测函数
@@ -166,9 +165,16 @@ describe('TC-022: Store 完整性校验', () => {
         ['macOS', 'iOS']
       );
 
-      // 无 fileCount → 全部视为 valid
+      // 无 fileCount → 全部视为 valid，同时回填完整性数据
       expect(result.valid).toEqual(['macOS', 'iOS']);
       expect(result.corrupted).toEqual([]);
+
+      // 验证回填：StoreEntry 现在应该有 fileCount 和 contentHash
+      const storeKey = registry.getStoreKey('curl', 'def1234567890123456789012345678901234567', 'macOS');
+      const entry = registry.getStore(storeKey);
+      expect(entry).toBeDefined();
+      expect(entry!.fileCount).toBeTypeOf('number');
+      expect(entry!.contentHash).toBeTypeOf('string');
     });
   });
 

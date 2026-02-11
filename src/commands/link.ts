@@ -970,7 +970,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 
             // StoreEntry 记录
             const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
-            if (!registry.getStore(storeKey)) {
+            const existingEntry = registry.getStore(storeKey);
+            if (!existingEntry) {
               const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
               registry.addStore({
                 libName: dependency.libName,
@@ -983,6 +984,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                 createdAt: new Date().toISOString(),
                 lastAccess: new Date().toISOString(),
               });
+            } else if (existingEntry.fileCount == null) {
+              // 旧数据回填：升级后首次 link 时顺便记录完整性数据
+              const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
+              registry.updateStore(storeKey, integrity);
             }
             registry.addStoreReference(storeKey, projectHash);
 
@@ -1022,8 +1027,9 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
             // 5. 为每个实际存在的平台添加 StoreReference
             for (const platform of linkNewExisting) {
               const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
+              const existingPlatformEntry = registry.getStore(storeKey);
               // 如果 StoreEntry 不存在，创建它
-              if (!registry.getStore(storeKey)) {
+              if (!existingPlatformEntry) {
                 const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
                 registry.addStore({
                   libName: dependency.libName,
@@ -1036,6 +1042,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
                   createdAt: new Date().toISOString(),
                   lastAccess: new Date().toISOString(),
                 });
+              } else if (existingPlatformEntry.fileCount == null) {
+                // 旧数据回填：升级后首次 link 时顺便记录完整性数据
+                const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
+                registry.updateStore(storeKey, integrity);
               }
               registry.addStoreReference(storeKey, projectHash);
             }
@@ -2780,8 +2790,20 @@ export async function verifyExistingPlatforms(
     const storeKey = registry.getStoreKey(libName, commit, platform);
     const entry = registry.getStore(storeKey);
 
-    // 没有 StoreEntry 或没有 fileCount 的条目，跳过校验视为合法
-    if (!entry || entry.fileCount == null) {
+    // 没有 StoreEntry，跳过校验视为合法
+    if (!entry) {
+      valid.push(platform);
+      continue;
+    }
+
+    // 旧数据回填：升级后首次遇到无 fileCount 的条目，顺便记录完整性数据
+    if (entry.fileCount == null) {
+      try {
+        const integrity = await store.captureIntegrity(libName, commit, platform);
+        registry.updateStore(storeKey, integrity);
+      } catch {
+        // 回填失败不影响正常流程
+      }
       valid.push(platform);
       continue;
     }
