@@ -1858,6 +1858,62 @@ async function registerNestedLibraries(
 }
 
 /**
+ * 分类依赖的链接状态
+ *
+ * 统一检查逻辑，用于顶层 classifyDependencies 和嵌套依赖处理。
+ * - General 库：检查根目录是否为指向 _shared 的正确符号链接
+ * - 平台库：检查各平台子目录的符号链接状态
+ */
+export async function classifyLinkStatus(
+  localPath: string,
+  storeCommitPath: string,
+  isGeneral: boolean,
+  existingPlatforms: string[],
+): Promise<'linked' | 'relink' | 'replace' | 'link_new'> {
+  if (isGeneral) {
+    const expectedTarget = path.join(storeCommitPath, '_shared');
+    const status = await linker.getPathStatus(localPath, expectedTarget);
+    switch (status) {
+      case 'linked': return 'linked';
+      case 'wrong_link':
+      case 'broken_link': return 'relink';
+      case 'directory': return 'replace';
+      case 'missing':
+      default: return 'link_new';
+    }
+  }
+
+  // 平台库：检查各平台子目录的链接状态
+  let allLinked = true;
+  let hasBrokenOrWrong = false;
+  let checkedCount = 0;
+
+  for (const platform of existingPlatforms) {
+    const platformLocalPath = path.join(localPath, platform);
+    const platformStorePath = path.join(storeCommitPath, platform);
+    const status = await linker.getPathStatus(platformLocalPath, platformStorePath);
+    checkedCount++;
+    if (status !== 'linked') {
+      allLinked = false;
+      if (status === 'wrong_link' || status === 'broken_link') {
+        hasBrokenOrWrong = true;
+      }
+    }
+  }
+
+  if (checkedCount > 0 && allLinked) return 'linked';
+  if (hasBrokenOrWrong) return 'relink';
+
+  // Fallback：根据根路径是否存在判断
+  try {
+    await fs.lstat(localPath);
+    return 'replace';
+  } catch {
+    return 'link_new';
+  }
+}
+
+/**
  * 分类依赖状态
  * @param dependencies 依赖列表
  * @param projectPath 项目路径
@@ -1904,7 +1960,7 @@ async function classifyDependencies(
     const isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
     const inStore = existing.length > 0 || isGeneral;
 
-    // General 库的目标路径是 _shared，而不是平台目录
+    // 用于非 inStore 情况的本地路径状态检查
     const expectedTarget = isGeneral
       ? path.join(storePath, dep.libName, dep.commit, '_shared')
       : storeLibPath;
@@ -1913,62 +1969,13 @@ async function classifyDependencies(
     let status: DependencyStatus;
 
     if (inStore) {
-      if (isGeneral) {
-        // General 库：检查根目录符号链接状态
-        switch (pathStatus) {
-          case 'linked':
-            status = DependencyStatus.LINKED;
-            break;
-          case 'wrong_link':
-            status = DependencyStatus.RELINK;
-            break;
-          case 'broken_link':
-            // 断链：Store 目标被删除，需要重新链接
-            status = DependencyStatus.RELINK;
-            break;
-          case 'directory':
-            status = DependencyStatus.REPLACE;
-            break;
-          case 'missing':
-            status = DependencyStatus.LINK_NEW;
-            break;
-          default:
-            status = DependencyStatus.LINK_NEW;
-        }
-      } else {
-        // 平台库：检查各平台子目录的链接状态
-        const storeCommitPath = path.join(storePath, dep.libName, dep.commit);
-        let allLinked = true;
-        let hasWrongLink = false;
-        let hasBrokenLink = false;
-        let checkedCount = 0;
-
-        for (const platform of existing) {
-          const platformLocalPath = path.join(localPath, platform);
-          const platformStorePath = path.join(storeCommitPath, platform);
-          const platformStatus = await linker.getPathStatus(platformLocalPath, platformStorePath);
-
-          checkedCount++;
-          if (platformStatus !== 'linked') {
-            allLinked = false;
-            if (platformStatus === 'wrong_link') {
-              hasWrongLink = true;
-            } else if (platformStatus === 'broken_link') {
-              hasBrokenLink = true;
-            }
-          }
-        }
-
-        if (checkedCount > 0 && allLinked) {
-          status = DependencyStatus.LINKED;
-        } else if (hasWrongLink || hasBrokenLink) {
-          // 有错误链接或断链，需要重新链接
-          status = DependencyStatus.RELINK;
-        } else if (pathStatus === 'missing') {
-          status = DependencyStatus.LINK_NEW;
-        } else {
-          status = DependencyStatus.REPLACE;
-        }
+      const storeCommitPath = path.join(storePath, dep.libName, dep.commit);
+      const linkStatus = await classifyLinkStatus(localPath, storeCommitPath, isGeneral, existing);
+      switch (linkStatus) {
+        case 'linked': status = DependencyStatus.LINKED; break;
+        case 'relink': status = DependencyStatus.RELINK; break;
+        case 'replace': status = DependencyStatus.REPLACE; break;
+        case 'link_new': status = DependencyStatus.LINK_NEW; break;
       }
     } else {
       switch (pathStatus) {
@@ -2553,25 +2560,28 @@ async function linkNestedDependencies(
       }
     }
 
-    if (localExists && localIsSymlink) {
-      // 已经是符号链接，检查是否指向正确的 Store 路径和 commit
-      const target = await linker.readLink(localPath);
-      const expectedPrefix = path.join(storePath, dep.libName, dep.commit);
-      if (target && target.startsWith(expectedPrefix)) {
-        // 链接指向正确的 lib/commit，记录到 nestedLinkedDeps
+    // 链接状态检查（与顶层 classifyDependencies 共享 classifyLinkStatus 逻辑）
+    if (localExists && (storeHas || isGeneral)) {
+      const linkStatus = await classifyLinkStatus(localPath, storeCommitPath, isGeneral || localIsSymlink, existingPlatforms);
+      if (linkStatus === 'linked') {
         nestedLinkedDeps.push({
           libName: dep.libName,
           commit: dep.commit,
-          platform: isGeneral ? GENERAL_PLATFORM : primaryPlatform,
+          platform: (isGeneral || localIsSymlink) ? GENERAL_PLATFORM : primaryPlatform,
           linkedPath: path.relative(projectRoot, localPath),
         });
         success(`${indent}  ${dep.libName} - 已链接`);
         continue;
       }
-      // 链接指向错误的 commit 或其他位置，需要重新链接
-      if (target && target.startsWith(storePath)) {
-        warn(`${indent}  ${dep.libName} - 链接指向错误的 commit，将重新链接`);
+      if (linkStatus === 'relink') {
+        warn(`${indent}  ${dep.libName} - 链接异常（断链或指向错误），将重新链接`);
+        if (!dryRun) {
+          await fs.rm(localPath, { recursive: true, force: true });
+        }
+        localExists = false;
+        localIsSymlink = false;
       }
+      // 'replace' / 'link_new' 交由下方逻辑处理
     }
 
     if (storeHas || isGeneral) {

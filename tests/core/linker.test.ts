@@ -352,11 +352,48 @@ describe('linker', () => {
     });
   });
 
+  describe('isValidLink', () => {
+    it('should return true for valid symlink with existing target', async () => {
+      const { isValidLink } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true });
+      fsMock.stat.mockResolvedValue({}); // target exists
+
+      expect(await isValidLink('/project/3rdparty/mylib')).toBe(true);
+    });
+
+    it('should return false for broken symlink (target missing)', async () => {
+      const { isValidLink } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true });
+      fsMock.stat.mockRejectedValue({ code: 'ENOENT' }); // target missing
+
+      expect(await isValidLink('/project/3rdparty/mylib')).toBe(false);
+    });
+
+    it('should return false for non-symlink path', async () => {
+      const { isValidLink } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => false });
+
+      expect(await isValidLink('/project/3rdparty/mylib')).toBe(false);
+    });
+
+    it('should return false for non-existent path', async () => {
+      const { isValidLink } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockRejectedValue({ code: 'ENOENT' });
+
+      expect(await isValidLink('/project/3rdparty/mylib')).toBe(false);
+    });
+  });
+
   describe('getPathStatus', () => {
     it('should return linked for correct symlink', async () => {
       const { getPathStatus } = await import('../../src/core/linker.js');
 
       fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true, isDirectory: () => false });
+      fsMock.stat.mockResolvedValue({}); // target exists
       fsMock.readlink.mockResolvedValue('/store/mylib/abc123/macOS');
 
       const status = await getPathStatus('/project/3rdparty/mylib', '/store/mylib/abc123/macOS');
@@ -368,11 +405,23 @@ describe('linker', () => {
       const { getPathStatus } = await import('../../src/core/linker.js');
 
       fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true, isDirectory: () => false });
+      fsMock.stat.mockResolvedValue({}); // target exists
       fsMock.readlink.mockResolvedValue('/store/mylib/abc123/iOS');
 
       const status = await getPathStatus('/project/3rdparty/mylib', '/store/mylib/abc123/macOS');
 
       expect(status).toBe('wrong_link');
+    });
+
+    it('should return broken_link for symlink with missing target', async () => {
+      const { getPathStatus } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockResolvedValue({ isSymbolicLink: () => true, isDirectory: () => false });
+      fsMock.stat.mockRejectedValue({ code: 'ENOENT' }); // target does NOT exist
+
+      const status = await getPathStatus('/project/3rdparty/mylib', '/store/mylib/abc123/macOS');
+
+      expect(status).toBe('broken_link');
     });
 
     it('should return directory for regular directory', async () => {

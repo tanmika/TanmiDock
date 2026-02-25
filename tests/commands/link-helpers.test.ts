@@ -67,6 +67,7 @@ vi.mock('../../src/core/store.js', () => ({
 }));
 vi.mock('../../src/core/linker.js', () => ({
   linkLib: vi.fn(),
+  getPathStatus: vi.fn(),
 }));
 vi.mock('../../src/core/codepac.js', () => ({
   default: { download: vi.fn() },
@@ -222,6 +223,164 @@ describe('link helpers', () => {
 
       expect(result.valid).toEqual([]);
       expect(result.corrupted).toEqual([]);
+    });
+  });
+
+  describe('classifyLinkStatus', () => {
+    let linkerMock: { getPathStatus: ReturnType<typeof vi.fn> };
+    let fsMock: { lstat: ReturnType<typeof vi.fn> };
+
+    beforeEach(async () => {
+      const linker = await import('../../src/core/linker.js') as typeof linkerMock;
+      linkerMock = linker;
+      linkerMock.getPathStatus.mockReset();
+
+      const fs = await import('fs/promises');
+      fsMock = fs.default as typeof fsMock;
+      fsMock.lstat.mockReset();
+    });
+
+    // --- General 库测试 ---
+
+    it('should return linked for General lib with correct symlink', async () => {
+      linkerMock.getPathStatus.mockResolvedValue('linked');
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/eigen', '/store/eigen/abc123', true, []
+      );
+
+      expect(result).toBe('linked');
+      expect(linkerMock.getPathStatus).toHaveBeenCalledWith(
+        '/project/3rdParty/eigen',
+        '/store/eigen/abc123/_shared'
+      );
+    });
+
+    it('should return relink for General lib with broken symlink', async () => {
+      linkerMock.getPathStatus.mockResolvedValue('broken_link');
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/librocksdb', '/store/librocksdb/abc123', true, []
+      );
+
+      expect(result).toBe('relink');
+    });
+
+    it('should return relink for General lib with wrong symlink target', async () => {
+      linkerMock.getPathStatus.mockResolvedValue('wrong_link');
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/eigen', '/store/eigen/abc123', true, []
+      );
+
+      expect(result).toBe('relink');
+    });
+
+    it('should return replace for General lib that is a directory', async () => {
+      linkerMock.getPathStatus.mockResolvedValue('directory');
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/eigen', '/store/eigen/abc123', true, []
+      );
+
+      expect(result).toBe('replace');
+    });
+
+    it('should return link_new for General lib that is missing', async () => {
+      linkerMock.getPathStatus.mockResolvedValue('missing');
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/eigen', '/store/eigen/abc123', true, []
+      );
+
+      expect(result).toBe('link_new');
+    });
+
+    // --- 平台库测试 ---
+
+    it('should return linked when all platform sub-links are correct', async () => {
+      linkerMock.getPathStatus.mockResolvedValue('linked');
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/libopencv', '/store/libopencv/abc123', false, ['macOS', 'iOS']
+      );
+
+      expect(result).toBe('linked');
+      expect(linkerMock.getPathStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it('should return relink when platform sub-link is broken', async () => {
+      linkerMock.getPathStatus
+        .mockResolvedValueOnce('linked')       // macOS ok
+        .mockResolvedValueOnce('broken_link'); // iOS broken
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/libopencv', '/store/libopencv/abc123', false, ['macOS', 'iOS']
+      );
+
+      expect(result).toBe('relink');
+    });
+
+    it('should return relink when platform sub-link points to wrong target', async () => {
+      linkerMock.getPathStatus.mockResolvedValue('wrong_link');
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/libopencv', '/store/libopencv/abc123', false, ['macOS']
+      );
+
+      expect(result).toBe('relink');
+    });
+
+    it('should return replace when local path exists but no platforms checked', async () => {
+      // 无已有平台，但本地路径存在
+      fsMock.lstat.mockResolvedValue({});
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/libopencv', '/store/libopencv/abc123', false, []
+      );
+
+      expect(result).toBe('replace');
+    });
+
+    it('should return link_new when local path does not exist and no platforms', async () => {
+      fsMock.lstat.mockRejectedValue({ code: 'ENOENT' });
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/libopencv', '/store/libopencv/abc123', false, []
+      );
+
+      expect(result).toBe('link_new');
+    });
+
+    // --- 断链回归测试（复现 librocksdb 问题）---
+
+    it('should detect broken General symlink instead of reporting as linked (librocksdb regression)', async () => {
+      // 复现场景：librocksdb 是 General 库，symlink 存在但目标已被清理
+      // 旧代码只做 readLink + 字符串匹配，会误报 "已链接"
+      // 修复后通过 getPathStatus 检测断链
+      linkerMock.getPathStatus.mockResolvedValue('broken_link');
+
+      const { classifyLinkStatus } = await import('../../src/commands/link.js');
+      const result = await classifyLinkStatus(
+        '/project/3rdParty/libPixCook/dependencies/librocksdb',
+        '/store/librocksdb/174b25b12221de748fbb96c6aca6db6584fd482e',
+        true,
+        []
+      );
+
+      // 必须返回 relink，不能返回 linked
+      expect(result).toBe('relink');
+      expect(result).not.toBe('linked');
     });
   });
 });
