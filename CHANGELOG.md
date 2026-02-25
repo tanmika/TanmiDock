@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-02-25
+
+### Added
+
+- **Store 完整性校验**: link 时自动检测损坏的 Store 数据
+  - StoreEntry 新增 `fileCount`/`contentHash` 完整性字段（兼容旧数据）
+  - absorb/download 时自动记录完整性元数据
+  - link 时 quickVerify 校验已有平台数据，损坏的自动清除并重新下载
+  - `td check --integrity` 支持全量 MD5 校验
+- **旧版元数据自动回填**: 升级用户首次 link 时，自动为缺少完整性字段的旧 StoreEntry 采集并回填数据，无需手动执行 `td check --integrity`
+
+### Changed
+
+- **_shared 目录符号链接优化**: _shared 一级子目录改用符号链接替代复制，多项目场景节省约 90% 共享内容磁盘空间
+  - 新增 `sharedSymlinkFolders` 配置项（默认启用）
+  - 跨文件系统时自动回退为复制
+- **链接状态检查统一**: 提取 `classifyLinkStatus()` 共享函数，顶层和嵌套依赖使用同一逻辑分类链接状态
+
+### Fixed
+
+- **嵌套依赖断链检测**: 修复嵌套依赖（如 librocksdb）断链时被误报为"已链接"的问题，通过 `getPathStatus()` 统一验证链接目标是否存在
+- **测试 mock 配置**: 修复 `migrateSharedStores` 在测试环境下的 mock 缺失问题
+
 ## [0.7.3] - 2026-01-29
 
 ### Fixed
