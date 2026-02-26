@@ -53,20 +53,22 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT', 130));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM', 143));
 
 // 全局异常捕获
-process.on('uncaughtException', (err) => {
+process.on('uncaughtException', async (err) => {
   console.error('[err] 发生未预期错误:', err.message);
   if (process.env.DEBUG) {
     console.error(err.stack);
   }
   console.error('[hint] 如问题持续，请运行 tanmi-dock check 诊断');
+  await releaseGlobalLock();
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', async (reason) => {
   console.error('[err] 未处理的 Promise 拒绝:', reason);
   if (process.env.DEBUG) {
     console.error(reason);
   }
+  await releaseGlobalLock();
   process.exit(1);
 });
 
