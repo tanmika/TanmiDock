@@ -2581,12 +2581,12 @@ async function linkNestedDependencies(
 
     // 链接状态检查（与顶层 classifyDependencies 共享 classifyLinkStatus 逻辑）
     if (localExists && (storeHas || isGeneral)) {
-      const linkStatus = await classifyLinkStatus(localPath, storeCommitPath, isGeneral || localIsSymlink, existingPlatforms);
+      const linkStatus = await classifyLinkStatus(localPath, storeCommitPath, isGeneral, existingPlatforms);
       if (linkStatus === 'linked') {
         nestedLinkedDeps.push({
           libName: dep.libName,
           commit: dep.commit,
-          platform: (isGeneral || localIsSymlink) ? GENERAL_PLATFORM : primaryPlatform,
+          platform: isGeneral ? GENERAL_PLATFORM : primaryPlatform,
           linkedPath: path.relative(projectRoot, localPath),
         });
         success(`${indent}  ${dep.libName} - 已链接`);
