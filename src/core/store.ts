@@ -4,15 +4,12 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import * as config from './config.js';
 import { withFileLock } from '../utils/lock.js';
 import { copyDir, getDirSize, copyDirWithProgress, removeDir, countFiles, hashDirectory, getDirectoryIntegrity } from '../utils/fs-utils.js';
 import { KNOWN_PLATFORM_VALUES, GENERAL_PLATFORM, isPlatformDir, normalizePlatformValue } from './platform.js';
 import * as logger from '../utils/logger.js';
-
-const execFileAsync = promisify(execFile);
+import { detectLocalCommit } from '../utils/git.js';
 
 /**
  * Store 版本类型
@@ -313,68 +310,22 @@ export async function absorbLib(
             if (depEntry.isDirectory()) {
               // 子目录是嵌套依赖库，尝试吸收到各自的 Store 位置
               try {
-                // 读取 commit hash：优先 commit_hash 文件，回退到 git 命令
-                let nestedCommit: string | null = null;
-                const commitHashPath = path.join(depSourcePath, '.git', 'commit_hash');
-                try {
-                  nestedCommit = (await fs.readFile(commitHashPath, 'utf-8')).trim();
-                } catch {
-                  // 没有 commit_hash 文件，尝试 git rev-parse HEAD
-                  try {
-                    const { stdout } = await execFileAsync('git', ['-C', depSourcePath, 'rev-parse', 'HEAD'], {
-                      timeout: 5000,
-                    });
-                    nestedCommit = stdout.trim();
-                  } catch {
-                    // git 命令也失败，跳过这个子目录
-                  }
-                }
+                const nestedCommit = await detectLocalCommit(depSourcePath);
 
-                if (nestedCommit && /^[0-9a-f]{7,40}$/i.test(nestedCommit)) {
-                  // 检测平台目录
-                  const nestedEntries = await fs.readdir(depSourcePath, { withFileTypes: true });
-                  const nestedPlatformDirs = nestedEntries
-                    .filter((e) => e.isDirectory() && isPlatformDir(e.name))
-                    .map((e) => normalizePlatformValue(e.name));
-
-                  if (nestedPlatformDirs.length > 0) {
-                    // 有平台目录，递归吸收到 Store
-                    const nestedResult = await absorbLib(depSourcePath, nestedPlatformDirs, depEntry.name, nestedCommit);
-                    // 计算吸收后的大小（容错处理，失败时计为 0）
-                    let nestedSize = 0;
-                    for (const platform of nestedPlatformDirs) {
-                      try {
-                        nestedSize += await getSize(depEntry.name, nestedCommit, platform);
-                      } catch {
-                        // 获取大小失败，忽略
-                      }
-                    }
-                    nestedLibraries.push({
-                      libName: depEntry.name,
-                      commit: nestedCommit,
-                      platforms: nestedPlatformDirs,
-                      isGeneral: false,
-                      size: nestedSize,
-                    });
-                    // 递归收集嵌套的嵌套依赖
-                    nestedLibraries.push(...nestedResult.nestedLibraries);
-                  } else {
-                    // 没有平台目录，可能是 General 库，吸收到 _shared
-                    await absorbGeneral(depSourcePath, depEntry.name, nestedCommit);
-                    // 计算 General 库大小
-                    const nestedStorePath = await getStorePath();
-                    const nestedSharedPath = path.join(nestedStorePath, depEntry.name, nestedCommit, '_shared');
-                    const nestedSize = await getDirSize(nestedSharedPath).catch(() => 0);
-                    nestedLibraries.push({
-                      libName: depEntry.name,
-                      commit: nestedCommit,
-                      platforms: [GENERAL_PLATFORM],
-                      isGeneral: true,
-                      size: nestedSize,
-                    });
-                  }
+                if (nestedCommit) {
+                  const result = await absorbLocalLib(depSourcePath, depEntry.name, nestedCommit);
+                  nestedLibraries.push({
+                    libName: depEntry.name,
+                    commit: nestedCommit,
+                    platforms: result.platforms,
+                    isGeneral: result.isGeneral,
+                    size: result.size,
+                  });
+                  // 递归收集嵌套的嵌套依赖
+                  nestedLibraries.push(...result.nestedLibraries);
+                } else {
+                  logger.warn(`嵌套依赖 ${depEntry.name} 无法检测 commit，保留原始内容到 _shared/dependencies/`);
                 }
-                // 吸收完成后，子目录内容已移走，不需要再处理
               } catch (err) {
                 // 吸收失败，记录警告并继续
                 logger.warn(`嵌套依赖 ${depEntry.name} 吸收失败: ${(err as Error).message}`);
@@ -548,6 +499,76 @@ export async function absorbGeneral(
   }
 
   return sharedPath;
+}
+
+/**
+ * absorbLocalLib 返回结果
+ */
+export interface AbsorbLocalResult {
+  isGeneral: boolean;
+  platforms: string[];
+  size: number;
+  nestedLibraries: NestedAbsorbInfo[];
+}
+
+/**
+ * 统一的本地库吸收函数
+ *
+ * 扫描本地目录的平台结构，自动选择 absorbLib 或 absorbGeneral，
+ * 消除了 store.ts 嵌套依赖处理和 link.ts linkNestedDependencies 中的重复逻辑。
+ *
+ * @param localPath 本地库目录路径
+ * @param libName 库名
+ * @param commit commit hash
+ * @param progressOptions 进度回调选项（可选）
+ * @returns AbsorbLocalResult
+ */
+export async function absorbLocalLib(
+  localPath: string,
+  libName: string,
+  commit: string,
+  progressOptions?: AbsorbProgressOptions
+): Promise<AbsorbLocalResult> {
+  const localEntries = await fs.readdir(localPath, { withFileTypes: true });
+  const platformDirs = localEntries
+    .filter((e) => e.isDirectory() && isPlatformDir(e.name))
+    .map((e) => normalizePlatformValue(e.name));
+
+  if (platformDirs.length > 0) {
+    // 有平台目录 → absorbLib
+    const result = await absorbLib(localPath, platformDirs, libName, commit, progressOptions);
+
+    // 计算吸收后的大小
+    let size = 0;
+    for (const platform of platformDirs) {
+      try {
+        size += await getSize(libName, commit, platform);
+      } catch {
+        // 获取大小失败，忽略
+      }
+    }
+
+    return {
+      isGeneral: false,
+      platforms: platformDirs,
+      size,
+      nestedLibraries: result.nestedLibraries,
+    };
+  } else {
+    // 无平台目录 → absorbGeneral
+    await absorbGeneral(localPath, libName, commit);
+
+    const storePath = await getStorePath();
+    const sharedPath = path.join(storePath, libName, commit, '_shared');
+    const size = await getDirSize(sharedPath).catch(() => 0);
+
+    return {
+      isGeneral: true,
+      platforms: [GENERAL_PLATFORM],
+      size,
+      nestedLibraries: [],
+    };
+  }
 }
 
 /**
@@ -970,6 +991,7 @@ export default {
   getPath,
   absorb,
   absorbLib,
+  absorbLocalLib,
   copy,
   remove,
   getSize,

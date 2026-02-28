@@ -13,12 +13,72 @@ const execFileAsync = promisify(execFile);
 /** Git short hash 最小长度 */
 const MIN_COMMIT_LENGTH = 7;
 
+/** commit hash 格式校验 */
+const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
+
 export type VerifyReason = 'match' | 'mismatch' | 'no_git';
 
 export interface CommitVerifyResult {
   verified: boolean;
   actualCommit?: string;
   reason: VerifyReason;
+}
+
+/**
+ * 检测本地目录的 git commit hash
+ *
+ * 优先读取 .git/commit_hash 文件，回退到 git rev-parse HEAD。
+ * 统一了 verifyLocalCommit 和 store.ts 嵌套依赖中的 commit 检测逻辑。
+ *
+ * @param localPath 本地目录路径
+ * @returns commit hash 或 null（无 .git / 检测失败）
+ */
+export async function detectLocalCommit(localPath: string): Promise<string | null> {
+  const gitPath = path.join(localPath, '.git');
+
+  // Step 1: 检查 .git 是否存在（可以是目录或文件，支持 worktree）
+  try {
+    const stat = await fs.stat(gitPath);
+    if (!stat.isDirectory() && !stat.isFile()) {
+      logger.debug(`detectLocalCommit: ${localPath} 的 .git 既不是目录也不是文件`);
+      return null;
+    }
+  } catch {
+    logger.debug(`detectLocalCommit: ${localPath} 无 .git`);
+    return null;
+  }
+
+  // Step 2: 优先检查 .git/commit_hash 文件
+  const commitHashFile = path.join(gitPath, 'commit_hash');
+  try {
+    const content = await fs.readFile(commitHashFile, 'utf-8');
+    const hash = content.trim();
+    if (hash && COMMIT_HASH_PATTERN.test(hash)) {
+      logger.debug(`detectLocalCommit: ${localPath} 从 commit_hash 文件获取 commit = ${hash}`);
+      return hash;
+    }
+  } catch {
+    // commit_hash 文件不存在或读取失败，继续尝试 git 命令
+  }
+
+  // Step 3: 回退到 git rev-parse HEAD
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', localPath, 'rev-parse', 'HEAD'], {
+      timeout: 5000,
+    });
+    const hash = stdout.trim();
+    if (hash && COMMIT_HASH_PATTERN.test(hash)) {
+      logger.debug(`detectLocalCommit: ${localPath} 当前 commit = ${hash}`);
+      return hash;
+    }
+    logger.debug(`detectLocalCommit: git rev-parse 返回无效 hash: ${hash}`);
+    return null;
+  } catch (error) {
+    logger.debug(
+      `detectLocalCommit: git rev-parse 失败 - ${error instanceof Error ? error.message : String(error)}`
+    );
+    return null;
+  }
 }
 
 /**
@@ -43,60 +103,16 @@ export async function verifyLocalCommit(
     return { verified: false, reason: 'no_git' };
   }
 
-  const gitPath = path.join(localPath, '.git');
-
-  // Step 1: 检查 .git 是否存在（可以是目录或文件，支持 worktree）
-  try {
-    const stat = await fs.stat(gitPath);
-    // .git 可以是目录（普通仓库）或文件（worktree）
-    if (!stat.isDirectory() && !stat.isFile()) {
-      logger.debug(`verifyLocalCommit: ${localPath} 的 .git 既不是目录也不是文件`);
-      return { verified: false, reason: 'no_git' };
-    }
-  } catch {
-    // .git 不存在
-    logger.debug(`verifyLocalCommit: ${localPath} 无 .git`);
-    return { verified: false, reason: 'no_git' };
-  }
-
-  // Step 2: 获取当前 commit
-  // 优先检查 .git/commit_hash 文件（某些场景下会预存 commit hash）
-  let actualCommit: string | undefined;
-  const commitHashFile = path.join(gitPath, 'commit_hash');
-  try {
-    const content = await fs.readFile(commitHashFile, 'utf-8');
-    actualCommit = content.trim();
-    if (actualCommit && actualCommit.length >= MIN_COMMIT_LENGTH) {
-      logger.debug(`verifyLocalCommit: ${localPath} 从 commit_hash 文件获取 commit = ${actualCommit}`);
-    } else {
-      actualCommit = undefined;
-    }
-  } catch {
-    // commit_hash 文件不存在或读取失败，继续尝试 git 命令
-  }
-
-  // 如果 commit_hash 文件没有有效内容，执行 git rev-parse HEAD
+  // Step 1+2: 检测本地 commit
+  const actualCommit = await detectLocalCommit(localPath);
   if (!actualCommit) {
-    try {
-      const { stdout } = await execFileAsync('git', ['-C', localPath, 'rev-parse', 'HEAD'], {
-        timeout: 5000, // 5 秒超时
-      });
-      actualCommit = stdout.trim();
-      logger.debug(`verifyLocalCommit: ${localPath} 当前 commit = ${actualCommit}`);
-    } catch (error) {
-      // git 命令执行失败，视为 no_git
-      logger.debug(
-        `verifyLocalCommit: git rev-parse 失败 - ${error instanceof Error ? error.message : String(error)}`
-      );
-      return { verified: false, reason: 'no_git' };
-    }
+    return { verified: false, reason: 'no_git' };
   }
 
   // Step 3: 比较 commit（单向前缀匹配：actual 以 expected 开头）
   const normalizedExpected = expectedCommit.toLowerCase();
   const normalizedActual = actualCommit.toLowerCase();
 
-  // 单向匹配：实际 commit 必须以预期 commit 开头
   const isMatch = normalizedActual.startsWith(normalizedExpected);
 
   if (isMatch) {
@@ -111,5 +127,6 @@ export async function verifyLocalCommit(
 }
 
 export default {
+  detectLocalCommit,
   verifyLocalCommit,
 };

@@ -34,6 +34,11 @@ vi.mock('../../src/utils/lock.js', () => ({
   withFileLock: vi.fn(async (_path: string, fn: () => Promise<unknown>) => fn()),
 }));
 
+// Mock git utils
+vi.mock('../../src/utils/git.js', () => ({
+  detectLocalCommit: vi.fn(),
+}));
+
 // Mock fs-utils - 保留原始实现，按需覆盖
 vi.mock('../../src/utils/fs-utils.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../src/utils/fs-utils.js')>();
@@ -1101,6 +1106,61 @@ describe('store', () => {
       expect(result.valid).toBe(false);
       // 应该在 quickVerify 阶段就失败
       expect(result.reason).toContain('fileCount mismatch');
+    });
+  });
+
+  describe('absorbLocalLib', () => {
+    it('should call absorbLib when platform directories exist', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.rename.mockResolvedValue(undefined);
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+
+      // readdir 返回：第一次是 absorbLocalLib 扫描，后续是 absorbLib 内部调用
+      fsMock.readdir
+        .mockResolvedValueOnce([
+          // absorbLocalLib 扫描 localPath
+          { name: 'macOS', isDirectory: () => true },
+          { name: 'android', isDirectory: () => true },
+          { name: 'README.md', isDirectory: () => false },
+        ])
+        .mockResolvedValue([
+          // absorbLib 扫描 libDir（同样的内容）
+          { name: 'macOS', isDirectory: () => true },
+          { name: 'android', isDirectory: () => true },
+          { name: 'README.md', isDirectory: () => false },
+        ]);
+
+      const { absorbLocalLib } = await import('../../src/core/store.js');
+      const result = await absorbLocalLib('/tmp/mylib', 'mylib', 'abc123');
+
+      expect(result.isGeneral).toBe(false);
+      expect(result.platforms).toContain('macOS');
+      expect(result.platforms).toContain('android');
+      expect(result.nestedLibraries).toEqual([]);
+    });
+
+    it('should call absorbGeneral when no platform directories exist', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.rename.mockResolvedValue(undefined);
+      fsMock.access.mockRejectedValue(new Error('ENOENT'));
+      fsMock.lstat.mockRejectedValue(new Error('ENOENT'));
+      fsUtilsMock.getDirSize.mockResolvedValue(1024);
+
+      // readdir 返回：只有非平台目录文件
+      fsMock.readdir.mockResolvedValue([
+        { name: 'src', isDirectory: () => true },
+        { name: 'README.md', isDirectory: () => false },
+      ]);
+
+      const { absorbLocalLib } = await import('../../src/core/store.js');
+      const result = await absorbLocalLib('/tmp/mylib', 'mylib', 'abc123');
+
+      expect(result.isGeneral).toBe(true);
+      expect(result.platforms).toEqual(['general']);
+      expect(result.size).toBe(1024);
+      expect(result.nestedLibraries).toEqual([]);
     });
   });
 });

@@ -21,7 +21,7 @@ import {
 import type { OptionalConfigInfo } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
-import type { NestedAbsorbInfo } from '../core/store.js';
+import type { NestedAbsorbInfo, AbsorbLocalResult } from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { setProxyConfig } from '../core/codepac.js';
@@ -2390,6 +2390,83 @@ async function processAction(
 }
 
 /**
+ * resolveLocalAndAbsorb 返回结果
+ */
+interface ResolveLocalResult {
+  action: 'absorbed' | 'deleted' | 'skipped';
+  isGeneral?: boolean;
+  absorbResult?: AbsorbLocalResult;
+}
+
+/**
+ * 统一的本地目录验证+吸收流程
+ *
+ * 对本地目录执行 verifyLocalCommit → 根据结果决定 absorb / delete / skip。
+ * 消除了 linkNestedDependencies 中重复的 verifyLocalCommit + 平台检测 + absorb 逻辑。
+ *
+ * @param localPath 本地库目录路径
+ * @param libName 库名
+ * @param commit 预期 commit hash
+ * @param options 策略选项
+ */
+async function resolveLocalAndAbsorb(
+  localPath: string,
+  libName: string,
+  commit: string,
+  options: {
+    unverifiedStrategy: 'absorb' | 'download';
+    dryRun: boolean;
+    indent: string;
+    onMatch?: () => void | Promise<void>;
+    onMismatch?: (actualCommit?: string) => void | Promise<void>;
+    onNoGit?: () => void | Promise<void>;
+  }
+): Promise<ResolveLocalResult> {
+  const { unverifiedStrategy, dryRun, indent } = options;
+
+  const verifyResult = await verifyLocalCommit(localPath, commit);
+
+  switch (verifyResult.reason) {
+    case 'match': {
+      info(`${indent}  ${libName} - 本地 commit 匹配，吸收到 Store`);
+      if (!dryRun) {
+        await options.onMatch?.();
+        const absorbResult = await store.absorbLocalLib(localPath, libName, commit);
+        return { action: 'absorbed', isGeneral: absorbResult.isGeneral, absorbResult };
+      }
+      return { action: 'absorbed' };
+    }
+    case 'mismatch': {
+      warn(
+        `${indent}  ${libName}: 本地 commit (${verifyResult.actualCommit?.slice(0, 7)}) 与预期 (${commit.slice(0, 7)}) 不匹配，将重新下载`
+      );
+      if (!dryRun) {
+        await options.onMismatch?.(verifyResult.actualCommit);
+        await fs.rm(localPath, { recursive: true, force: true });
+      }
+      return { action: 'deleted' };
+    }
+    case 'no_git': {
+      if (unverifiedStrategy === 'absorb') {
+        info(`${indent}  ${libName}: 本地无 .git 目录，按配置直接吸收`);
+        if (!dryRun) {
+          await options.onNoGit?.();
+          const absorbResult = await store.absorbLocalLib(localPath, libName, commit);
+          return { action: 'absorbed', isGeneral: absorbResult.isGeneral, absorbResult };
+        }
+        return { action: 'absorbed' };
+      } else {
+        warn(`${indent}  ${libName}: 本地无 .git 目录，无法验证 commit，将重新下载`);
+        if (!dryRun) {
+          await fs.rm(localPath, { recursive: true, force: true });
+        }
+        return { action: 'deleted' };
+      }
+    }
+  }
+}
+
+/**
  * 链接嵌套依赖
  */
 async function linkNestedDependencies(
@@ -2472,85 +2549,27 @@ async function linkNestedDependencies(
 
     // Store 没有，但本地是目录时，验证 commit 并尝试 absorb
     if (!storeHas && !isGeneral && localExists && !localIsSymlink) {
-      const { verifyLocalCommit } = await import('../utils/git.js');
-      const verifyResult = await verifyLocalCommit(localPath, dep.commit);
+      const cfg = await config.load();
+      const strategy = (cfg?.unverifiedLocalStrategy ?? 'download') as 'absorb' | 'download';
 
-      switch (verifyResult.reason) {
-        case 'match': {
-          // commit 匹配，absorb 到 Store
-          info(`${indent}  ${dep.libName} - 本地 commit 匹配，吸收到 Store`);
-          if (!dryRun) {
-            // 检测是否为 General 库（无平台目录）
-            const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
-            const localEntries = await fs.readdir(localPath, { withFileTypes: true });
-            const hasPlatformDir = localEntries.some(
-              (e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name)
-            );
+      const resolveResult = await resolveLocalAndAbsorb(localPath, dep.libName, dep.commit, {
+        unverifiedStrategy: strategy,
+        dryRun,
+        indent,
+        onMatch: () => tx.recordOp('absorb', storeCommitPath, localPath),
+        onNoGit: () => tx.recordOp('absorb', storeCommitPath, localPath),
+      });
 
-            if (!hasPlatformDir) {
-              // General 库
-              tx.recordOp('absorb', storeCommitPath, localPath);
-              await store.absorbGeneral(localPath, dep.libName, dep.commit);
-              isGeneral = true;
-            } else {
-              // 平台库
-              const platformDirs = localEntries
-                .filter((e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name))
-                .map((e) => e.name);
-              tx.recordOp('absorb', storeCommitPath, localPath);
-              const nestedAbsorbResult = await store.absorbLib(localPath, platformDirs, dep.libName, dep.commit);
-              await registerNestedLibraries(nestedAbsorbResult.nestedLibraries, projectHash);
-            }
-            storeHas = true;
-          }
-          break;
+      if (resolveResult.action === 'absorbed' && !dryRun) {
+        if (resolveResult.isGeneral) {
+          isGeneral = true;
         }
-        case 'mismatch':
-          // commit 不匹配，删除本地目录，走下载流程
-          warn(
-            `${indent}  ${dep.libName}: 本地 commit (${verifyResult.actualCommit?.slice(0, 7)}) 与预期 (${dep.commit.slice(0, 7)}) 不匹配，将重新下载`
-          );
-          if (!dryRun) {
-            await fs.rm(localPath, { recursive: true, force: true });
-          }
-          break;
-        case 'no_git': {
-          // 无 .git，按配置决定
-          const cfg = await config.load();
-          const strategy = cfg?.unverifiedLocalStrategy ?? 'download';
-
-          if (strategy === 'absorb') {
-            info(`${indent}  ${dep.libName}: 本地无 .git 目录，按配置直接吸收`);
-            if (!dryRun) {
-              const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
-              const localEntries = await fs.readdir(localPath, { withFileTypes: true });
-              const hasPlatformDir = localEntries.some(
-                (e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name)
-              );
-
-              if (!hasPlatformDir) {
-                tx.recordOp('absorb', storeCommitPath, localPath);
-                await store.absorbGeneral(localPath, dep.libName, dep.commit);
-                isGeneral = true;
-              } else {
-                const platformDirs = localEntries
-                  .filter((e) => e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name))
-                  .map((e) => e.name);
-                tx.recordOp('absorb', storeCommitPath, localPath);
-                const nestedAbsorbResult = await store.absorbLib(localPath, platformDirs, dep.libName, dep.commit);
-                await registerNestedLibraries(nestedAbsorbResult.nestedLibraries, projectHash);
-              }
-              storeHas = true;
-            }
-          } else {
-            warn(`${indent}  ${dep.libName}: 本地无 .git 目录，无法验证 commit，将重新下载`);
-            if (!dryRun) {
-              await fs.rm(localPath, { recursive: true, force: true });
-            }
-          }
-          break;
+        if (resolveResult.absorbResult?.nestedLibraries.length) {
+          await registerNestedLibraries(resolveResult.absorbResult.nestedLibraries, projectHash);
         }
+        storeHas = true;
       }
+
       // 更新 localExists 状态（可能已被删除或 absorb）
       try {
         await fs.lstat(localPath);
