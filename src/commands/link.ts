@@ -2629,8 +2629,35 @@ async function linkNestedDependencies(
         });
         success(`${indent}  ${dep.libName} - 链接完成 (General)`);
       } else {
+        // 平台库：先补充缺失平台（与顶层依赖逻辑一致）
+        const supplementResult = await supplementMissingPlatforms(
+          dep,
+          platforms,
+          registry,
+          tx,
+          { vars }
+        );
+
+        // 注册嵌套依赖
+        if (supplementResult.nestedLibraries.length > 0) {
+          await registerNestedLibraries(supplementResult.nestedLibraries, projectHash);
+        }
+
+        // 合并所有可链接的平台（已有 + 新下载）
+        const allPlatforms = [...existingPlatforms, ...supplementResult.downloaded];
+
+        // 如果补充了新平台，提示用户
+        if (supplementResult.downloaded.length > 0) {
+          success(`${indent}  ${dep.libName} - 补充平台 [${supplementResult.downloaded.join(', ')}]`);
+        }
+
+        // 如果有不可用平台，警告用户
+        if (supplementResult.unavailable.length > 0) {
+          warn(`${indent}  ${dep.libName} - 平台 [${supplementResult.unavailable.join(', ')}] 远程不存在`);
+        }
+
         tx.recordOp('link', localPath, storeCommitPath);
-        await linker.linkLib(localPath, storeCommitPath, availablePlatforms);
+        await linker.linkLib(localPath, storeCommitPath, allPlatforms);
         // 记录到 nestedLinkedDeps
         nestedLinkedDeps.push({
           libName: dep.libName,
@@ -2638,7 +2665,7 @@ async function linkNestedDependencies(
           platform: primaryPlatform,
           linkedPath: path.relative(projectRoot, localPath),
         });
-        success(`${indent}  ${dep.libName} - 链接完成 [${availablePlatforms.join(', ')}]`);
+        success(`${indent}  ${dep.libName} - 链接完成 [${allPlatforms.join(', ')}]`);
       }
     } else if (download) {
       // Store 没有，需要下载
