@@ -2582,14 +2582,58 @@ async function linkNestedDependencies(
     // 链接状态检查（与顶层 classifyDependencies 共享 classifyLinkStatus 逻辑）
     if (localExists && (storeHas || isGeneral)) {
       const linkStatus = await classifyLinkStatus(localPath, storeCommitPath, isGeneral, existingPlatforms);
+
       if (linkStatus === 'linked') {
+        // 已链接，但需要检查是否需要补充缺失平台（与顶层依赖逻辑一致）
+        if (!isGeneral) {
+          const supplementResult = await supplementMissingPlatforms(
+            dep,
+            platforms,
+            registry,
+            tx,
+            { vars }
+          );
+
+          // 注册嵌套依赖
+          if (supplementResult.nestedLibraries.length > 0) {
+            await registerNestedLibraries(supplementResult.nestedLibraries, projectHash);
+          }
+
+          // 如果补充了新平台，需要重新链接
+          if (supplementResult.downloaded.length > 0) {
+            success(`${indent}  ${dep.libName} - 补充平台 [${supplementResult.downloaded.join(', ')}]`);
+
+            // 删除现有链接
+            if (!dryRun) {
+              await fs.rm(localPath, { recursive: true, force: true });
+            }
+
+            // 合并所有平台并重新链接
+            const allPlatforms = [...existingPlatforms, ...supplementResult.downloaded];
+            if (!dryRun) {
+              tx.recordOp('link', localPath, storeCommitPath);
+              await linker.linkLib(localPath, storeCommitPath, allPlatforms);
+            }
+
+            success(`${indent}  ${dep.libName} - 重新链接完成 [${allPlatforms.join(', ')}]`);
+          }
+
+          // 如果有不可用平台，警告用户
+          if (supplementResult.unavailable.length > 0) {
+            warn(`${indent}  ${dep.libName} - 平台 [${supplementResult.unavailable.join(', ')}] 远程不存在`);
+          }
+        }
+
         nestedLinkedDeps.push({
           libName: dep.libName,
           commit: dep.commit,
           platform: isGeneral ? GENERAL_PLATFORM : primaryPlatform,
           linkedPath: path.relative(projectRoot, localPath),
         });
-        success(`${indent}  ${dep.libName} - 已链接`);
+
+        if (!isGeneral) {
+          success(`${indent}  ${dep.libName} - 已链接`);
+        }
         continue;
       }
       if (linkStatus === 'relink') {
