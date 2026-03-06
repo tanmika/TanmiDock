@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-03-06
+
+### Fixed
+
+- **嵌套依赖平台补齐**: 修复嵌套依赖缺少平台补齐逻辑的问题
+  - 问题：顶层依赖有 `supplementMissingPlatforms` 补齐缺失平台，但嵌套依赖缺少此逻辑
+  - 影响：Store 有部分平台时，`td link -p mac wasm` 无法补齐嵌套依赖的缺失平台（如 libtsfe/wasm）
+  - 修复：在 `linkNestedDependencies` 的 `linkStatus === 'linked'` 分支添加平台补齐逻辑
+  - 结果：嵌套依赖行为现在与顶层依赖一致，会自动下载并链接缺失平台
+- **重复日志清理**: 移除嵌套依赖平台补齐的重复警告日志
+  - `supplementMissingPlatforms` 内部已输出不可用平台的警告
+  - 删除调用方的重复警告，避免每个不可用平台被警告两次
+
+## [0.8.2] - 2026-03-06
+
+### Fixed
+
+- **嵌套依赖链接状态检查**: 修复嵌套依赖链接状态检查误用 `localIsSymlink` 导致 General→平台库升级时不 relink 的问题
+
+## [0.8.1] - 2026-03-05
+
+### Changed
+
+- **嵌套依赖处理重构**: 统一嵌套依赖处理逻辑
+  - 抽取 `detectLocalCommit` / `absorbLocalLib` / `resolveLocalAndAbsorb` 函数
+  - 消除 `linkNestedDependencies` 中重复的 verifyLocalCommit + 平台检测 + absorb 逻辑
+
 ## [0.8.0] - 2026-02-25
 
 ### Added
