@@ -2617,11 +2617,6 @@ async function linkNestedDependencies(
 
             success(`${indent}  ${dep.libName} - 重新链接完成 [${allPlatforms.join(', ')}]`);
           }
-
-          // 如果有不可用平台，警告用户
-          if (supplementResult.unavailable.length > 0) {
-            warn(`${indent}  ${dep.libName} - 平台 [${supplementResult.unavailable.join(', ')}] 远程不存在`);
-          }
         }
 
         nestedLinkedDeps.push({
@@ -2693,11 +2688,6 @@ async function linkNestedDependencies(
         // 如果补充了新平台，提示用户
         if (supplementResult.downloaded.length > 0) {
           success(`${indent}  ${dep.libName} - 补充平台 [${supplementResult.downloaded.join(', ')}]`);
-        }
-
-        // 如果有不可用平台，警告用户
-        if (supplementResult.unavailable.length > 0) {
-          warn(`${indent}  ${dep.libName} - 平台 [${supplementResult.unavailable.join(', ')}] 远程不存在`);
         }
 
         tx.recordOp('link', localPath, storeCommitPath);
