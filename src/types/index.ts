@@ -82,6 +82,7 @@ export interface ProjectInfo {
   platforms: string[]; // 项目使用的平台列表 (macOS, iOS, android...)
   dependencies: DependencyRef[];
   optionalConfigs?: string[]; // 用户选择的可选配置文件名列表
+  submodules?: string[]; // 上次选择的 submodule 相对路径列表（记忆用户选择）
 }
 
 /**
@@ -92,6 +93,7 @@ export interface DependencyRef {
   commit: string;
   platform: string; // 该依赖对应的平台
   linkedPath: string;
+  scope?: string; // submodule 相对路径，主项目为 undefined
 }
 
 /**

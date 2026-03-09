@@ -170,4 +170,128 @@ describe('git', () => {
       expect(result.actualCommit).toBe('1111111222222233333334444444555555566666');
     });
   });
+
+  describe('parseGitmodules', () => {
+    it('should parse standard .gitmodules format', async () => {
+      const { parseGitmodules } = await import('../../src/utils/git.js');
+      const content = `[submodule "InstantSDK"]
+\tpath = InstantSDK
+\turl = git@example.com:org/repo.git
+\tbranch = develop`;
+
+      const result = parseGitmodules(content);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        name: 'InstantSDK',
+        path: 'InstantSDK',
+        url: 'git@example.com:org/repo.git',
+        branch: 'develop',
+      });
+    });
+
+    it('should parse multiple submodules', async () => {
+      const { parseGitmodules } = await import('../../src/utils/git.js');
+      const content = `[submodule "ModuleA"]
+\tpath = ModuleA
+\turl = git@example.com:org/module-a.git
+[submodule "ModuleB"]
+\tpath = libs/ModuleB
+\turl = git@example.com:org/module-b.git
+\tbranch = main`;
+
+      const result = parseGitmodules(content);
+      expect(result).toHaveLength(2);
+      expect(result[0].name).toBe('ModuleA');
+      expect(result[0].path).toBe('ModuleA');
+      expect(result[0].branch).toBeUndefined();
+      expect(result[1].name).toBe('ModuleB');
+      expect(result[1].path).toBe('libs/ModuleB');
+      expect(result[1].branch).toBe('main');
+    });
+
+    it('should skip entries missing path field', async () => {
+      const { parseGitmodules } = await import('../../src/utils/git.js');
+      const content = `[submodule "NoPath"]
+\turl = git@example.com:org/repo.git
+[submodule "HasPath"]
+\tpath = HasPath
+\turl = git@example.com:org/has-path.git`;
+
+      const result = parseGitmodules(content);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('HasPath');
+    });
+
+    it('should skip entries missing url field', async () => {
+      const { parseGitmodules } = await import('../../src/utils/git.js');
+      const content = `[submodule "NoUrl"]
+\tpath = NoUrl
+[submodule "HasUrl"]
+\tpath = HasUrl
+\turl = git@example.com:org/has-url.git`;
+
+      const result = parseGitmodules(content);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('HasUrl');
+    });
+
+    it('should handle empty content', async () => {
+      const { parseGitmodules } = await import('../../src/utils/git.js');
+      expect(parseGitmodules('')).toHaveLength(0);
+    });
+
+    it('should handle comment lines and blank lines', async () => {
+      const { parseGitmodules } = await import('../../src/utils/git.js');
+      const content = `# This is a comment
+; Another comment
+
+[submodule "MyLib"]
+
+\tpath = MyLib
+\t# inline comment? no, it's a data line starting with #
+\turl = git@example.com:org/mylib.git
+`;
+
+      const result = parseGitmodules(content);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('MyLib');
+    });
+
+    it('should handle mixed tab and space indentation', async () => {
+      const { parseGitmodules } = await import('../../src/utils/git.js');
+      const content = `[submodule "Lib"]
+    path = Lib
+\t  url = git@example.com:org/lib.git`;
+
+      const result = parseGitmodules(content);
+      expect(result).toHaveLength(1);
+      expect(result[0].path).toBe('Lib');
+      expect(result[0].url).toBe('git@example.com:org/lib.git');
+    });
+  });
+
+  describe('findSubmoduleConfigs', () => {
+    it('should return empty array when no .gitmodules exists', async () => {
+      fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+
+      const { findSubmoduleConfigs } = await import('../../src/utils/git.js');
+      const result = await findSubmoduleConfigs('/project');
+
+      expect(result).toEqual([]);
+    });
+
+    it('should skip submodule when directory does not exist', async () => {
+      // readFile for .gitmodules succeeds
+      fsMock.readFile.mockResolvedValueOnce(`[submodule "NotInit"]
+\tpath = NotInit
+\turl = git@example.com:org/notinit.git`);
+      // stat for submodule dir fails (not initialized)
+      fsMock.stat.mockRejectedValue(new Error('ENOENT'));
+
+      const { findSubmoduleConfigs } = await import('../../src/utils/git.js');
+      const result = await findSubmoduleConfigs('/project');
+
+      expect(result).toEqual([]);
+    });
+  });
 });

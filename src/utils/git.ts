@@ -126,7 +126,192 @@ export async function verifyLocalCommit(
   }
 }
 
+// ============ Git Submodule 检测 ============
+
+/** .gitmodules 中的 submodule 条目 */
+export interface GitSubmodule {
+  name: string;       // [submodule "InstantSDK"] 中的名称
+  path: string;       // 相对于仓库根的路径
+  url: string;        // git 仓库地址
+  branch?: string;    // 跟踪分支（可选）
+}
+
+/** 含 codepac 配置的 submodule 信息 */
+export interface SubmoduleConfig {
+  name: string;                           // submodule 名
+  relativePath: string;                   // 相对项目根的路径，如 "InstantSDK"
+  absolutePath: string;                   // 绝对路径
+  configPath: string;                     // codepac-dep.json 绝对路径
+  depCount: number;                       // 依赖数量（选择 UI 显示用）
+  optionalConfigs: OptionalConfigInfo[];  // 可选配置列表
+}
+
+// 延迟导入避免循环依赖
+import type { OptionalConfigInfo } from '../core/parser.js';
+
+/**
+ * 解析 .gitmodules 文件内容
+ * 纯文本解析，不依赖 git 命令
+ *
+ * @param content .gitmodules 文件内容
+ * @returns 解析出的 submodule 列表
+ */
+export function parseGitmodules(content: string): GitSubmodule[] {
+  const submodules: GitSubmodule[] = [];
+  let current: Partial<GitSubmodule> | null = null;
+
+  const lines = content.split('\n');
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+
+    // 跳过空行和注释行
+    if (!line || line.startsWith('#') || line.startsWith(';')) {
+      continue;
+    }
+
+    // 匹配 [submodule "xxx"]
+    const sectionMatch = line.match(/^\[submodule\s+"(.+)"\]$/);
+    if (sectionMatch) {
+      // 保存上一个完整的 submodule
+      if (current && current.name && current.path && current.url) {
+        submodules.push(current as GitSubmodule);
+      }
+      current = { name: sectionMatch[1] };
+      continue;
+    }
+
+    // 匹配 key = value（支持 tab 和 space 混合缩进）
+    if (current) {
+      const kvMatch = line.match(/^(\w+)\s*=\s*(.+)$/);
+      if (kvMatch) {
+        const key = kvMatch[1].toLowerCase();
+        const value = kvMatch[2].trim();
+
+        switch (key) {
+          case 'path':
+            current.path = value;
+            break;
+          case 'url':
+            current.url = value;
+            break;
+          case 'branch':
+            current.branch = value;
+            break;
+        }
+      }
+    }
+  }
+
+  // 保存最后一个 submodule
+  if (current && current.name && current.path && current.url) {
+    submodules.push(current as GitSubmodule);
+  }
+
+  return submodules;
+}
+
+/** 递归深度限制 */
+const MAX_SUBMODULE_DEPTH = 5;
+
+/**
+ * 递归发现所有含 codepac 依赖配置的 submodule
+ *
+ * @param projectPath 项目路径
+ * @param relativePrefix 相对路径前缀（递归用）
+ * @param depth 当前递归深度
+ * @returns 含配置的 submodule 列表
+ */
+export async function findSubmoduleConfigs(
+  projectPath: string,
+  relativePrefix: string = '',
+  depth: number = 0
+): Promise<SubmoduleConfig[]> {
+  if (depth >= MAX_SUBMODULE_DEPTH) {
+    logger.debug(`findSubmoduleConfigs: 递归深度超限 (${depth}), 路径: ${projectPath}`);
+    return [];
+  }
+
+  const gitmodulesPath = path.join(projectPath, '.gitmodules');
+  let content: string;
+  try {
+    content = await fs.readFile(gitmodulesPath, 'utf-8');
+  } catch {
+    return [];
+  }
+
+  const submodules = parseGitmodules(content);
+  if (submodules.length === 0) {
+    return [];
+  }
+
+  // 延迟导入 parser 模块
+  const { findCodepacConfig, findAllCodepacConfigs, parseCodepacDep, extractDependencies } =
+    await import('../core/parser.js');
+
+  const results: SubmoduleConfig[] = [];
+
+  for (const sub of submodules) {
+    const absolutePath = path.join(projectPath, sub.path);
+    const relativePath = relativePrefix ? path.join(relativePrefix, sub.path) : sub.path;
+
+    // 检查 submodule 目录是否存在（可能未 init）
+    try {
+      const stat = await fs.stat(absolutePath);
+      if (!stat.isDirectory()) continue;
+    } catch {
+      logger.debug(`findSubmoduleConfigs: submodule 目录不存在: ${absolutePath}`);
+      continue;
+    }
+
+    // 查找 codepac-dep.json
+    const configPath = await findCodepacConfig(absolutePath);
+    if (!configPath) {
+      // 无配置文件，但仍递归检查嵌套 submodule
+      const nested = await findSubmoduleConfigs(absolutePath, relativePath, depth + 1);
+      results.push(...nested);
+      continue;
+    }
+
+    // 解析依赖数量
+    let depCount = 0;
+    try {
+      const config = await parseCodepacDep(configPath);
+      const deps = extractDependencies(config);
+      depCount = deps.length;
+    } catch {
+      logger.debug(`findSubmoduleConfigs: 解析配置失败: ${configPath}`);
+      continue;
+    }
+
+    // 查找可选配置
+    let optionalConfigs: OptionalConfigInfo[] = [];
+    const configDir = path.dirname(configPath);
+    const allConfigs = await findAllCodepacConfigs(configDir);
+    if (allConfigs) {
+      optionalConfigs = allConfigs.optionalConfigs;
+    }
+
+    results.push({
+      name: sub.name,
+      relativePath,
+      absolutePath,
+      configPath,
+      depCount,
+      optionalConfigs,
+    });
+
+    // 递归检查嵌套 submodule
+    const nested = await findSubmoduleConfigs(absolutePath, relativePath, depth + 1);
+    results.push(...nested);
+  }
+
+  return results;
+}
+
 export default {
   detectLocalCommit,
   verifyLocalCommit,
+  parseGitmodules,
+  findSubmoduleConfigs,
 };

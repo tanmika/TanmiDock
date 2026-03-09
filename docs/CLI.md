@@ -146,6 +146,7 @@ tanmi-dock link [path] [options]
 | `-y, --yes` | 跳过确认提示 |
 | `--no-download` | 不自动下载缺失库 |
 | `--dry-run` | 只显示将要执行的操作 |
+| `--no-submodules` | 不检测 git submodule 依赖 |
 
 ### 支持的平台
 
@@ -296,6 +297,45 @@ $ tanmi-dock link
 [info] 分析 /Users/dev/my-project
 ...
 ```
+
+#### 6. Git Submodule 支持
+
+`td link` 自动检测项目中的 git submodule，如果子模块也包含 `codepac-dep.json`，会提示一并链接：
+
+```bash
+$ tanmi-dock link -p mac
+
+? 选择要一并链接的子模块: (按 a 全选/全不选)
+  ◉ InstantSDK (6 个库)
+
+[info] 链接主项目...
+[info] 链接子模块: InstantSDK
+
+────────────────────
+[info] 主项目: 40 个库
+[info] InstantSDK: 6 个库
+[info] 完成: 共链接 46 个库
+```
+
+**检测机制**：
+
+- 读取项目根目录的 `.gitmodules` 文件（纯文本解析，不依赖 git 命令）
+- 检查每个 submodule 路径下是否存在 `codepac-dep.json`
+- 支持递归嵌套（子模块中的子模块，最深 5 层）
+
+**各模式行为**：
+
+| 模式 | 行为 |
+|------|------|
+| TTY 交互 | 显示 checkbox 选择界面，支持 `a` 全选 |
+| `--yes` | 自动包含所有 submodule |
+| `--no-submodules` | 跳过 submodule 检测 |
+| 非 TTY 无 `--yes` | 报错，提示使用 `--yes` 或 `--no-submodules` |
+
+**与其他命令的交互**：
+
+- `td status`：自动检测并分组显示子模块依赖状态
+- `td unlink`：自动还原所有链接（包括子模块的链接路径）
 
 ---
 

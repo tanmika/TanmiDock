@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
-import { parseProjectDependencies, findCodepacConfig } from '../core/parser.js';
+import { parseProjectDependencies, findCodepacConfig, parseCodepacDep, extractDependencies } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
 import * as linker from '../core/linker.js';
@@ -13,6 +13,7 @@ import { resolvePath, shrinkHome } from '../core/platform.js';
 import { formatSize } from '../utils/disk.js';
 import { info, warn, success, hint, blank, separator, title, colorize, tree as printTree } from '../utils/logger.js';
 import { selectWithCancel, PROMPT_CANCELLED } from '../utils/prompt.js';
+import { findSubmoduleConfigs } from '../utils/git.js';
 import type { ParsedDependency } from '../types/index.js';
 import type { TreeItem } from '../utils/logger.js';
 
@@ -201,9 +202,68 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
     }
   }
 
+  // 检测 submodule 依赖
+  const submoduleConfigs = await findSubmoduleConfigs(absolutePath);
+  interface SubmoduleStatus {
+    name: string;
+    path: string;
+    depCount: number;
+    isLinked: boolean;
+    linked: number;
+    broken: number;
+    unlinked: number;
+    brokenList: string[];
+    unlinkedList: string[];
+  }
+  const submoduleStatuses: SubmoduleStatus[] = [];
+
+  for (const sub of submoduleConfigs) {
+    const isLinked = projectInfo?.submodules?.includes(sub.relativePath) ?? false;
+    const subStatus: SubmoduleStatus = {
+      name: sub.name,
+      path: sub.relativePath,
+      depCount: sub.depCount,
+      isLinked,
+      linked: 0,
+      broken: 0,
+      unlinked: 0,
+      brokenList: [],
+      unlinkedList: [],
+    };
+
+    if (isLinked) {
+      try {
+        const subConfig = await parseCodepacDep(sub.configPath);
+        const subDeps = extractDependencies(subConfig);
+        const subThirdPartyDir = path.dirname(sub.configPath);
+
+        for (const dep of subDeps) {
+          const localPath = path.join(subThirdPartyDir, dep.libName);
+          const linkStatus = await checkLinkStatus(localPath);
+
+          if (linkStatus.isLinked) {
+            if (linkStatus.isValid) {
+              subStatus.linked++;
+            } else {
+              subStatus.broken++;
+              subStatus.brokenList.push(`${dep.libName} (${dep.commit.slice(0, 7)})`);
+            }
+          } else {
+            subStatus.unlinked++;
+            subStatus.unlinkedList.push(`${dep.libName} (${dep.commit.slice(0, 7)}) - ${linkStatus.reason}`);
+          }
+        }
+      } catch {
+        // 解析失败，仅显示未链接信息
+      }
+    }
+
+    submoduleStatuses.push(subStatus);
+  }
+
   // JSON 输出
   if (options.json) {
-    const output = {
+    const output: Record<string, unknown> = {
       project: absolutePath,
       lastLinked: projectInfo?.lastLinked ?? null,
       platforms: projectInfo?.platforms ?? [],
@@ -216,6 +276,19 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
       brokenList,
       unlinkedList,
     };
+    if (submoduleStatuses.length > 0) {
+      output.submodules = submoduleStatuses.map(s => ({
+        name: s.name,
+        path: s.path,
+        isLinked: s.isLinked,
+        dependencies: {
+          total: s.depCount,
+          linked: s.linked,
+          broken: s.broken,
+          unlinked: s.unlinked,
+        },
+      }));
+    }
     console.log(JSON.stringify(output, null, 2));
     return;
   }
@@ -246,6 +319,37 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
     warn('未链接的库:');
     for (const item of unlinkedList) {
       info(`  - ${item}`);
+    }
+  }
+
+  // 显示 submodule 状态
+  if (submoduleStatuses.length > 0) {
+    blank();
+    separator();
+    for (const sub of submoduleStatuses) {
+      if (!sub.isLinked) {
+        info(`[${sub.name}] 子模块 (${sub.depCount} 个依赖) - 未链接`);
+        continue;
+      }
+
+      info(`[${sub.name}] 子模块 (${sub.depCount} 个依赖):`);
+      success(`  已链接: ${sub.linked}`);
+      if (sub.broken > 0) {
+        warn(`  链接失效: ${sub.broken}`);
+      }
+      if (sub.unlinked > 0) {
+        warn(`  未链接: ${sub.unlinked}`);
+      }
+      if (sub.brokenList.length > 0) {
+        for (const item of sub.brokenList) {
+          info(`    - ${item}`);
+        }
+      }
+      if (sub.unlinkedList.length > 0) {
+        for (const item of sub.unlinkedList) {
+          info(`    - ${item}`);
+        }
+      }
     }
   }
 

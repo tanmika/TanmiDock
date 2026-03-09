@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Git submodule 支持**: `td link` 自动检测 `.gitmodules` 中的子模块，发现子模块内的 `codepac-dep.json` 后提示一并链接
+  - 交互模式下 checkbox 选择要链接的子模块，支持 `a` 键全选
+  - `--no-submodules` 选项跳过子模块检测
+  - `--yes` 模式自动包含所有子模块
+  - 支持递归嵌套子模块（最深 5 层）
+- **`td status` 子模块分组显示**: 自动检测并分组显示子模块依赖状态
+- **JSON 输出扩展**: `td status --json` 新增 `submodules` 字段
+
+### Changed
+
+- **重构 `linkProject` 核心逻辑**: 提取 `linkScope()` 函数，`linkProject` 变为编排器
+- **Registry 扩展**: `DependencyRef` 新增可选 `scope` 字段，`ProjectInfo` 新增可选 `submodules` 字段（向后兼容，无需迁移）
+
 ## [0.8.3] - 2026-03-06
 
 ### Fixed
