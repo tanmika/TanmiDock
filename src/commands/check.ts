@@ -9,6 +9,7 @@ import { getDiskInfo, formatSize } from '../utils/disk.js';
 import * as config from '../core/config.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
+import { KNOWN_PLATFORM_VALUES } from '../core/platform.js';
 import {
   info,
   warn,
@@ -57,6 +58,8 @@ interface IntegrityIssue {
     commit: string;
     platform: string;
     reason: string;
+    kind?: 'integrity_mismatch' | 'shared_platform_conflict';
+    conflictPlatforms?: string[];
     expected: { fileCount?: number; size?: number; contentHash?: string };
     actual: { fileCount: number; size: number; contentHash?: string };
   }[];
@@ -352,6 +355,21 @@ async function checkIntegrity(options?: { integrity?: boolean }): Promise<Integr
         if (!libInfo) {
           const size = await getDirSizeRecursive(commitPath);
           result.orphanLibraries.push({ libName, commit, size, path: commitPath });
+          continue;
+        }
+
+        const sharedConflict = await detectSharedPlatformConflict(commitPath);
+        if (sharedConflict) {
+          result.corruptedStores.push({
+            libName,
+            commit,
+            platform: '_shared',
+            kind: 'shared_platform_conflict',
+            reason: `_shared 包含平台目录: ${sharedConflict.join(', ')}`,
+            conflictPlatforms: sharedConflict,
+            expected: {},
+            actual: { fileCount: sharedConflict.length, size: 0 },
+          });
         }
       }
     }
@@ -772,8 +790,12 @@ function showDetails(issues: IntegrityIssue): void {
     info(`损坏的 Store 条目 (${issues.corruptedStores.length}):`);
     for (const item of issues.corruptedStores) {
       hint(`  - ${item.libName}/${item.commit.slice(0, 7)}/${item.platform}: ${item.reason}`);
-      hint(`    期望: fileCount=${item.expected.fileCount ?? '?'}, size=${item.expected.size ?? '?'}, hash=${item.expected.contentHash?.slice(0, 8) ?? '?'}`);
-      hint(`    实际: fileCount=${item.actual.fileCount}, size=${item.actual.size}, hash=${item.actual.contentHash?.slice(0, 8) ?? '?'}`);
+      if (item.kind === 'shared_platform_conflict') {
+        hint(`    冲突平台: ${item.conflictPlatforms?.join(', ') ?? '未知'}`);
+      } else {
+        hint(`    期望: fileCount=${item.expected.fileCount ?? '?'}, size=${item.expected.size ?? '?'}, hash=${item.expected.contentHash?.slice(0, 8) ?? '?'}`);
+        hint(`    实际: fileCount=${item.actual.fileCount}, size=${item.actual.size}, hash=${item.actual.contentHash?.slice(0, 8) ?? '?'}`);
+      }
     }
     blank();
   }
@@ -901,11 +923,21 @@ async function fixAllIssues(
   // 5. 清理损坏的 Store 条目
   for (const item of issues.corruptedStores) {
     try {
-      const storeKey = registry.getStoreKey(item.libName, item.commit, item.platform);
-      registry.removeStore(storeKey);
-      const platformPath = path.join(storePath, item.libName, item.commit, item.platform);
-      await fs.rm(platformPath, { recursive: true, force: true });
-      success(`[ok] 清理损坏 Store: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform}`);
+      if (item.kind === 'shared_platform_conflict') {
+        const storeKeys = registry.getLibraryStoreKeys(item.libName, item.commit);
+        for (const storeKey of storeKeys) {
+          registry.removeStore(storeKey);
+        }
+        const commitPath = path.join(storePath, item.libName, item.commit);
+        await fs.rm(commitPath, { recursive: true, force: true });
+        success(`[ok] 清理损坏 Store: ${item.libName}/${item.commit.slice(0, 7)} (移除整个 commit 缓存)`);
+      } else {
+        const storeKey = registry.getStoreKey(item.libName, item.commit, item.platform);
+        registry.removeStore(storeKey);
+        const platformPath = path.join(storePath, item.libName, item.commit, item.platform);
+        await fs.rm(platformPath, { recursive: true, force: true });
+        success(`[ok] 清理损坏 Store: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform}`);
+      }
       fixed++;
     } catch (err) {
       error(`[err] 清理损坏 Store 失败: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform} - ${(err as Error).message}`);
@@ -939,6 +971,19 @@ async function getDirSizeRecursive(dirPath: string): Promise<number> {
     debug(`[check] 计算目录大小失败: ${(err as Error).message}`);
   }
   return size;
+}
+
+async function detectSharedPlatformConflict(commitPath: string): Promise<string[] | null> {
+  const sharedPath = path.join(commitPath, '_shared');
+  try {
+    const sharedEntries = await fs.readdir(sharedPath, { withFileTypes: true });
+    const conflicts = sharedEntries
+      .filter((entry) => entry.isDirectory() && KNOWN_PLATFORM_VALUES.includes(entry.name))
+      .map((entry) => entry.name);
+    return conflicts.length > 0 ? conflicts : null;
+  } catch {
+    return null;
+  }
 }
 
 // ============ 兼容导出（供测试使用）============
@@ -997,7 +1042,28 @@ export async function checkStoreIntegrity(): Promise<IntegrityIssue['corruptedSt
   }
 
   const stores = registry.listStores();
+  const scannedCommits = new Set<string>();
   for (const entry of stores) {
+    const commitKey = `${entry.libName}:${entry.commit}`;
+    if (!scannedCommits.has(commitKey)) {
+      scannedCommits.add(commitKey);
+      const storePath = await store.getStorePath();
+      const commitPath = path.join(storePath, entry.libName, entry.commit);
+      const sharedConflict = await detectSharedPlatformConflict(commitPath);
+      if (sharedConflict) {
+        corrupted.push({
+          libName: entry.libName,
+          commit: entry.commit,
+          platform: '_shared',
+          kind: 'shared_platform_conflict',
+          reason: `_shared 包含平台目录: ${sharedConflict.join(', ')}`,
+          conflictPlatforms: sharedConflict,
+          expected: {},
+          actual: { fileCount: sharedConflict.length, size: 0 },
+        });
+      }
+    }
+
     if (entry.fileCount != null) {
       const expectedData = {
         size: entry.size,
@@ -1052,11 +1118,21 @@ export async function fixCorruptedStores(
 
   for (const item of corrupted) {
     try {
-      const storeKey = registry.getStoreKey(item.libName, item.commit, item.platform);
-      registry.removeStore(storeKey);
-      const platformPath = path.join(storePath, item.libName, item.commit, item.platform);
-      await fs.rm(platformPath, { recursive: true, force: true });
-      success(`[ok] 清理损坏 Store: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform}`);
+      if (item.kind === 'shared_platform_conflict') {
+        const storeKeys = registry.getLibraryStoreKeys(item.libName, item.commit);
+        for (const storeKey of storeKeys) {
+          registry.removeStore(storeKey);
+        }
+        const commitPath = path.join(storePath, item.libName, item.commit);
+        await fs.rm(commitPath, { recursive: true, force: true });
+        success(`[ok] 清理损坏 Store: ${item.libName}/${item.commit.slice(0, 7)} (移除整个 commit 缓存)`);
+      } else {
+        const storeKey = registry.getStoreKey(item.libName, item.commit, item.platform);
+        registry.removeStore(storeKey);
+        const platformPath = path.join(storePath, item.libName, item.commit, item.platform);
+        await fs.rm(platformPath, { recursive: true, force: true });
+        success(`[ok] 清理损坏 Store: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform}`);
+      }
     } catch (err) {
       error(`[err] 清理损坏 Store 失败: ${item.libName}/${item.commit.slice(0, 7)}/${item.platform} - ${(err as Error).message}`);
     }

@@ -138,6 +138,48 @@ describe('check --integrity', () => {
 
       expect(corrupted).toHaveLength(0);
     });
+
+    it('should detect shared platform conflicts in store layout', async () => {
+      const registryMock = {
+        load: vi.fn(),
+        listStores: vi.fn().mockReturnValue([
+          { libName: 'libflatbuffers', commit: 'abc123', platform: 'wasm', size: 1024, fileCount: 10, contentHash: 'hash1' },
+        ]),
+        getStoreKey: vi.fn((lib: string, commit: string, platform: string) => `${lib}:${commit}:${platform}`),
+        updateStore: vi.fn(),
+        save: vi.fn(),
+      };
+      const { getRegistry } = await import('../../src/core/registry.js') as {
+        getRegistry: ReturnType<typeof vi.fn>;
+      };
+      (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
+
+      const fsMock = (await import('fs/promises')).default as {
+        readdir: ReturnType<typeof vi.fn>;
+      };
+      fsMock.readdir.mockImplementation(async (targetPath: string, options?: { withFileTypes?: boolean }) => {
+        if (targetPath === '/store/libflatbuffers/abc123/_shared' && options?.withFileTypes) {
+          return [
+            { name: 'wasm', isDirectory: () => true },
+            { name: 'include', isDirectory: () => true },
+          ];
+        }
+        return [];
+      });
+
+      const storeMock = await import('../../src/core/store.js') as {
+        fullVerify: ReturnType<typeof vi.fn>;
+      };
+      storeMock.fullVerify.mockResolvedValue({ valid: true });
+
+      const { checkStoreIntegrity } = await import('../../src/commands/check.js');
+      const corrupted = await checkStoreIntegrity();
+
+      expect(corrupted).toHaveLength(1);
+      expect(corrupted[0].kind).toBe('shared_platform_conflict');
+      expect(corrupted[0].platform).toBe('_shared');
+      expect(corrupted[0].conflictPlatforms).toEqual(['wasm']);
+    });
   });
 
   describe('fixCorruptedStores', () => {
@@ -176,6 +218,48 @@ describe('check --integrity', () => {
       const { fixCorruptedStores } = await import('../../src/commands/check.js');
       await fixCorruptedStores([]);
       // 不应该调用 getRegistry
+    });
+
+    it('should remove whole commit cache for shared platform conflicts', async () => {
+      const registryMock = {
+        load: vi.fn(),
+        getStoreKey: vi.fn((lib: string, commit: string, platform: string) => `${lib}:${commit}:${platform}`),
+        getLibraryStoreKeys: vi.fn().mockReturnValue([
+          'libflatbuffers:abc123:wasm',
+          'libflatbuffers:abc123:_shared',
+        ]),
+        removeStore: vi.fn(),
+        save: vi.fn(),
+      };
+      const { getRegistry } = await import('../../src/core/registry.js') as {
+        getRegistry: ReturnType<typeof vi.fn>;
+      };
+      (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
+
+      const fsMock = (await import('fs/promises')).default as {
+        rm: ReturnType<typeof vi.fn>;
+      };
+      fsMock.rm.mockResolvedValue(undefined);
+
+      const { fixCorruptedStores } = await import('../../src/commands/check.js');
+      await fixCorruptedStores([
+        {
+          libName: 'libflatbuffers',
+          commit: 'abc123',
+          platform: '_shared',
+          kind: 'shared_platform_conflict',
+          reason: '_shared 包含平台目录: wasm',
+          conflictPlatforms: ['wasm'],
+          expected: {},
+          actual: { fileCount: 1, size: 0 },
+        },
+      ]);
+
+      expect(registryMock.getLibraryStoreKeys).toHaveBeenCalledWith('libflatbuffers', 'abc123');
+      expect(registryMock.removeStore).toHaveBeenCalledWith('libflatbuffers:abc123:wasm');
+      expect(registryMock.removeStore).toHaveBeenCalledWith('libflatbuffers:abc123:_shared');
+      expect(fsMock.rm).toHaveBeenCalledWith('/store/libflatbuffers/abc123', { recursive: true, force: true });
+      expect(registryMock.save).toHaveBeenCalled();
     });
   });
 

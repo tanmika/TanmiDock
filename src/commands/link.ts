@@ -25,7 +25,7 @@ import type { NestedAbsorbInfo, AbsorbLocalResult } from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { setProxyConfig } from '../core/codepac.js';
-import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, SHARED_PLATFORM, pathsEqual, isSparseOnlyCommon } from '../core/platform.js';
+import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, SHARED_PLATFORM, pathsEqual, isSparseOnlyCommon, KNOWN_PLATFORM_VALUES } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize, getDirectoryIntegrity } from '../utils/fs-utils.js';
@@ -1513,6 +1513,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   } catch (err) {
     // 链接过程出错，回滚事务
     error(`链接失败: ${(err as Error).message}`);
+    hintStoreRepairCommand(err as Error);
     warn('正在回滚事务...');
     try {
       await tx.rollback();
@@ -1523,6 +1524,21 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     }
     process.exit(1);
   }
+}
+
+function hintStoreRepairCommand(err: Error): void {
+  const message = err.message;
+  const isSharedPlatformConflict =
+    message.includes('EEXIST') &&
+    message.includes('_shared') &&
+    KNOWN_PLATFORM_VALUES.some((platform) => message.includes(`${path.sep}_shared${path.sep}${platform}`) || message.includes(`/_shared/${platform}`));
+
+  if (!isSharedPlatformConflict) {
+    return;
+  }
+
+  hint('检测到 Store 结构冲突，可能是 _shared 中混入了平台目录。');
+  hint('请运行 `td check --fix` 清理损坏的 Store 条目后再重试。');
 }
 
 /**
