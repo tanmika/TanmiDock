@@ -693,12 +693,17 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               name: `  ${dependency.libName}`, estimatedSize: linkNewHistoryLib?.size, getDirSize,
             });
 
-            const downloadResult = await codepac.downloadToTemp({
-              url: dependency.url, commit: dependency.commit, branch: dependency.branch,
-              libName: dependency.libName, platforms: missing, sparse: dependency.sparse, vars: configVars,
-              onTempDirCreated: (_tempDir, libDir) => { linkNewMonitor.start(libDir); },
-            });
-            await linkNewMonitor.stop();
+            let downloadResult: codepac.DownloadResult;
+            try {
+              downloadResult = await codepac.downloadToTemp({
+                url: dependency.url, commit: dependency.commit, branch: dependency.branch,
+                libName: dependency.libName, platforms: missing, sparse: dependency.sparse, vars: configVars,
+                onTempDirCreated: (_tempDir, libDir) => { linkNewMonitor.start(libDir); },
+                onHeartbeat: (message) => { linkNewMonitor.heartbeat(message); },
+              });
+            } finally {
+              await linkNewMonitor.stop();
+            }
 
             if (downloadResult.cleanedPlatforms.length > 0) {
               hint(`  已过滤: ${downloadResult.cleanedPlatforms.join(', ')}`);
@@ -880,13 +885,18 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                 manager: multiBarManager ?? undefined,
               });
 
-              const downloadResult = await codepac.downloadToTemp({
-                url: dependency.url, commit: dependency.commit, branch: dependency.branch,
-                libName: dependency.libName, platforms: dlToDownload, sparse: dependency.sparse,
-                vars: configVars,
-                onTempDirCreated: (_tempDir, libDir) => { downloadMonitor.start(libDir); },
-              });
-              await downloadMonitor.stop();
+              let downloadResult: codepac.DownloadResult;
+              try {
+                downloadResult = await codepac.downloadToTemp({
+                  url: dependency.url, commit: dependency.commit, branch: dependency.branch,
+                  libName: dependency.libName, platforms: dlToDownload, sparse: dependency.sparse,
+                  vars: configVars,
+                  onTempDirCreated: (_tempDir, libDir) => { downloadMonitor.start(libDir); },
+                  onHeartbeat: (message) => { downloadMonitor.heartbeat(message); },
+                });
+              } finally {
+                await downloadMonitor.stop();
+              }
 
               if (downloadResult.cleanedPlatforms.length > 0) {
                 pLog.hint(`  已过滤: ${downloadResult.cleanedPlatforms.join(', ')}`);
@@ -2585,15 +2595,30 @@ async function linkNestedDependencies(
       }
 
       try {
-        const downloadResult = await codepac.downloadToTemp({
-          url: dep.url,
-          commit: dep.commit,
-          branch: dep.branch,
-          libName: dep.libName,
-          platforms: availablePlatforms,
-          sparse: dep.sparse,
-          vars,
+        const nestedLibKey = registry.getLibraryKey(dep.libName, dep.commit);
+        const nestedHistoryLib = registry.getLibrary(nestedLibKey);
+        const downloadMonitor = new DownloadMonitor({
+          name: `${indent}  ${dep.libName}`,
+          estimatedSize: nestedHistoryLib?.size,
+          getDirSize,
         });
+
+        let downloadResult: codepac.DownloadResult;
+        try {
+          downloadResult = await codepac.downloadToTemp({
+            url: dep.url,
+            commit: dep.commit,
+            branch: dep.branch,
+            libName: dep.libName,
+            platforms: availablePlatforms,
+            sparse: dep.sparse,
+            vars,
+            onTempDirCreated: (_tempDir, libDir) => { downloadMonitor.start(libDir); },
+            onHeartbeat: (message) => { downloadMonitor.heartbeat(message); },
+          });
+        } finally {
+          await downloadMonitor.stop();
+        }
 
         // 提示清理的平台（如果有）
         if (downloadResult.cleanedPlatforms.length > 0) {

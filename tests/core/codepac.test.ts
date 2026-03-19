@@ -80,6 +80,7 @@ function createMockProcess(exitCode = 0, stderrData = '') {
 
 describe('codepac', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     mockSpawn.mockReset();
     mockWriteFile.mockReset();
@@ -799,6 +800,41 @@ describe('codepac', () => {
       // 验证 sparse 配置被写入临时配置文件
       expect(writtenConfig).toBeDefined();
       expect((writtenConfig as { repos: { common: Array<{ sparse: unknown }> } }).repos.common[0].sparse).toEqual(sparseConfig);
+    });
+
+    it('should emit heartbeat when codepac stays silent for a long time', async () => {
+      vi.useFakeTimers();
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+      ]);
+
+      const proc = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+      };
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      mockSpawn.mockReturnValue(proc);
+
+      const onHeartbeat = vi.fn();
+      const promise = codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: 'abc123',
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+        onHeartbeat,
+      });
+
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(onHeartbeat).toHaveBeenCalledWith('仍在处理中，可能在同步大文件，期间无新日志');
+
+      proc.emit('close', 0);
+      await promise;
+      vi.useRealTimers();
     });
 
     // 需要网络的测试，标记为 skip

@@ -324,6 +324,7 @@ export interface DownloadMonitorOptions {
  */
 export class DownloadMonitor {
   private tracker: ProgressTracker | null = null;
+  private manager: MultiBarManager | null = null;
   private getDirSize: (dirPath: string) => Promise<number>;
   private interval: number;
   private logInterval: number;
@@ -336,6 +337,8 @@ export class DownloadMonitor {
   private lastLogTime: number = 0;
   private lastSize: number = 0;
   private lastSizeTime: number = 0;
+  private currentSize: number = 0;
+  private lastStatusTime: number = 0;
 
   constructor(options: DownloadMonitorOptions) {
     this.isTTY = process.stdout.isTTY ?? false;
@@ -344,10 +347,11 @@ export class DownloadMonitor {
     this.getDirSize = options.getDirSize;
     this.interval = options.interval ?? 200;
     this.logInterval = options.logInterval ?? 10000;
+    this.manager = options.manager ?? null;
 
     // TTY 模式下使用进度条
     if (this.isTTY) {
-      const multibar = options.manager?.getMultiBar();
+      const multibar = this.manager?.getMultiBar();
       this.tracker = new ProgressTracker({
         name: options.name,
         total: options.estimatedSize,
@@ -364,7 +368,10 @@ export class DownloadMonitor {
     this.started = true;
     this.dirPath = dirPath;
     this.lastLogTime = Date.now();
+    this.lastStatusTime = 0;
     this.lastSizeTime = Date.now();
+    this.lastSize = 0;
+    this.currentSize = 0;
 
     if (this.isTTY && this.tracker) {
       this.tracker.start();
@@ -388,6 +395,7 @@ export class DownloadMonitor {
    */
   private updateProgress(size: number): void {
     const now = Date.now();
+    this.currentSize = size;
 
     if (this.isTTY && this.tracker) {
       // TTY 模式：更新进度条
@@ -395,9 +403,9 @@ export class DownloadMonitor {
     } else {
       // 非 TTY 模式：周期性输出日志
       if (now - this.lastLogTime >= this.logInterval) {
-        // 计算速度
+        const delta = size - this.lastSize;
         const elapsed = (now - this.lastSizeTime) / 1000;
-        const speed = elapsed > 0 ? (size - this.lastSize) / elapsed : 0;
+        const speed = elapsed > 0 ? delta / elapsed : 0;
 
         let progressStr: string;
         if (this.estimatedSize > 0) {
@@ -407,14 +415,43 @@ export class DownloadMonitor {
           progressStr = formatBytes(size);
         }
 
-        const speedStr = speed > 0 ? ` @ ${formatSpeed(speed)}` : '';
-        console.log(`[progress] ${this.name}: ${progressStr}${speedStr}`);
+        if (delta > 0 && speed > 0) {
+          console.log(`[progress] ${this.name}: ${progressStr} @ ${formatSpeed(speed)}`);
+        } else {
+          console.log(`[progress] ${this.name}: 仍在处理中 (${progressStr})`);
+        }
 
         this.lastLogTime = now;
+        this.lastStatusTime = now;
         this.lastSize = size;
         this.lastSizeTime = now;
       }
     }
+  }
+
+  private logLine(message: string): void {
+    if (this.manager) {
+      this.manager.log(message);
+      return;
+    }
+    console.log(message);
+  }
+
+  /**
+   * 输出保活提示，避免长时间静默让用户误以为卡死
+   */
+  heartbeat(message = '仍在处理中，可能在同步大文件，期间无新日志'): void {
+    if (!this.started) return;
+    const now = Date.now();
+    const lastEmissionTime = Math.max(this.lastLogTime, this.lastStatusTime);
+    if (now - lastEmissionTime < this.logInterval) return;
+
+    const sizeText = this.currentSize > 0 ? formatBytes(this.currentSize) : '0 B';
+    this.logLine(`[progress] ${this.name}: ${message} (${sizeText})`);
+    this.lastStatusTime = now;
+    this.lastLogTime = now;
+    this.lastSize = this.currentSize;
+    this.lastSizeTime = now;
   }
 
   /**
@@ -431,6 +468,9 @@ export class DownloadMonitor {
    * 停止监控
    */
   async stop(): Promise<void> {
+    if (!this.started) return;
+    this.started = false;
+
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;

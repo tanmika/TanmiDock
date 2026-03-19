@@ -330,6 +330,8 @@ export interface DownloadOptions {
   vars?: Record<string, string>;
   /** 进度回调 */
   onProgress?: (msg: string) => void;
+  /** 长时间静默时的保活回调 */
+  onHeartbeat?: (msg: string) => void;
   /** 临时目录创建后回调（用于启动进度监控） */
   onTempDirCreated?: (tempDir: string, libDir: string) => void;
 }
@@ -369,7 +371,7 @@ function generateTempDirName(): string {
  * @deprecated installSingle 已被本函数替代
  */
 export async function downloadToTemp(options: DownloadOptions): Promise<DownloadResult> {
-  const { url, commit, branch, libName, platforms, sparse, vars, onProgress, onTempDirCreated } = options;
+  const { url, commit, branch, libName, platforms, sparse, vars, onProgress, onHeartbeat, onTempDirCreated } = options;
 
   // 检查 codepac 是否安装
   if (!(await isCodepacInstalled())) {
@@ -422,7 +424,7 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
     const args = ['install', '-cf', configPath, '-td', tempDir, '-p', ...baseKeys];
 
     // 调用 codepac
-    await spawnCodepac(args, tempDir, onProgress);
+    await spawnCodepac(args, tempDir, onProgress, onHeartbeat);
 
     // 分析下载结果，区分平台目录和共享文件
     const entries = await fs.readdir(libDir, { withFileTypes: true });
@@ -489,7 +491,8 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
 function spawnCodepac(
   args: string[],
   cwd: string,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  onHeartbeat?: (msg: string) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn(CODEPAC_CMD, args, {
@@ -499,11 +502,32 @@ function spawnCodepac(
     });
 
     let stderr = '';
+    const heartbeatIntervalMs = 10000;
+    let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
 
-    if (proc.stdout && onProgress) {
+    const clearHeartbeat = (): void => {
+      if (heartbeatTimer) {
+        clearTimeout(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    };
+
+    const resetHeartbeat = (): void => {
+      if (!onHeartbeat) return;
+      clearHeartbeat();
+      heartbeatTimer = setTimeout(() => {
+        onHeartbeat('仍在处理中，可能在同步大文件，期间无新日志');
+        resetHeartbeat();
+      }, heartbeatIntervalMs);
+    };
+
+    resetHeartbeat();
+
+    if (proc.stdout) {
       proc.stdout.on('data', (data: Buffer) => {
+        resetHeartbeat();
         const message = data.toString().trim();
-        if (message) {
+        if (message && onProgress) {
           onProgress(message);
         }
       });
@@ -511,15 +535,18 @@ function spawnCodepac(
 
     if (proc.stderr) {
       proc.stderr.on('data', (data: Buffer) => {
+        resetHeartbeat();
         stderr += data.toString();
       });
     }
 
     proc.on('error', (err) => {
+      clearHeartbeat();
       reject(new Error(`无法执行 codepac 命令: ${err.message}`));
     });
 
     proc.on('close', (code) => {
+      clearHeartbeat();
       if (code === 0) {
         resolve();
       } else {
