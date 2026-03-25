@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-03-25
+
 ### Added
 
 - **Git submodule 支持**: `td link` 自动检测 `.gitmodules` 中的子模块，发现子模块内的 `codepac-dep.json` 后提示一并链接
@@ -21,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **重构 `linkProject` 核心逻辑**: 提取 `linkScope()` 函数，`linkProject` 变为编排器
 - **Registry 扩展**: `DependencyRef` 新增可选 `scope` 字段，`ProjectInfo` 新增可选 `submodules` 字段（向后兼容，无需迁移）
+- **配置入口收口**: `sharedSymlinkFolders` 接入 `td config get/set`、交互式配置与文档说明，旧配置迁移自动补齐默认值
 
 ## [0.8.3] - 2026-03-06
 
@@ -248,31 +251,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - General 库空 _shared 目录静默成功的问题
 - 事务回滚 absorb 参数顺序修复
 
-## [0.5.0-beta.3] - 2026-01-07
-
-### Fixed
-
-- **P0**: unlink 正确清理所有平台的 StoreEntry 引用（遍历 projectInfo.platforms）
-- **P2**: MISSING 场景添加 checkPlatformCompleteness 检查，避免重复下载已存在平台
-
-### Added
-
-- `checkPlatformCompleteness()` - 检查 Store 中平台完整性
-- `getPlatformHelpText()` - 生成平台帮助信息表格
-- absorbLib 返回 `skippedPlatforms` 标识已存在而跳过的平台
-- ABSORB 场景支持询问是否吸收额外平台
-- registry 新增 `getProjectStoreKeys()` 方法
-
-### Changed
-
-- link 命令帮助信息显示平台映射表
-- MISSING/LINK_NEW 场景使用 existing + missing 组合链接
-
-### Tests
-
-- 新增 store.checkPlatformCompleteness 测试用例
-- 新增 registry StoreEntry 引用管理测试
-
 ## [0.5.0] - 2026-01-07
 
 ### Breaking Changes
@@ -284,6 +262,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Store 结构重构: 平台目录和共享文件分离存储
 - codepac 调用优化: 一次下载多平台
+- link 命令帮助信息显示平台映射表
+- MISSING/LINK_NEW 场景使用 existing + missing 组合链接
 
 ### Added
 
@@ -291,6 +271,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `absorbLib()` - 智能拆分平台/共享内容
 - `linkLib()` - 统一链接逻辑
 - Store 版本检测: 自动识别旧结构并提示
+- `checkPlatformCompleteness()` - 检查 Store 中平台完整性
+- `getPlatformHelpText()` - 生成平台帮助信息表格
+- absorbLib 返回 `skippedPlatforms` 标识已存在而跳过的平台
+- ABSORB 场景支持询问是否吸收额外平台
+- registry 新增 `getProjectStoreKeys()` 方法
+
+### Fixed
+
+- unlink 正确清理所有平台的 StoreEntry 引用（遍历 `projectInfo.platforms`）
+- MISSING 场景添加 `checkPlatformCompleteness` 检查，避免重复下载已存在平台
+
+### Tests
+
+- 新增 `store.checkPlatformCompleteness` 测试用例
+- 新增 `registry` StoreEntry 引用管理测试
 
 ### Deprecated
 
@@ -372,8 +367,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform support (macOS and Windows)
 - codepac integration for dependency download
 
-[Unreleased]: https://github.com/user/tanmi-dock/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/user/tanmi-dock/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/user/tanmi-dock/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/user/tanmi-dock/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/user/tanmi-dock/releases/tag/v0.1.0
+[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/tanmika/TanmiDock/compare/v0.8.3...v0.9.0
+[0.8.3]: https://github.com/tanmika/TanmiDock/compare/v0.8.2...v0.8.3
+[0.8.2]: https://github.com/tanmika/TanmiDock/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/tanmika/TanmiDock/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/tanmika/TanmiDock/compare/v0.7.3...v0.8.0
+[0.7.3]: https://github.com/tanmika/TanmiDock/compare/v0.7.2...v0.7.3
+[0.7.2]: https://github.com/tanmika/TanmiDock/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/tanmika/TanmiDock/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/tanmika/TanmiDock/compare/v0.6.5...v0.7.0
+[0.6.5]: https://github.com/tanmika/TanmiDock/compare/v0.6.4...v0.6.5
+[0.6.4]: https://github.com/tanmika/TanmiDock/compare/v0.6.3...v0.6.4
+[0.6.3]: https://github.com/tanmika/TanmiDock/compare/v0.6.2...v0.6.3
+[0.6.2]: https://github.com/tanmika/TanmiDock/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/tanmika/TanmiDock/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/tanmika/TanmiDock/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/tanmika/TanmiDock/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/tanmika/TanmiDock/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/tanmika/TanmiDock/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/tanmika/TanmiDock/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/tanmika/TanmiDock/releases/tag/v0.1.0
