@@ -117,7 +117,9 @@ td config set <key> <value>  # 设置配置
 | `cleanStrategy` | 清理策略 | `unreferenced` |
 | `unreferencedThreshold` | 容量阈值 (capacity 策略) | `10GB` |
 | `unusedDays` | 未使用天数 (unused 策略) | `30` |
+| `maxStoreSize` | 最大存储大小（兼容旧配置） | - |
 | `autoDownload` | 自动下载缺失库 | `true` |
+| `sharedSymlinkFolders` | `_shared` 一级目录优先使用符号链接 | `true` |
 | `concurrency` | 并发下载数 | `3` |
 | `logLevel` | 日志级别 | `info` |
 | `proxy` | 代理设置 | - |
@@ -149,7 +151,9 @@ td config set <key> <value>  # 设置配置
 
 - **Store**: 中央存储，库的实际文件存放处
 - **平台目录**: 符号链接到 Store，节省空间
-- **_shared**: 共享文件（cmake、README 等）物理复制到项目
+- **_shared**: 共享内容会展开到项目根；一级目录默认优先使用符号链接，普通文件保持复制
+
+`sharedSymlinkFolders` 默认值为 `true`。如需排查构建工具对符号链接目录的兼容性，可通过 `td config set sharedSymlinkFolders false` 临时切回复制模式。
 
 ## 常见问题
 

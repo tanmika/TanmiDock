@@ -30,6 +30,7 @@ describe('config', () => {
       expect(isValidConfigKey('cleanStrategy')).toBe(true);
       expect(isValidConfigKey('maxStoreSize')).toBe(true);
       expect(isValidConfigKey('autoDownload')).toBe(true);
+      expect(isValidConfigKey('sharedSymlinkFolders')).toBe(true);
       expect(isValidConfigKey('initialized')).toBe(true);
       expect(isValidConfigKey('version')).toBe(true);
     });
@@ -60,6 +61,8 @@ describe('config', () => {
       expect(parseConfigValue('autoDownload', 'true')).toBe(true);
       expect(parseConfigValue('autoDownload', 'false')).toBe(false);
       expect(parseConfigValue('initialized', 'true')).toBe(true);
+      expect(parseConfigValue('sharedSymlinkFolders', 'true')).toBe(true);
+      expect(parseConfigValue('sharedSymlinkFolders', 'false')).toBe(false);
     });
 
     it('should parse number values correctly', () => {
@@ -90,6 +93,7 @@ describe('config', () => {
       expect(config.version).toBe('1.0.0');
       expect(config.cleanStrategy).toBe('unreferenced');
       expect(config.autoDownload).toBe(true);
+      expect(config.sharedSymlinkFolders).toBe(true);
     });
 
     it('should expand ~ in storePath', () => {
@@ -134,6 +138,28 @@ describe('config with fs mock', () => {
       const config = await load();
 
       expect(config).toEqual(mockConfig);
+    });
+
+    it('should backfill sharedSymlinkFolders when migrating v1.0.0 config', async () => {
+      const legacyConfig = {
+        version: '1.0.0',
+        initialized: true,
+        storePath: '/test/store',
+        cleanStrategy: 'unreferenced',
+        autoDownload: true,
+      };
+      fsMock.readFile.mockResolvedValue(JSON.stringify(legacyConfig));
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.writeFile.mockResolvedValue(undefined);
+
+      const { load } = await import('../../src/core/config.js');
+      const config = await load();
+
+      expect(config?.version).toBe('1.1.0');
+      expect(config?.sharedSymlinkFolders).toBe(true);
+
+      const writtenContent = JSON.parse(fsMock.writeFile.mock.calls[0][1]);
+      expect(writtenContent.sharedSymlinkFolders).toBe(true);
     });
 
     it('should return null when file does not exist', async () => {

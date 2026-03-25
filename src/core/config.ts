@@ -94,7 +94,7 @@ const migrations: Record<string, MigrationFn> = {
     return {
       ...config,
       version: '1.1.0',
-      // 未来可在此添加新字段的默认值
+      sharedSymlinkFolders: config.sharedSymlinkFolders ?? true,
     };
   },
 };
@@ -201,6 +201,7 @@ export function isValidConfigKey(key: string): key is keyof DockConfig {
     'logLevel',
     'proxy',
     'unverifiedLocalStrategy',
+    'sharedSymlinkFolders',
   ];
   return validKeys.includes(key as keyof DockConfig);
 }
@@ -236,6 +237,7 @@ export function parseConfigValue(
   switch (key) {
     case 'autoDownload':
     case 'initialized':
+    case 'sharedSymlinkFolders':
       return value === 'true';
     case 'unusedDays':
     case 'maxStoreSize':

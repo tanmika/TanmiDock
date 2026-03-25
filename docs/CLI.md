@@ -635,13 +635,26 @@ tanmi-dock config set <key> <value> # 设置配置项
 | `version` | string | 配置版本 | 否 |
 | `storePath` | string | Store 路径 | 是 |
 | `cleanStrategy` | string | 清理策略 | 是 |
+| `unusedDays` | number | 未使用天数阈值 | 是 |
+| `unreferencedThreshold` | string | 无引用容量阈值，格式如 `10GB` | 是 |
+| `maxStoreSize` | number | 最大存储大小，保留旧配置兼容 | 是 |
 | `autoDownload` | boolean | 自动下载 | 是 |
-| `maxStoreSize` | number | 最大存储大小 | 是 |
+| `sharedSymlinkFolders` | boolean | `_shared` 一级目录是否优先使用符号链接 | 是 |
+| `concurrency` | number | 并发下载数 | 是 |
+| `logLevel` | string | 日志级别 | 是 |
+| `proxy` | object | HTTP/HTTPS 代理配置 | 是 |
+| `unverifiedLocalStrategy` | string | 本地库无法验证 commit 时的处理策略 | 是 |
+
+`sharedSymlinkFolders` 控制 `_shared` 一级目录的默认处理方式：
+- 开启时，一级目录优先使用符号链接，普通文件继续复制
+- 关闭时，`_shared` 内容统一复制到项目目录
+- 主要用于排查构建工具对符号链接目录的兼容性问题
 
 ### cleanStrategy 值
 
 - `unreferenced` - 清理无引用的库（默认）
-- `lru` - 最近最少使用
+- `unused` - 长期未使用时清理
+- `capacity` - 占用空间超限时清理
 - `manual` - 手动清理
 
 ### 交互流程
@@ -654,9 +667,12 @@ $ tanmi-dock config
 ╭─ TanmiDock 配置: ─╮
 
   version: 1.1.0
+  initialized: true
   storePath: ~/.tanmi-dock/store
   cleanStrategy: unreferenced
+  unusedDays: 30
   autoDownload: true
+  共享目录符号链接: 是
 
 配置文件: ~/.tanmi-dock/config.json
 ```
@@ -664,17 +680,17 @@ $ tanmi-dock config
 #### 2. 获取单个配置
 
 ```bash
-$ tanmi-dock config get storePath
+$ tanmi-dock config get sharedSymlinkFolders
 
-~/.tanmi-dock/store
+true
 ```
 
 #### 3. 设置配置
 
 ```bash
-$ tanmi-dock config set autoDownload false
+$ tanmi-dock config set sharedSymlinkFolders false
 
-[ok] 配置已更新: autoDownload = false
+[ok] 配置已更新: sharedSymlinkFolders = false
 ```
 
 #### 4. 无效配置项
@@ -683,7 +699,7 @@ $ tanmi-dock config set autoDownload false
 $ tanmi-dock config get invalidKey
 
 [err] 无效的配置项: invalidKey
-[info] 有效的配置项: version, storePath, cleanStrategy, maxStoreSize, autoDownload
+[info] 有效的配置项: version, initialized, storePath, cleanStrategy, unusedDays, unreferencedThreshold, maxStoreSize, autoDownload, sharedSymlinkFolders, concurrency, logLevel, proxy, unverifiedLocalStrategy
 ```
 
 ---

@@ -30,7 +30,9 @@ export function createConfigCommand(): Command {
   cleanStrategy            清理策略: unreferenced/unused/capacity/manual
   unusedDays               未使用天数阈值 (unused 策略时生效)
   unreferencedThreshold    无引用容量阈值 (capacity 策略时生效)，格式: 10GB
+  maxStoreSize             最大存储大小，兼容旧配置使用
   autoDownload             缺失依赖时是否自动下载: true/false
+  sharedSymlinkFolders     _shared 一级目录是否使用符号链接: true/false
   concurrency              并发下载数: 1/2/3/5/99(不限制)
   logLevel                 日志级别: debug/verbose/info/warn/error
   proxy                    代理地址，JSON 格式: {"http":"...","https":"..."}
@@ -39,7 +41,9 @@ export function createConfigCommand(): Command {
 示例:
   td config                              交互式配置
   td config get storePath                获取存储路径
+  td config get sharedSymlinkFolders     获取 _shared 目录链接策略
   td config set concurrency 5            设置并发数
+  td config set sharedSymlinkFolders false  临时切换为复制模式
   td config set proxy '{"http":"http://127.0.0.1:7890"}'`
     );
 
@@ -83,6 +87,26 @@ interface ConfigMeta {
   showWhen?: (cfg: DockConfig) => boolean; // 条件显示
 }
 
+const READABLE_CONFIG_KEYS = [
+  'version',
+  'initialized',
+  'storePath',
+  'cleanStrategy',
+  'unusedDays',
+  'unreferencedThreshold',
+  'maxStoreSize',
+  'autoDownload',
+  'sharedSymlinkFolders',
+  'concurrency',
+  'logLevel',
+  'proxy',
+  'unverifiedLocalStrategy',
+] as const;
+
+const WRITABLE_CONFIG_KEYS = READABLE_CONFIG_KEYS.filter(
+  (key) => key !== 'version' && key !== 'initialized'
+);
+
 const CONFIG_META: ConfigMeta[] = [
   { key: 'version', label: '版本', description: '配置文件版本', editable: false, type: 'string' },
   { key: 'storePath', label: '存储路径', description: '依赖库存放目录', editable: true, type: 'string' },
@@ -115,7 +139,21 @@ const CONFIG_META: ConfigMeta[] = [
     type: 'number',
     showWhen: (cfg) => cfg.cleanStrategy === 'capacity',
   },
+  {
+    key: 'maxStoreSize',
+    label: '最大存储大小',
+    description: '保留给旧配置的最大存储大小限制',
+    editable: true,
+    type: 'number',
+  },
   { key: 'autoDownload', label: '自动下载', description: '缺失依赖时自动下载', editable: true, type: 'boolean' },
+  {
+    key: 'sharedSymlinkFolders',
+    label: '共享目录符号链接',
+    description: '_shared 一级目录是否优先使用符号链接',
+    editable: true,
+    type: 'boolean',
+  },
   {
     key: 'concurrency',
     label: '并发数',
@@ -431,7 +469,7 @@ function sleep(ms: number): Promise<void> {
 async function getConfigValue(key: string): Promise<void> {
   if (!config.isValidConfigKey(key)) {
     error(`无效的配置项: ${key}`);
-    info('有效的配置项: storePath, cleanStrategy, unusedDays, autoDownload, concurrency, logLevel, proxy, unverifiedLocalStrategy');
+    info(`有效的配置项: ${READABLE_CONFIG_KEYS.join(', ')}`);
     process.exit(1);
   }
 
@@ -455,7 +493,7 @@ async function getConfigValue(key: string): Promise<void> {
 async function setConfigValue(key: string, value: string): Promise<void> {
   if (!config.isValidConfigKey(key)) {
     error(`无效的配置项: ${key}`);
-    info('有效的配置项: storePath, cleanStrategy, unusedDays, autoDownload, concurrency, logLevel, proxy, unverifiedLocalStrategy');
+    info(`有效的配置项: ${WRITABLE_CONFIG_KEYS.join(', ')}`);
     process.exit(1);
   }
 
