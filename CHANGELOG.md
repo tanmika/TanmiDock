@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-03-30
+
+### Added
+
+- **新增 `td reset` 精确重置能力**:
+  - `td reset <lib>` 支持在项目内按当前依赖重置单库缓存与登记信息
+  - `td reset <lib> -g` 支持全局重置该库全部 commit
+  - `td reset <lib> <commit>` 支持按指定 commit 精确重置
+  - 检测到多项目引用时支持枚举现有引用并交互确认，`--yes` 模式可直接确认
+
+### Changed
+
+- **统一项目根目录规范化逻辑**: `link`、`status`、`unlink`、`reset` 对项目根与 `3rdparty` 入口目录采用一致解析规则，避免同一项目登记和查询不一致
+- **`td link` 收口本地目录整理行为**: 链接结束后会清理不属于目标平台集合的历史残留平台链接，保证 link 结束后的本地目录状态干净一致
+- **统一回填 `link` 的库元信息**: 顶层依赖、并行下载和嵌套依赖在成功链接后统一补齐 `stores`、`libraries`、`usedBy` 与 `_shared` 记录
+
+### Fixed
+
+- **修复 `td check` 误报孤立库的问题**: 当 Store 已存在、link 直接建链时，缺失的 `libraries` 元信息现在会按 Store 实际平台完整回填，不再出现“可用但被判未登记”的半残状态
+
 ## [0.9.0] - 2026-03-25
 
 ### Added
@@ -367,7 +387,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform support (macOS and Windows)
 - codepac integration for dependency download
 
-[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/tanmika/TanmiDock/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/tanmika/TanmiDock/compare/v0.8.3...v0.9.0
 [0.8.3]: https://github.com/tanmika/TanmiDock/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/tanmika/TanmiDock/compare/v0.8.1...v0.8.2
