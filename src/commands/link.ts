@@ -792,6 +792,9 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           break;
         }
       }
+
+      // 无论当前是跳过、补平台还是重建链接，都要把本地残留的平台目录清理到最终平台集合
+      await linker.cleanupLocalExtraPlatforms(localPath, finalLinkPlatforms);
       await tx.save();
     }
 

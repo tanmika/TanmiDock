@@ -5,7 +5,7 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
-import { isWindows, KNOWN_PLATFORM_VALUES } from './platform.js';
+import { isWindows, KNOWN_PLATFORM_VALUES, isPlatformDir, normalizePlatformValue } from './platform.js';
 import { copyDir } from '../utils/fs-utils.js';
 import * as logger from '../utils/logger.js';
 import * as config from './config.js';
@@ -495,6 +495,35 @@ export async function linkGeneral(localPath: string, storeSharedPath: string): P
   await fs.symlink(storeSharedPath, localPath, type);
 }
 
+/**
+ * 清理本地目录中不属于目标平台集合的历史平台残留
+ * 包括有效/无效符号链接与普通目录
+ */
+export async function cleanupLocalExtraPlatforms(
+  localPath: string,
+  desiredPlatforms: string[]
+): Promise<void> {
+  try {
+    if (await isSymlink(localPath)) {
+      return;
+    }
+
+    const entries = await fs.readdir(localPath, { withFileTypes: true });
+    const desiredSet = new Set(desiredPlatforms.map(normalizePlatformValue));
+
+    for (const entry of entries) {
+      if (!isPlatformDir(entry.name)) continue;
+
+      const normalizedName = normalizePlatformValue(entry.name);
+      if (desiredSet.has(normalizedName)) continue;
+
+      await fs.rm(path.join(localPath, entry.name), { recursive: true, force: true });
+    }
+  } catch {
+    // localPath 不存在或不可读时忽略
+  }
+}
+
 export default {
   link,
   isSymlink,
@@ -510,4 +539,5 @@ export default {
   linkMultiPlatform,
   linkLib,
   linkGeneral,
+  cleanupLocalExtraPlatforms,
 };

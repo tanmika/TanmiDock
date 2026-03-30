@@ -590,6 +590,38 @@ describe('TC-017: link 命令测试', () => {
       expect(registry.projects[projectHash].platforms).toContain('iOS');
       expect(registry.projects[projectHash].platforms).toContain('macOS');
     });
+
+    it('should clean stale extra platform links even when requested platform is already linked', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libCleanExtraPlatforms';
+      const commit = 'cleanextraplatform123';
+
+      await createMockStoreDataV2(env, {
+        libName,
+        commit,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      await createTestProject(env, [
+        {
+          libName,
+          commit,
+          createLocal: false,
+        },
+      ]);
+
+      const localPath = path.join(env.projectDir, '3rdparty', libName);
+      await fs.mkdir(localPath, { recursive: true });
+      await fs.symlink(path.join(env.storeDir, libName, commit, 'macOS'), path.join(localPath, 'macOS'));
+      await fs.symlink(path.join(env.storeDir, libName, commit, 'android'), path.join(localPath, 'android'));
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      expect(await isSymlink(path.join(localPath, 'macOS'))).toBe(true);
+      await expect(fs.lstat(path.join(localPath, 'android'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
   });
 
   describe('S-2.2.4: _shared 文件正确复制', () => {
