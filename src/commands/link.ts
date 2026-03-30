@@ -410,14 +410,27 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               );
               tx.recordOp('link', localPath, linkedCommitPath);
               await linker.linkLib(localPath, linkedCommitPath, allExisting);
-
-              for (const platform of allExisting) {
-                const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
-                registry.addStoreReference(storeKey, projectHash);
-              }
+              await ensureLinkedRegistryState(
+                dependency.libName,
+                dependency.commit,
+                dependency.branch,
+                dependency.url,
+                allExisting,
+                projectHash,
+                false
+              );
               success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 已补充平台 [${supplementResult.downloaded.join(', ')}]`);
             }
           }
+          await ensureLinkedRegistryState(
+            dependency.libName,
+            dependency.commit,
+            dependency.branch,
+            dependency.url,
+            isLinkedGeneral ? [GENERAL_PLATFORM] : platforms,
+            projectHash,
+            isLinkedGeneral
+          );
           break;
         }
 
@@ -431,6 +444,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             const sharedPath = path.join(relinkCommitPath, '_shared');
             tx.recordOp('link', localPath, sharedPath);
             await linker.linkGeneral(localPath, sharedPath);
+            await ensureLinkedRegistryState(
+              dependency.libName,
+              dependency.commit,
+              dependency.branch,
+              dependency.url,
+              [GENERAL_PLATFORM],
+              projectHash,
+              true
+            );
             generalLibs.add(dependency.libName);
             success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，重建链接`);
           } else {
@@ -466,11 +488,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             await linker.unlink(localPath);
             tx.recordOp('link', localPath, relinkCommitPath);
             await linker.linkLib(localPath, relinkCommitPath, relinkExisting);
-
-            for (const platform of relinkExisting) {
-              const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
-              registry.addStoreReference(storeKey, projectHash);
-            }
+            await ensureLinkedRegistryState(
+              dependency.libName,
+              dependency.commit,
+              dependency.branch,
+              dependency.url,
+              relinkExisting,
+              projectHash,
+              false
+            );
 
             if (relinkSupplementResult.downloaded.length > 0) {
               success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 重建链接并补充平台 [${relinkExisting.join(', ')}]`);
@@ -491,6 +517,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             tx.recordOp('replace', localPath, sharedPath);
             await linker.linkGeneral(localPath, sharedPath);
             savedBytes += replaceSize;
+            await ensureLinkedRegistryState(
+              dependency.libName,
+              dependency.commit,
+              dependency.branch,
+              dependency.url,
+              [GENERAL_PLATFORM],
+              projectHash,
+              true
+            );
             generalLibs.add(dependency.libName);
             success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，创建链接`);
           } else {
@@ -525,11 +560,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             tx.recordOp('replace', localPath, replaceCommitPath);
             await linker.linkLib(localPath, replaceCommitPath, replaceExisting);
             savedBytes += replaceSize;
-
-            for (const platform of replaceExisting) {
-              const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
-              registry.addStoreReference(storeKey, projectHash);
-            }
+            await ensureLinkedRegistryState(
+              dependency.libName,
+              dependency.commit,
+              dependency.branch,
+              dependency.url,
+              replaceExisting,
+              projectHash,
+              false
+            );
 
             if (replaceSupplementResult.downloaded.length > 0) {
               success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - Store 已有，创建链接并补充平台 [${replaceExisting.join(', ')}]`);
@@ -732,21 +771,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             const sharedPath = path.join(linkNewCommitPath, '_shared');
             tx.recordOp('link', localPath, sharedPath);
             await linker.linkGeneral(localPath, sharedPath);
-
-            const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
-            const existingEntry = registry.getStore(storeKey);
-            if (!existingEntry) {
-              const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
-              registry.addStore({
-                libName: dependency.libName, commit: dependency.commit, platform: GENERAL_PLATFORM,
-                branch: dependency.branch, url: dependency.url, ...integrity,
-                usedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-              });
-            } else if (existingEntry.fileCount == null) {
-              const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
-              registry.updateStore(storeKey, integrity);
-            }
-            registry.addStoreReference(storeKey, projectHash);
+            await ensureLinkedRegistryState(
+              dependency.libName,
+              dependency.commit,
+              dependency.branch,
+              dependency.url,
+              [GENERAL_PLATFORM],
+              projectHash,
+              true
+            );
             generalLibs.add(dependency.libName);
             success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，创建链接`);
           } else if (linkNewExisting.length === 0) {
@@ -769,24 +802,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           } else {
             tx.recordOp('link', localPath, linkNewCommitPath);
             await linker.linkLib(localPath, linkNewCommitPath, linkNewExisting);
-
-            for (const platform of linkNewExisting) {
-              const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
-              const existingPlatformEntry = registry.getStore(storeKey);
-              if (!existingPlatformEntry) {
-                const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
-                registry.addStore({
-                  libName: dependency.libName, commit: dependency.commit, platform,
-                  branch: dependency.branch, url: dependency.url, ...integrity,
-                  usedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                });
-              } else if (existingPlatformEntry.fileCount == null) {
-                const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
-                registry.updateStore(storeKey, integrity);
-              }
-              registry.addStoreReference(storeKey, projectHash);
-            }
-            await registerSharedStore(dependency.libName, dependency.commit, dependency.branch, dependency.url);
+            await ensureLinkedRegistryState(
+              dependency.libName,
+              dependency.commit,
+              dependency.branch,
+              dependency.url,
+              linkNewExisting,
+              projectHash,
+              false
+            );
             success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 创建链接 [${linkNewExisting.join(', ')}]`);
           }
           break;
@@ -836,33 +860,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                 pLog.info(`${dependency.libName} 所有平台已存在，直接链接...`);
                 tx.recordOp('link', localPath, storeCommitPath);
                 await linker.linkLib(localPath, storeCommitPath, platforms);
-
-                for (const platform of platforms) {
-                  const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
-                  if (!registry.getStore(storeKey)) {
-                    const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
-                    registry.addStore({
-                      libName: dependency.libName, commit: dependency.commit, platform,
-                      branch: dependency.branch, url: dependency.url, ...integrity,
-                      usedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                    });
-                  }
-                  registry.addStoreReference(storeKey, projectHash);
-                }
-                await registerSharedStore(dependency.libName, dependency.commit, dependency.branch, dependency.url);
-
-                const dlLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
-                if (!registry.getLibrary(dlLibKey)) {
-                  let totalSize = 0;
-                  for (const platform of platforms) {
-                    totalSize += await store.getSize(dependency.libName, dependency.commit, platform);
-                  }
-                  registry.addLibrary({
-                    libName: dependency.libName, commit: dependency.commit, branch: dependency.branch,
-                    url: dependency.url, platforms, size: totalSize, referencedBy: [],
-                    createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                  });
-                }
+                await ensureLinkedRegistryState(
+                  dependency.libName,
+                  dependency.commit,
+                  dependency.branch,
+                  dependency.url,
+                  platforms,
+                  projectHash,
+                  false
+                );
                 pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 链接完成 [${platforms.join(', ')}]`);
                 return { success: true, name: dependency.libName, downloadedPlatforms: platforms, skippedPlatforms: [] };
               }
@@ -914,27 +920,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                   const sharedPath = path.join(storeCommitPath, '_shared');
                   tx.recordOp('link', localPath, sharedPath);
                   await linker.linkGeneral(localPath, sharedPath);
-
-                  const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
-                  if (!registry.getStore(storeKey)) {
-                    const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
-                    registry.addStore({
-                      libName: dependency.libName, commit: dependency.commit, platform: GENERAL_PLATFORM,
-                      branch: dependency.branch, url: dependency.url, ...integrity,
-                      usedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                    });
-                  }
-                  registry.addStoreReference(storeKey, projectHash);
-
-                  const genLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
-                  if (!registry.getLibrary(genLibKey)) {
-                    const sharedSize = await getDirSize(sharedPath);
-                    registry.addLibrary({
-                      libName: dependency.libName, commit: dependency.commit, branch: dependency.branch,
-                      url: dependency.url, platforms: [GENERAL_PLATFORM], size: sharedSize,
-                      referencedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                    });
-                  }
+                  await ensureLinkedRegistryState(
+                    dependency.libName,
+                    dependency.commit,
+                    dependency.branch,
+                    dependency.url,
+                    [GENERAL_PLATFORM],
+                    projectHash,
+                    true
+                  );
                   generalLibs.add(dependency.libName);
                   pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，下载完成`);
                   return { success: true, name: dependency.libName, downloadedPlatforms: [GENERAL_PLATFORM], skippedPlatforms: [], isGeneral: true };
@@ -973,27 +967,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                   const sharedPath = path.join(storeCommitPath, '_shared');
                   tx.recordOp('link', localPath, sharedPath);
                   await linker.linkGeneral(localPath, sharedPath);
-
-                  const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, GENERAL_PLATFORM);
-                  if (!registry.getStore(storeKey)) {
-                    const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, GENERAL_PLATFORM);
-                    registry.addStore({
-                      libName: dependency.libName, commit: dependency.commit, platform: GENERAL_PLATFORM,
-                      branch: dependency.branch, url: dependency.url, ...integrity,
-                      usedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                    });
-                  }
-                  registry.addStoreReference(storeKey, projectHash);
-
-                  const genLibKey2 = registry.getLibraryKey(dependency.libName, dependency.commit);
-                  if (!registry.getLibrary(genLibKey2)) {
-                    const sharedSize = await getDirSize(sharedPath);
-                    registry.addLibrary({
-                      libName: dependency.libName, commit: dependency.commit, branch: dependency.branch,
-                      url: dependency.url, platforms: [GENERAL_PLATFORM], size: sharedSize,
-                      referencedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                    });
-                  }
+                  await ensureLinkedRegistryState(
+                    dependency.libName,
+                    dependency.commit,
+                    dependency.branch,
+                    dependency.url,
+                    [GENERAL_PLATFORM],
+                    projectHash,
+                    true
+                  );
                   generalLibs.add(dependency.libName);
                   pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，下载完成`);
                   return { success: true, name: dependency.libName, downloadedPlatforms: [GENERAL_PLATFORM], skippedPlatforms: [], isGeneral: true };
@@ -1005,33 +987,15 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
                 tx.recordOp('link', localPath, storeCommitPath);
                 await linker.linkLib(localPath, storeCommitPath, linkPlatforms);
-
-                for (const platform of linkPlatforms) {
-                  const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
-                  if (!registry.getStore(storeKey)) {
-                    const integrity = await store.captureIntegrity(dependency.libName, dependency.commit, platform);
-                    registry.addStore({
-                      libName: dependency.libName, commit: dependency.commit, platform,
-                      branch: dependency.branch, url: dependency.url, ...integrity,
-                      usedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                    });
-                  }
-                  registry.addStoreReference(storeKey, projectHash);
-                }
-                await registerSharedStore(dependency.libName, dependency.commit, dependency.branch, dependency.url);
-
-                const finalLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
-                if (!registry.getLibrary(finalLibKey)) {
-                  let totalSize = 0;
-                  for (const platform of linkPlatforms) {
-                    totalSize += await store.getSize(dependency.libName, dependency.commit, platform);
-                  }
-                  registry.addLibrary({
-                    libName: dependency.libName, commit: dependency.commit, branch: dependency.branch,
-                    url: dependency.url, platforms: linkPlatforms, size: totalSize,
-                    referencedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                  });
-                }
+                await ensureLinkedRegistryState(
+                  dependency.libName,
+                  dependency.commit,
+                  dependency.branch,
+                  dependency.url,
+                  linkPlatforms,
+                  projectHash,
+                  false
+                );
 
                 const notLinkedPlatforms = platforms.filter((p) => !linkPlatforms.includes(p));
                 pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 下载完成 [${linkPlatforms.join(', ')}]`);
@@ -1612,6 +1576,130 @@ async function registerSharedStore(
 
   debug(`注册 _shared: ${libName}:${commit.slice(0, 8)} (${formatSize(integrity.size)})`);
   return true;
+}
+
+async function ensureStoreInfo(
+  libName: string,
+  commit: string,
+  platform: string,
+  branch: string,
+  url: string,
+  projectHash?: string
+): Promise<void> {
+  const registry = getRegistry();
+  const storeKey = registry.getStoreKey(libName, commit, platform);
+  const existingEntry = registry.getStore(storeKey);
+
+  if (!existingEntry) {
+    const integrity = await store.captureIntegrity(libName, commit, platform);
+    registry.addStore({
+      libName,
+      commit,
+      platform,
+      branch,
+      url,
+      ...integrity,
+      usedBy: [],
+      createdAt: new Date().toISOString(),
+      lastAccess: new Date().toISOString(),
+    });
+  } else if (existingEntry.fileCount == null) {
+    const integrity = await store.captureIntegrity(libName, commit, platform);
+    registry.updateStore(storeKey, integrity);
+  }
+
+  if (projectHash) {
+    registry.addStoreReference(storeKey, projectHash);
+  }
+}
+
+async function syncLibraryInfo(
+  libName: string,
+  commit: string,
+  branch: string,
+  url: string,
+  platforms: string[]
+): Promise<void> {
+  const registry = getRegistry();
+  const libKey = registry.getLibraryKey(libName, commit);
+  const existingLibrary = registry.getLibrary(libKey);
+  const normalizedPlatforms = [...new Set(platforms)];
+
+  let totalSize = 0;
+  for (const platform of normalizedPlatforms) {
+    totalSize += await store.getSize(libName, commit, platform);
+  }
+
+  if (!existingLibrary) {
+    registry.addLibrary({
+      libName,
+      commit,
+      branch,
+      url,
+      platforms: normalizedPlatforms,
+      size: totalSize,
+      referencedBy: [],
+      createdAt: new Date().toISOString(),
+      lastAccess: new Date().toISOString(),
+    });
+    return;
+  }
+
+  registry.updateLibrary(libKey, {
+    branch: branch || existingLibrary.branch,
+    url: url || existingLibrary.url,
+    platforms: normalizedPlatforms,
+    size: totalSize,
+    lastAccess: new Date().toISOString(),
+  });
+}
+
+async function resolveStoredPlatforms(
+  libName: string,
+  commit: string,
+  fallbackPlatforms: string[]
+): Promise<string[]> {
+  const storePath = await config.getStorePath();
+  if (!storePath) {
+    return [...new Set(fallbackPlatforms)];
+  }
+
+  const commitPath = path.join(storePath, libName, commit);
+  try {
+    const entries = await fs.readdir(commitPath, { withFileTypes: true });
+    const storedPlatforms = entries
+      .filter(entry => entry.isDirectory() && KNOWN_PLATFORM_VALUES.includes(entry.name))
+      .map(entry => entry.name);
+
+    return storedPlatforms.length > 0 ? storedPlatforms : [...new Set(fallbackPlatforms)];
+  } catch {
+    return [...new Set(fallbackPlatforms)];
+  }
+}
+
+async function ensureLinkedRegistryState(
+  libName: string,
+  commit: string,
+  branch: string,
+  url: string,
+  platforms: string[],
+  projectHash: string,
+  isGeneral: boolean
+): Promise<void> {
+  const linkedPlatforms = isGeneral ? [GENERAL_PLATFORM] : [...new Set(platforms)];
+  const libraryPlatforms = isGeneral
+    ? [GENERAL_PLATFORM]
+    : await resolveStoredPlatforms(libName, commit, linkedPlatforms);
+
+  for (const platform of linkedPlatforms) {
+    await ensureStoreInfo(libName, commit, platform, branch, url, projectHash);
+  }
+
+  if (!isGeneral) {
+    await registerSharedStore(libName, commit, branch, url);
+  }
+
+  await syncLibraryInfo(libName, commit, branch, url, libraryPlatforms);
 }
 
 /**
@@ -2474,6 +2562,7 @@ async function linkNestedDependencies(
       const linkStatus = await classifyLinkStatus(localPath, storeCommitPath, isGeneral, existingPlatforms);
 
       if (linkStatus === 'linked') {
+        let linkedPlatforms = isGeneral ? [GENERAL_PLATFORM] : [...existingPlatforms];
         // 已链接，但需要检查是否需要补充缺失平台（与顶层依赖逻辑一致）
         if (!isGeneral) {
           const supplementResult = await supplementMissingPlatforms(
@@ -2500,6 +2589,7 @@ async function linkNestedDependencies(
 
             // 合并所有平台并重新链接
             const allPlatforms = [...existingPlatforms, ...supplementResult.downloaded];
+            linkedPlatforms = allPlatforms;
             if (!dryRun) {
               tx.recordOp('link', localPath, storeCommitPath);
               await linker.linkLib(localPath, storeCommitPath, allPlatforms);
@@ -2508,6 +2598,16 @@ async function linkNestedDependencies(
             success(`${indent}  ${dep.libName} - 重新链接完成 [${allPlatforms.join(', ')}]`);
           }
         }
+
+        await ensureLinkedRegistryState(
+          dep.libName,
+          dep.commit,
+          dep.branch,
+          dep.url,
+          linkedPlatforms,
+          projectHash,
+          isGeneral
+        );
 
         nestedLinkedDeps.push({
           libName: dep.libName,
@@ -2548,6 +2648,15 @@ async function linkNestedDependencies(
         const sharedPath = path.join(storeCommitPath, '_shared');
         tx.recordOp('link', localPath, sharedPath);
         await linker.linkGeneral(localPath, sharedPath);
+        await ensureLinkedRegistryState(
+          dep.libName,
+          dep.commit,
+          dep.branch,
+          dep.url,
+          [GENERAL_PLATFORM],
+          projectHash,
+          true
+        );
         generalLibs.add(dep.libName);
         // 记录到 nestedLinkedDeps
         nestedLinkedDeps.push({
@@ -2582,6 +2691,15 @@ async function linkNestedDependencies(
 
         tx.recordOp('link', localPath, storeCommitPath);
         await linker.linkLib(localPath, storeCommitPath, allPlatforms);
+        await ensureLinkedRegistryState(
+          dep.libName,
+          dep.commit,
+          dep.branch,
+          dep.url,
+          allPlatforms,
+          projectHash,
+          false
+        );
         // 记录到 nestedLinkedDeps
         nestedLinkedDeps.push({
           libName: dep.libName,
@@ -2642,6 +2760,15 @@ async function linkNestedDependencies(
           const sharedPath = path.join(storeCommitPath, '_shared');
           tx.recordOp('link', localPath, sharedPath);
           await linker.linkGeneral(localPath, sharedPath);
+          await ensureLinkedRegistryState(
+            dep.libName,
+            dep.commit,
+            dep.branch,
+            dep.url,
+            [GENERAL_PLATFORM],
+            projectHash,
+            true
+          );
           generalLibs.add(dep.libName);
           downloadedLibs.push(dep.libName);
           // 记录到 nestedLinkedDeps
@@ -2665,6 +2792,15 @@ async function linkNestedDependencies(
 
           tx.recordOp('link', localPath, storeCommitPath);
           await linker.linkLib(localPath, storeCommitPath, downloadResult.platformDirs);
+          await ensureLinkedRegistryState(
+            dep.libName,
+            dep.commit,
+            dep.branch,
+            dep.url,
+            downloadResult.platformDirs,
+            projectHash,
+            false
+          );
           downloadedLibs.push(dep.libName);
           // 记录到 nestedLinkedDeps
           nestedLinkedDeps.push({

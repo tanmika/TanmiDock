@@ -261,6 +261,39 @@ describe('TC-017: link 命令测试', () => {
       await verifyLinkResult(env, libName, commit, ['macOS']);
       await verifyProjectRegistry(env, libName, commit, ['macOS']);
     });
+
+    it('should backfill library metadata when replace links to existing Store', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libReplaceBackfill';
+      const commit = 'replacebackfill123';
+
+      await createMockStoreDataV2(env, {
+        libName,
+        commit,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const registryBefore = await loadRegistry(env);
+      delete registryBefore.libraries[`${libName}:${commit}`];
+      await saveRegistry(env, registryBefore);
+
+      await createTestProject(env, [
+        {
+          libName,
+          commit,
+          createLocal: true,
+          localPlatforms: ['macOS'],
+        },
+      ]);
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const registryAfter = await loadRegistry(env);
+      expect(registryAfter.libraries[`${libName}:${commit}`]).toBeDefined();
+      expect(registryAfter.libraries[`${libName}:${commit}`].platforms).toContain('macOS');
+    });
   });
 
   describe('S-2.1.3: LINK_NEW - Store 有本地无', () => {
@@ -293,6 +326,38 @@ describe('TC-017: link 命令测试', () => {
       // 验证链接创建
       await verifyLinkResult(env, libName, commit, ['macOS', 'iOS']);
       await verifyProjectRegistry(env, libName, commit, ['macOS', 'iOS']);
+    });
+
+    it('should backfill library metadata when store exists but library record is missing', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libLinkNewBackfill';
+      const commit = 'linknewbackfill123';
+
+      await createMockStoreDataV2(env, {
+        libName,
+        commit,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const registryBefore = await loadRegistry(env);
+      delete registryBefore.libraries[`${libName}:${commit}`];
+      await saveRegistry(env, registryBefore);
+
+      await createTestProject(env, [
+        {
+          libName,
+          commit,
+          createLocal: false,
+        },
+      ]);
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const registryAfter = await loadRegistry(env);
+      expect(registryAfter.libraries[`${libName}:${commit}`]).toBeDefined();
+      expect(registryAfter.libraries[`${libName}:${commit}`].platforms).toContain('macOS');
     });
 
     it('should register project under root when invoked from 3rdparty path', async () => {
@@ -370,6 +435,40 @@ describe('TC-017: link 命令测试', () => {
       // 验证链接未改变
       const targetAfter = await readLink(localPath);
       expect(targetAfter).toBe(targetBefore);
+    });
+
+    it('should preserve full store platform metadata when backfilling linked library record', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libLinkedBackfill';
+      const commit = 'linkedbackfill123';
+
+      await createMockStoreDataV2(env, {
+        libName,
+        commit,
+        platforms: ['macOS', 'iOS'],
+        referencedBy: [],
+      });
+
+      await createTestProject(env, [
+        {
+          libName,
+          commit,
+          createLocal: false,
+        },
+      ]);
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const registryBefore = await loadRegistry(env);
+      delete registryBefore.libraries[`${libName}:${commit}`];
+      await saveRegistry(env, registryBefore);
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const registryAfter = await loadRegistry(env);
+      expect(registryAfter.libraries[`${libName}:${commit}`].platforms.sort()).toEqual(['iOS', 'macOS']);
+      expect(registryAfter.stores[`${libName}:${commit}:macOS`].usedBy).toContain(hashPath(env.projectDir));
     });
   });
 
@@ -499,6 +598,35 @@ describe('TC-017: link 命令测试', () => {
       const storeSharedPath = path.join(env.storeDir, libName, commit, '_shared');
       expect(await isSymlink(localPath)).toBe(true);
       await verifySymlink(localPath, storeSharedPath);
+    });
+
+    it('should backfill general library metadata and references from Store link', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libGeneralBackfill';
+      const commit = 'generalbackfill123';
+
+      await createMockGeneralStoreData(env, libName, commit);
+
+      const registryBefore = await loadRegistry(env);
+      delete registryBefore.libraries[`${libName}:${commit}`];
+      await saveRegistry(env, registryBefore);
+
+      await createTestProject(env, [
+        {
+          libName,
+          commit,
+          createLocal: false,
+        },
+      ]);
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const registryAfter = await loadRegistry(env);
+      const projectHash = hashPath(env.projectDir);
+      expect(registryAfter.libraries[`${libName}:${commit}`]).toBeDefined();
+      expect(registryAfter.libraries[`${libName}:${commit}`].platforms).toEqual(['general']);
+      expect(registryAfter.stores[`${libName}:${commit}:general`].usedBy).toContain(projectHash);
     });
   });
 
@@ -791,6 +919,53 @@ describe('TC-017: link 命令测试', () => {
       // 验证链接指向新版本
       const newTarget = path.join(env.storeDir, libName, newCommit, 'macOS');
       await verifySymlink(path.join(localPath, 'macOS'), newTarget);
+    });
+
+    it('should backfill library metadata when relink repairs wrong commit link', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libRelinkBackfill';
+      const oldCommit = 'oldrelinkback123';
+      const newCommit = 'newrelinkback123';
+
+      await createMockStoreDataV2(env, {
+        libName,
+        commit: oldCommit,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      await createMockStoreDataV2(env, {
+        libName,
+        commit: newCommit,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const registryBefore = await loadRegistry(env);
+      delete registryBefore.libraries[`${libName}:${newCommit}`];
+      await saveRegistry(env, registryBefore);
+
+      const localPath = path.join(env.projectDir, '3rdparty', libName);
+      await fs.mkdir(localPath, { recursive: true });
+      await fs.symlink(
+        path.join(env.storeDir, libName, oldCommit, 'macOS'),
+        path.join(localPath, 'macOS')
+      );
+
+      await createTestProject(env, [
+        {
+          libName,
+          commit: newCommit,
+          createLocal: false,
+        },
+      ]);
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const registryAfter = await loadRegistry(env);
+      expect(registryAfter.libraries[`${libName}:${newCommit}`]).toBeDefined();
+      expect(registryAfter.libraries[`${libName}:${newCommit}`].platforms).toContain('macOS');
     });
   });
 });
