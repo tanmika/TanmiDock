@@ -349,6 +349,36 @@ class RegistryManager {
     return Object.values(this.registry.projects);
   }
 
+  /**
+   * 获取引用指定库的项目列表
+   */
+  getProjectsReferencingLibrary(libName: string, commit?: string): Array<{
+    projectHash: string;
+    project: ProjectInfo;
+    dependencies: ProjectInfo['dependencies'];
+  }> {
+    this.ensureLoaded();
+    const results: Array<{
+      projectHash: string;
+      project: ProjectInfo;
+      dependencies: ProjectInfo['dependencies'];
+    }> = [];
+
+    for (const [projectHash, project] of Object.entries(this.registry.projects)) {
+      const dependencies = project.dependencies.filter((dep) => {
+        if (dep.libName !== libName) return false;
+        if (commit && dep.commit !== commit) return false;
+        return true;
+      });
+
+      if (dependencies.length > 0) {
+        results.push({ projectHash, project, dependencies });
+      }
+    }
+
+    return results;
+  }
+
   // ========== 库管理 ==========
 
   /**

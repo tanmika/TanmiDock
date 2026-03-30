@@ -393,7 +393,7 @@ export async function saveRegistry(env: TestEnv, registry: Registry): Promise<vo
 /**
  * 命令类型
  */
-export type CommandName = 'clean' | 'link' | 'unlink' | 'status' | 'repair' | 'verify' | 'init';
+export type CommandName = 'clean' | 'link' | 'unlink' | 'status' | 'repair' | 'verify' | 'init' | 'reset';
 
 /**
  * 命令选项类型
@@ -426,6 +426,13 @@ export interface RepairOptions {
 
 export interface InitOptions {
   storePath?: string;
+  yes?: boolean;
+}
+
+export interface ResetOptions {
+  libName: string;
+  commit?: string;
+  global?: boolean;
   yes?: boolean;
 }
 
@@ -477,6 +484,12 @@ export async function runCommand(
   command: 'init',
   options: InitOptions,
   env: TestEnv
+): Promise<void>;
+export async function runCommand(
+  command: 'reset',
+  options: ResetOptions,
+  env: TestEnv,
+  projectPath?: string
 ): Promise<void>;
 export async function runCommand(
   command: CommandName,
@@ -547,6 +560,20 @@ export async function runCommand(
         storePath: initOpts.storePath ?? env.storeDir,
         yes: initOpts.yes ?? true,
       });
+      break;
+    }
+    case 'reset': {
+      const { resetLibrary } = await import('../../src/commands/reset.js');
+      const resetOpts = options as ResetOptions;
+      await resetLibrary(
+        resetOpts.libName,
+        resetOpts.commit,
+        {
+          global: resetOpts.global ?? false,
+          yes: resetOpts.yes ?? true,
+        },
+        projectPath ?? env.projectDir
+      );
       break;
     }
   }
