@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
-import { parseProjectDependencies, findCodepacConfig, parseCodepacDep, extractDependencies } from '../core/parser.js';
+import { parseProjectDependencies, findCodepacConfig, parseCodepacDep, extractDependencies, resolveProjectRootPath } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
 import * as linker from '../core/linker.js';
@@ -119,7 +119,7 @@ async function interactiveStatus(): Promise<void> {
  * 显示单个项目状态
  */
 export async function showStatus(projectPath: string, options: StatusOptions): Promise<void> {
-  const absolutePath = resolvePath(projectPath);
+  const { absolutePath, normalizedPath } = await resolveProjectRootPath(projectPath);
 
   // 检查项目路径
   try {
@@ -138,7 +138,7 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
   let configPath: string;
 
   try {
-    const result = await parseProjectDependencies(absolutePath);
+    const result = await parseProjectDependencies(normalizedPath);
     dependencies = result.dependencies;
     configPath = result.configPath;
   } catch (err) {
@@ -150,18 +150,9 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
   const registry = getRegistry();
   await registry.load();
 
-  // 查找项目信息：优先当前路径，其次 3rdparty 目录
   const thirdPartyDir = path.dirname(configPath);
-  let projectInfo = registry.getProject(registry.hashPath(absolutePath));
-  let registeredPath = absolutePath;
-
-  if (!projectInfo && thirdPartyDir !== absolutePath) {
-    // 当前路径未注册，尝试查找 3rdparty 目录
-    projectInfo = registry.getProject(registry.hashPath(thirdPartyDir));
-    if (projectInfo) {
-      registeredPath = thirdPartyDir;
-    }
-  }
+  const projectInfo = registry.getProject(registry.hashPath(normalizedPath));
+  const registeredPath = normalizedPath;
 
   // 显示项目信息
   title(`项目: ${shrinkHome(absolutePath)}`);

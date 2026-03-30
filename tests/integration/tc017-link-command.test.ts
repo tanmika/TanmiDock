@@ -294,6 +294,43 @@ describe('TC-017: link 命令测试', () => {
       await verifyLinkResult(env, libName, commit, ['macOS', 'iOS']);
       await verifyProjectRegistry(env, libName, commit, ['macOS', 'iOS']);
     });
+
+    it('should register project under root when invoked from 3rdparty path', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libLinkFromThirdparty';
+      const commit = 'linkfromthirdparty123';
+
+      await createMockStoreDataV2(env, {
+        libName,
+        commit,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      await createTestProject(env, [
+        {
+          libName,
+          commit,
+          createLocal: false,
+        },
+      ]);
+
+      await runCommand(
+        'link',
+        { platform: ['macOS'], yes: true },
+        env,
+        path.join(env.projectDir, '3rdparty')
+      );
+
+      const registry = await loadRegistry(env);
+      const rootHash = hashPath(env.projectDir);
+      const thirdpartyHash = hashPath(path.join(env.projectDir, '3rdparty'));
+
+      expect(registry.projects[rootHash]).toBeDefined();
+      expect(registry.projects[rootHash].path).toBe(env.projectDir);
+      expect(registry.projects[thirdpartyHash]).toBeUndefined();
+    });
   });
 
   describe('S-2.1.4: LINKED - 已正确链接', () => {

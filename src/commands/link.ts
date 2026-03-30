@@ -14,9 +14,9 @@ import {
   extractActions,
   parseActionCommand,
   extractNestedDependencies,
-  normalizeProjectRoot,
   findAllCodepacConfigs,
   extractDependencies,
+  resolveProjectRootPath,
 } from '../core/parser.js';
 import type { OptionalConfigInfo } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
@@ -1130,7 +1130,11 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
  * 执行链接操作
  */
 export async function linkProject(projectPath: string, options: LinkOptions): Promise<void> {
-  const absolutePath = resolvePath(projectPath);
+  const {
+    absolutePath,
+    normalizedPath,
+    configPath: discoveredConfigPath,
+  } = await resolveProjectRootPath(projectPath);
 
   // === 阶段 1: 初始化 ===
   const cfg = await config.load();
@@ -1140,7 +1144,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 
   const registry = getRegistry();
   await registry.load();
-  const existingProject = registry.getProjectByPath(absolutePath);
+  const existingProject = registry.getProjectByPath(normalizedPath);
   const rememberedPlatforms = existingProject?.platforms;
 
   // 确定平台列表
@@ -1177,7 +1181,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   }
 
   // 发现可选配置文件
-  const thirdpartyDir = path.join(absolutePath, '3rdparty');
+  const thirdpartyDir = path.join(normalizedPath, '3rdparty');
   const configDiscovery = await findAllCodepacConfigs(thirdpartyDir);
   let selectedOptionalConfigs: OptionalConfigInfo[] = [];
 
@@ -1216,8 +1220,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   }
 
   // 查找主配置文件
-  const { findCodepacConfig } = await import('../core/parser.js');
-  const mainConfigPath = await findCodepacConfig(absolutePath);
+  const mainConfigPath = discoveredConfigPath;
   if (!mainConfigPath) {
     error(`找不到 codepac-dep.json 配置文件，已搜索: 3rdparty, .`);
     process.exit(EXIT_CODES.DATAERR);
@@ -1226,7 +1229,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   // === 阶段 2: Submodule 检测 ===
   let selectedSubmodules: SubmoduleConfigWithSelection[] = [];
   if (options.submodules !== false) {
-    const submoduleConfigs = await findSubmoduleConfigs(absolutePath);
+    const submoduleConfigs = await findSubmoduleConfigs(normalizedPath);
     if (submoduleConfigs.length > 0) {
       selectedSubmodules = await selectSubmodules(submoduleConfigs, options, existingProject?.submodules);
 
@@ -1247,7 +1250,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   }
 
   // === 阶段 3: 规范化 + 事务准备 ===
-  const normalizedRoot = normalizeProjectRoot(absolutePath, mainConfigPath);
+  const normalizedRoot = normalizedPath;
   const wasNormalized = normalizedRoot !== absolutePath;
 
   if (wasNormalized) {

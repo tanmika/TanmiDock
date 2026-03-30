@@ -3,6 +3,7 @@
  */
 import fs from 'fs/promises';
 import path from 'path';
+import { resolvePath } from './platform.js';
 import * as logger from '../utils/logger.js';
 import type { CodepacDep, ParsedDependency, ActionConfig, ParsedAction } from '../types/index.js';
 
@@ -69,6 +70,28 @@ export function normalizeProjectRoot(inputPath: string, configPath: string): str
     return path.dirname(configDir);
   }
   return inputPath;
+}
+
+/**
+ * 解析并规范化项目路径
+ * 当输入路径是 3rdparty 目录时，统一返回项目根目录
+ */
+export async function resolveProjectRootPath(projectPath: string): Promise<{
+  absolutePath: string;
+  normalizedPath: string;
+  configPath: string | null;
+}> {
+  const absolutePath = resolvePath(projectPath);
+  const configPath = await findCodepacConfig(absolutePath);
+  const normalizedPath = configPath
+    ? normalizeProjectRoot(absolutePath, configPath)
+    : absolutePath;
+
+  return {
+    absolutePath,
+    normalizedPath,
+    configPath,
+  };
 }
 
 /**
@@ -362,5 +385,6 @@ export default {
   extractNestedDependencies,
   parseProjectDependencies,
   getRelativeConfigPath,
+  resolveProjectRootPath,
   findAllCodepacConfigs,
 };

@@ -84,10 +84,10 @@ async function createLinkedProject(
 /**
  * 运行 status 命令并捕获 JSON 输出
  */
-async function runStatusAndGetJson(env: TestEnv): Promise<unknown> {
+async function runStatusAndGetJson(env: TestEnv, projectPath?: string): Promise<unknown> {
   const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
   try {
-    await runCommand('status', { json: true }, env, env.projectDir);
+    await runCommand('status', { json: true }, env, projectPath ?? env.projectDir);
     // 获取最后一次 JSON 输出
     const calls = spy.mock.calls;
     for (let i = calls.length - 1; i >= 0; i--) {
@@ -162,6 +162,29 @@ describe('TC-019: status 命令测试', () => {
       expect(jsonOutput.platforms).toContain('macOS');
       expect(jsonOutput.platforms).toContain('iOS');
       expect(jsonOutput.lastLinked).not.toBeNull();
+    });
+
+    it('should resolve 3rdparty path to linked project root', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libStatusRootNormalized';
+      const commit = 'statusrootnorm123';
+
+      await createLinkedProject(
+        env,
+        [{ libName, commit, platforms: ['macOS'] }],
+        ['macOS']
+      );
+
+      const jsonOutput = (await runStatusAndGetJson(env, path.join(env.projectDir, '3rdparty'))) as {
+        lastLinked: string | null;
+        dependencies: { linked: number; broken: number; unlinked: number };
+      };
+
+      expect(jsonOutput.lastLinked).not.toBeNull();
+      expect(jsonOutput.dependencies.linked).toBe(1);
+      expect(jsonOutput.dependencies.broken).toBe(0);
+      expect(jsonOutput.dependencies.unlinked).toBe(0);
     });
   });
 

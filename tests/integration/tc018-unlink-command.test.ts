@@ -207,6 +207,24 @@ describe('TC-018: unlink 命令测试', () => {
       registry = await loadRegistry(env);
       expect(registry.projects[projectHash]).toBeUndefined();
     });
+
+    it('should unlink successfully when invoked from 3rdparty path', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libUnlinkNormalized';
+      const commit = 'unlinknormalized123';
+
+      await createLinkedProject(env, [{ libName, commit, platforms: ['macOS'] }], ['macOS']);
+
+      const projectHash = hashPath(env.projectDir);
+      let registry = await loadRegistry(env);
+      expect(registry.projects[projectHash]).toBeDefined();
+
+      await runCommand('unlink', { remove: false }, env, path.join(env.projectDir, '3rdparty'));
+
+      registry = await loadRegistry(env);
+      expect(registry.projects[projectHash]).toBeUndefined();
+    });
   });
 
   describe('S-3.2.2: 更新引用关系', () => {

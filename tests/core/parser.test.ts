@@ -137,6 +137,29 @@ describe('parser with fs mock', () => {
     });
   });
 
+  describe('resolveProjectRootPath', () => {
+    it('should normalize 3rdparty path to project root', async () => {
+      fsMock.access.mockRejectedValueOnce(new Error('not found')).mockResolvedValueOnce(undefined);
+
+      const { resolveProjectRootPath } = await import('../../src/core/parser.js');
+      const result = await resolveProjectRootPath('/project/3rdparty');
+
+      expect(result.absolutePath).toBe('/project/3rdparty');
+      expect(result.configPath).toBe('/project/3rdparty/codepac-dep.json');
+      expect(result.normalizedPath).toBe('/project');
+    });
+
+    it('should keep original path when config is in project root', async () => {
+      fsMock.access.mockRejectedValueOnce(new Error('not found')).mockResolvedValueOnce(undefined);
+
+      const { resolveProjectRootPath } = await import('../../src/core/parser.js');
+      const result = await resolveProjectRootPath('/project');
+
+      expect(result.configPath).toBe('/project/codepac-dep.json');
+      expect(result.normalizedPath).toBe('/project');
+    });
+  });
+
   describe('parseCodepacDep', () => {
     it('should parse valid config file', async () => {
       const validConfig = {

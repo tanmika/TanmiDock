@@ -6,8 +6,9 @@ import fs from 'fs/promises';
 import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
 import { getRegistry } from '../core/registry.js';
+import { resolveProjectRootPath } from '../core/parser.js';
 import * as linker from '../core/linker.js';
-import { resolvePath, shrinkHome, SHARED_PLATFORM } from '../core/platform.js';
+import { shrinkHome, SHARED_PLATFORM } from '../core/platform.js';
 import { info, warn, success, error, hint, blank, separator } from '../utils/logger.js';
 
 /**
@@ -43,7 +44,7 @@ interface UnlinkOptions {
  * 取消链接
  */
 export async function unlinkProject(projectPath: string, options: UnlinkOptions): Promise<void> {
-  const absolutePath = resolvePath(projectPath);
+  const { absolutePath, normalizedPath } = await resolveProjectRootPath(projectPath);
 
   // 检查项目路径
   try {
@@ -61,7 +62,7 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
   const registry = getRegistry();
   await registry.load();
 
-  const projectHash = registry.hashPath(absolutePath);
+  const projectHash = registry.hashPath(normalizedPath);
   const projectInfo = registry.getProject(projectHash);
 
   if (!projectInfo) {
@@ -70,6 +71,9 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
   }
 
   info(`取消链接: ${shrinkHome(absolutePath)}`);
+  if (normalizedPath !== absolutePath) {
+    info(`注册路径: ${shrinkHome(normalizedPath)}`);
+  }
   blank();
 
   // ========== 阶段 1: 收集依赖信息 ==========
@@ -88,7 +92,7 @@ export async function unlinkProject(projectPath: string, options: UnlinkOptions)
       libName: dep.libName,
       commit: dep.commit,
       libKey: registry.getLibraryKey(dep.libName, dep.commit),
-      localPath: path.join(absolutePath, dep.linkedPath),
+      localPath: path.join(normalizedPath, dep.linkedPath),
       storeKeys: registry.getLibraryStoreKeys(dep.libName, dep.commit),
     });
   }

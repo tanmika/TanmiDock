@@ -7,8 +7,8 @@ import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
 import { getRegistry } from '../core/registry.js';
 import { getStorePath } from '../core/config.js';
-import { findCodepacConfig, normalizeProjectRoot, parseCodepacDep, extractDependencies, extractActions, parseActionCommand, extractNestedDependencies } from '../core/parser.js';
-import { resolvePath, shrinkHome } from '../core/platform.js';
+import { findCodepacConfig, parseCodepacDep, extractDependencies, extractActions, parseActionCommand, extractNestedDependencies, resolveProjectRootPath } from '../core/parser.js';
+import { shrinkHome } from '../core/platform.js';
 import { isSymlink } from '../core/linker.js';
 import { withGlobalLock } from '../utils/global-lock.js';
 import { findSubmoduleConfigs } from '../utils/git.js';
@@ -84,7 +84,7 @@ export async function resetLibrary(
   } else if (commit) {
     targets = [{ libName, commit }];
   } else {
-    projectRoot = await resolveProjectRoot(currentPath);
+    projectRoot = await resolveCurrentProjectRoot(currentPath);
     targets = await collectProjectTargets(registry, projectRoot, libName);
   }
 
@@ -144,13 +144,12 @@ function collectGlobalTargets(registry: ReturnType<typeof getRegistry>, libName:
   return targets;
 }
 
-async function resolveProjectRoot(inputPath: string): Promise<string> {
-  const absolutePath = resolvePath(inputPath);
-  const configPath = await findCodepacConfig(absolutePath);
+async function resolveCurrentProjectRoot(inputPath: string): Promise<string> {
+  const { normalizedPath, configPath } = await resolveProjectRootPath(inputPath);
   if (!configPath) {
     throw new Error('`td reset <lib>` 只能在项目目录下使用');
   }
-  return normalizeProjectRoot(absolutePath, configPath);
+  return normalizedPath;
 }
 
 async function collectProjectTargets(
