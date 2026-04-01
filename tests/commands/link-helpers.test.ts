@@ -383,4 +383,50 @@ describe('link helpers', () => {
       expect(result).not.toBe('linked');
     });
   });
+
+  describe('assessDownloadResult', () => {
+    it('should not classify as General when only unrequested platforms were downloaded', async () => {
+      const { assessDownloadResult } = await import('../../src/commands/link.js');
+
+      const result = assessDownloadResult(
+        ['android'],
+        undefined,
+        {
+          tempDir: '/tmp/tanmi-dock-1',
+          libDir: '/tmp/tanmi-dock-1/librocksdb',
+          allPlatformDirs: ['macOS', 'macOS-asan'],
+          platformDirs: [],
+          sharedFiles: ['README.md'],
+          cleanedPlatforms: ['macOS', 'macOS-asan'],
+        }
+      );
+
+      expect(result.isPureGeneral).toBe(false);
+      expect(result.hasAnyPlatformArtifacts).toBe(true);
+      expect(result.downloadedRequested).toEqual([]);
+      expect(result.unavailableRequested).toEqual(['android']);
+    });
+
+    it('should classify as General only when download result has no platform artifacts', async () => {
+      const { assessDownloadResult } = await import('../../src/commands/link.js');
+
+      const result = assessDownloadResult(
+        ['android'],
+        undefined,
+        {
+          tempDir: '/tmp/tanmi-dock-2',
+          libDir: '/tmp/tanmi-dock-2/libeigen',
+          allPlatformDirs: [],
+          platformDirs: [],
+          sharedFiles: ['CMakeLists.txt', 'include'],
+          cleanedPlatforms: [],
+        }
+      );
+
+      expect(result.isPureGeneral).toBe(true);
+      expect(result.hasAnyPlatformArtifacts).toBe(false);
+      expect(result.downloadedRequested).toEqual([]);
+      expect(result.unavailableRequested).toEqual(['android']);
+    });
+  });
 });

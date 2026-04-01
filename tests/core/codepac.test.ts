@@ -655,6 +655,9 @@ describe('codepac', () => {
       });
 
       // 验证平台目录识别（保留用户请求的）
+      expect(result.allPlatformDirs).toContain('macOS');
+      expect(result.allPlatformDirs).toContain('macOS-asan');
+      expect(result.allPlatformDirs).toContain('Win');
       expect(result.platformDirs).toContain('macOS');
       expect(result.platformDirs).toContain('macOS-asan');
       expect(result.platformDirs).toContain('Win');
@@ -695,6 +698,8 @@ describe('codepac', () => {
       });
 
       // 验证只保留请求的平台
+      expect(result.allPlatformDirs).toContain('macOS');
+      expect(result.allPlatformDirs).toContain('macOS-asan');
       expect(result.platformDirs).toContain('macOS');
       expect(result.platformDirs).not.toContain('macOS-asan');
 

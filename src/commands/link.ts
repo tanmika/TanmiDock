@@ -129,6 +129,88 @@ interface LinkScopeResult {
   };
 }
 
+interface DownloadAssessment {
+  downloadedRequested: string[];
+  unavailableRequested: string[];
+  hasAnyPlatformArtifacts: boolean;
+  isPureGeneral: boolean;
+}
+
+export function assessDownloadResult(
+  requestedPlatforms: string[],
+  sparse: ParsedDependency['sparse'],
+  downloadResult: codepac.DownloadResult
+): DownloadAssessment {
+  const downloadedRequested = downloadResult.platformDirs.filter((platform) =>
+    requestedPlatforms.includes(platform)
+  );
+  const unavailableRequested = requestedPlatforms.filter(
+    (platform) => !downloadedRequested.includes(platform)
+  );
+  const hasAnyPlatformArtifacts = downloadResult.allPlatformDirs.length > 0;
+  const isPureGeneral =
+    (!sparse || isSparseOnlyCommon(sparse)) &&
+    !hasAnyPlatformArtifacts;
+
+  return {
+    downloadedRequested,
+    unavailableRequested,
+    hasAnyPlatformArtifacts,
+    isPureGeneral,
+  };
+}
+
+function upsertLibraryAvailability(
+  dependency: ParsedDependency,
+  updates: {
+    unavailablePlatforms?: string[];
+    platforms?: string[];
+    isGeneral?: boolean;
+  }
+): void {
+  const registry = getRegistry();
+  const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+  const existing = registry.getLibrary(libKey);
+
+  if (existing) {
+    registry.updateLibrary(libKey, {
+      unavailablePlatforms: updates.unavailablePlatforms ?? existing.unavailablePlatforms,
+      platforms: updates.platforms ?? existing.platforms,
+      isGeneral: updates.isGeneral ?? existing.isGeneral,
+      lastAccess: new Date().toISOString(),
+    });
+    return;
+  }
+
+  registry.addLibrary({
+    libName: dependency.libName,
+    commit: dependency.commit,
+    branch: dependency.branch,
+    url: dependency.url,
+    platforms: updates.platforms ?? [],
+    size: 0,
+    isGeneral: updates.isGeneral,
+    referencedBy: [],
+    unavailablePlatforms: updates.unavailablePlatforms,
+    createdAt: new Date().toISOString(),
+    lastAccess: new Date().toISOString(),
+  });
+}
+
+export async function resolveLibraryGeneralState(
+  dependency: Pick<ParsedDependency, 'libName' | 'commit'>
+): Promise<boolean> {
+  const registry = getRegistry();
+  const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+  const library = registry.getLibrary(libKey);
+
+  if (typeof library?.isGeneral === 'boolean') {
+    return library.isGeneral;
+  }
+
+  return store.isGeneralLib(dependency.libName, dependency.commit);
+}
+
 // ============ SubmoduleConfig 扩展（带选择的可选配置） ============
 
 interface SubmoduleConfigWithSelection extends SubmoduleConfig {
@@ -396,7 +478,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
       switch (status) {
         case DependencyStatus.LINKED: {
-          const isLinkedGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
+          const isLinkedGeneral = await resolveLibraryGeneralState(dependency);
           if (!isLinkedGeneral) {
             const supplementResult = await supplementMissingPlatforms(
               dependency, platforms, registry, tx, { vars: configVars }
@@ -436,7 +518,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
         case DependencyStatus.RELINK: {
           const relinkCommitPath = path.join(storePath, dependency.libName, dependency.commit);
-          const isRelinkGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
+          const isRelinkGeneral = await resolveLibraryGeneralState(dependency);
 
           if (isRelinkGeneral) {
             tx.recordOp('unlink', localPath);
@@ -510,7 +592,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
         case DependencyStatus.REPLACE: {
           const replaceSize = await getDirSize(localPath);
           const replaceCommitPath = path.join(storePath, dependency.libName, dependency.commit);
-          const isReplaceGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
+          const isReplaceGeneral = await resolveLibraryGeneralState(dependency);
 
           if (isReplaceGeneral) {
             const sharedPath = path.join(replaceCommitPath, '_shared');
@@ -630,6 +712,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             registry.addLibrary({
               libName: dependency.libName, commit: dependency.commit, branch: dependency.branch,
               url: dependency.url, platforms: absorbLinkPlatforms, size: absorbSize,
+              isGeneral: false,
               referencedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
             });
           }
@@ -701,6 +784,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                 registry.addLibrary({
                   libName: dependency.libName, commit: dependency.commit, branch: dependency.branch,
                   url: dependency.url, platforms: [GENERAL_PLATFORM], size: sharedSize,
+                  isGeneral: true,
                   referencedBy: [], createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
                 });
               }
@@ -765,7 +849,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           const { existing: linkNewExisting } = await store.checkPlatformCompleteness(
             dependency.libName, dependency.commit, platforms
           );
-          const isLinkNewGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
+          const isLinkNewGeneral = await resolveLibraryGeneralState(dependency);
 
           if (isLinkNewGeneral) {
             const sharedPath = path.join(linkNewCommitPath, '_shared');
@@ -912,9 +996,17 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               }
 
               try {
-                const isNewGeneral = (!dependency.sparse || isSparseOnlyCommon(dependency.sparse)) && downloadResult.platformDirs.length === 0;
+                const assessment = assessDownloadResult(
+                  dlToDownload,
+                  dependency.sparse,
+                  downloadResult
+                );
 
-                if (isNewGeneral) {
+                if (assessment.isPureGeneral) {
+                  upsertLibraryAvailability(dependency, {
+                    platforms: [GENERAL_PLATFORM],
+                    isGeneral: true,
+                  });
                   tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
                   await store.absorbGeneral(downloadResult.libDir, dependency.libName, dependency.commit);
                   const sharedPath = path.join(storeCommitPath, '_shared');
@@ -934,21 +1026,14 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                   return { success: true, name: dependency.libName, downloadedPlatforms: [GENERAL_PLATFORM], skippedPlatforms: [], isGeneral: true };
                 }
 
-                const filteredDownloaded = downloadResult.platformDirs.filter(p => dlToDownload.includes(p));
-                const newUnavailable = dlToDownload.filter(p => !filteredDownloaded.includes(p));
+                const filteredDownloaded = assessment.downloadedRequested;
+                const newUnavailable = assessment.unavailableRequested;
                 if (newUnavailable.length > 0) {
-                  const updateLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
-                  if (historyLib) {
-                    const updatedUnavailable = [...new Set([...unavailablePlatforms, ...newUnavailable])];
-                    registry.updateLibrary(updateLibKey, { unavailablePlatforms: updatedUnavailable });
-                  } else {
-                    registry.addLibrary({
-                      libName: dependency.libName, commit: dependency.commit, branch: dependency.branch,
-                      url: dependency.url, platforms: [], size: 0, referencedBy: [],
-                      unavailablePlatforms: newUnavailable,
-                      createdAt: new Date().toISOString(), lastAccess: new Date().toISOString(),
-                    });
-                  }
+                  const updatedUnavailable = [...new Set([...unavailablePlatforms, ...newUnavailable])];
+                  upsertLibraryAvailability(dependency, {
+                    unavailablePlatforms: updatedUnavailable,
+                    isGeneral: false,
+                  });
                   pLog.warn(`${dependency.libName} 平台 [${newUnavailable.join(', ')}] 远程不存在，已记录`);
                 }
 
@@ -961,26 +1046,6 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                 }
 
                 const linkPlatforms = [...existing, ...filteredDownloaded];
-                const isDownloadGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
-
-                if (isDownloadGeneral) {
-                  const sharedPath = path.join(storeCommitPath, '_shared');
-                  tx.recordOp('link', localPath, sharedPath);
-                  await linker.linkGeneral(localPath, sharedPath);
-                  await ensureLinkedRegistryState(
-                    dependency.libName,
-                    dependency.commit,
-                    dependency.branch,
-                    dependency.url,
-                    [GENERAL_PLATFORM],
-                    projectHash,
-                    true
-                  );
-                  generalLibs.add(dependency.libName);
-                  pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，下载完成`);
-                  return { success: true, name: dependency.libName, downloadedPlatforms: [GENERAL_PLATFORM], skippedPlatforms: [], isGeneral: true };
-                }
-
                 if (linkPlatforms.length === 0) {
                   return { success: false, name: dependency.libName, skipped: true, skippedPlatforms: platforms };
                 }
@@ -1618,7 +1683,8 @@ async function syncLibraryInfo(
   commit: string,
   branch: string,
   url: string,
-  platforms: string[]
+  platforms: string[],
+  isGeneral: boolean
 ): Promise<void> {
   const registry = getRegistry();
   const libKey = registry.getLibraryKey(libName, commit);
@@ -1638,6 +1704,7 @@ async function syncLibraryInfo(
       url,
       platforms: normalizedPlatforms,
       size: totalSize,
+      isGeneral,
       referencedBy: [],
       createdAt: new Date().toISOString(),
       lastAccess: new Date().toISOString(),
@@ -1650,6 +1717,7 @@ async function syncLibraryInfo(
     url: url || existingLibrary.url,
     platforms: normalizedPlatforms,
     size: totalSize,
+    isGeneral,
     lastAccess: new Date().toISOString(),
   });
 }
@@ -1699,7 +1767,7 @@ async function ensureLinkedRegistryState(
     await registerSharedStore(libName, commit, branch, url);
   }
 
-  await syncLibraryInfo(libName, commit, branch, url, libraryPlatforms);
+  await syncLibraryInfo(libName, commit, branch, url, libraryPlatforms, isGeneral);
 }
 
 /**
@@ -1747,6 +1815,7 @@ async function registerNestedLibraries(
           url: '',
           platforms: [GENERAL_PLATFORM],
           size: nested.size,
+          isGeneral: true,
           referencedBy: [],
           createdAt: new Date().toISOString(),
           lastAccess: new Date().toISOString(),
@@ -1786,6 +1855,7 @@ async function registerNestedLibraries(
           url: '',
           platforms: nested.platforms,
           size: nested.size,
+          isGeneral: false,
           referencedBy: [],
           createdAt: new Date().toISOString(),
           lastAccess: new Date().toISOString(),
@@ -1895,7 +1965,7 @@ async function classifyDependencies(
 
     const existing = verifiedExisting;
     // 也检查是否为 General 库（有 _shared 且有内容）
-    const isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
+    const isGeneral = await resolveLibraryGeneralState(dep);
     const inStore = existing.length > 0 || isGeneral;
 
     // 用于非 inStore 情况的本地路径状态检查
@@ -2052,19 +2122,24 @@ async function supplementMissingPlatforms(
     }
 
     try {
-      // 5. 检查实际下载了什么
-      const downloaded = downloadResult.platformDirs.filter((p) => toDownload.includes(p));
+      // 5. 解释下载结果
+      const assessment = assessDownloadResult(
+        toDownload,
+        dependency.sparse,
+        downloadResult
+      );
+      const downloaded = assessment.downloadedRequested;
       result.downloaded = downloaded;
 
       // 6. 记录新发现的不可用平台
-      const notFound = toDownload.filter((p) => !downloaded.includes(p));
+      const notFound = assessment.unavailableRequested;
       if (notFound.length > 0) {
         result.unavailable = notFound;
-        // 更新 LibraryInfo（如果存在）
-        if (libInfo) {
-          const newUnavailable = [...new Set([...unavailablePlatforms, ...notFound])];
-          registry.updateLibrary(libKey, { unavailablePlatforms: newUnavailable });
-        }
+        const newUnavailable = [...new Set([...unavailablePlatforms, ...notFound])];
+        upsertLibraryAvailability(dependency, {
+          unavailablePlatforms: newUnavailable,
+          isGeneral: false,
+        });
         warn(`${dependency.libName} 平台 [${notFound.join(', ')}] 远程不存在，已记录`);
       }
 
@@ -2477,7 +2552,7 @@ async function linkNestedDependencies(
       }
     }
 
-    let isGeneral = await store.isGeneralLib(dep.libName, dep.commit);
+    let isGeneral = await resolveLibraryGeneralState(dep);
 
     // 如果所有平台都已知不可用，跳过
     if (availablePlatforms.length === 0 && knownUnavailable.length > 0 && !isGeneral) {
@@ -2749,11 +2824,18 @@ async function linkNestedDependencies(
           hint(`${indent}  已过滤: ${downloadResult.cleanedPlatforms.join(', ')}`);
         }
 
-        // 检测是否为 General 库（没有 sparse 配置，或 sparse 只有 common，且没有平台目录）
-        const isNewGeneral = (!dep.sparse || isSparseOnlyCommon(dep.sparse)) && downloadResult.platformDirs.length === 0;
+        const assessment = assessDownloadResult(
+          availablePlatforms,
+          dep.sparse,
+          downloadResult
+        );
 
-        if (isNewGeneral) {
+        if (assessment.isPureGeneral) {
           // General 库处理
+          upsertLibraryAvailability(dep, {
+            platforms: [GENERAL_PLATFORM],
+            isGeneral: true,
+          });
           tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
           await store.absorbGeneral(downloadResult.libDir, dep.libName, dep.commit);
 
@@ -2779,25 +2861,25 @@ async function linkNestedDependencies(
             linkedPath: path.relative(projectRoot, localPath),
           });
           success(`${indent}  ${dep.libName} - 下载完成 (General)`);
-        } else if (downloadResult.platformDirs.length > 0) {
+        } else if (assessment.downloadedRequested.length > 0) {
           // 平台库处理
           tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
           const nestedAbsorbResult = await store.absorbLib(
             downloadResult.libDir,
-            downloadResult.platformDirs,
+            assessment.downloadedRequested,
             dep.libName,
             dep.commit
           );
           await registerNestedLibraries(nestedAbsorbResult.nestedLibraries, projectHash);
 
           tx.recordOp('link', localPath, storeCommitPath);
-          await linker.linkLib(localPath, storeCommitPath, downloadResult.platformDirs);
+          await linker.linkLib(localPath, storeCommitPath, assessment.downloadedRequested);
           await ensureLinkedRegistryState(
             dep.libName,
             dep.commit,
             dep.branch,
             dep.url,
-            downloadResult.platformDirs,
+            assessment.downloadedRequested,
             projectHash,
             false
           );
@@ -2811,48 +2893,25 @@ async function linkNestedDependencies(
           });
 
           // 检查并记录新发现的不可用平台
-          const newUnavailable = availablePlatforms.filter(p => !downloadResult.platformDirs.includes(p));
+          const newUnavailable = assessment.unavailableRequested;
           if (newUnavailable.length > 0) {
             const updatedUnavailable = [...new Set([...unavailablePlatforms, ...newUnavailable])];
-            if (historyLib) {
-              registry.updateLibrary(libKey, { unavailablePlatforms: updatedUnavailable });
-            } else {
-              registry.addLibrary({
-                libName: dep.libName,
-                commit: dep.commit,
-                branch: dep.branch,
-                url: dep.url,
-                platforms: downloadResult.platformDirs,
-                size: 0,
-                referencedBy: [],
-                unavailablePlatforms: newUnavailable,
-                createdAt: new Date().toISOString(),
-                lastAccess: new Date().toISOString(),
-              });
-            }
+            upsertLibraryAvailability(dep, {
+              unavailablePlatforms: updatedUnavailable,
+              platforms: assessment.downloadedRequested,
+              isGeneral: false,
+            });
             warn(`${indent}  ${dep.libName} 平台 [${newUnavailable.join(', ')}] 远程不存在，已记录`);
           }
 
-          success(`${indent}  ${dep.libName} - 下载完成 [${downloadResult.platformDirs.join(', ')}]`);
+          success(`${indent}  ${dep.libName} - 下载完成 [${assessment.downloadedRequested.join(', ')}]`);
         } else {
           // 所有请求的平台都不可用，记录到 registry
           const newUnavailable = [...new Set([...unavailablePlatforms, ...availablePlatforms])];
-          if (historyLib) {
-            registry.updateLibrary(libKey, { unavailablePlatforms: newUnavailable });
-          } else {
-            registry.addLibrary({
-              libName: dep.libName,
-              commit: dep.commit,
-              branch: dep.branch,
-              url: dep.url,
-              platforms: [],
-              size: 0,
-              referencedBy: [],
-              unavailablePlatforms: newUnavailable,
-              createdAt: new Date().toISOString(),
-              lastAccess: new Date().toISOString(),
-            });
-          }
+          upsertLibraryAvailability(dep, {
+            unavailablePlatforms: newUnavailable,
+            isGeneral: false,
+          });
           warn(`${indent}  ${dep.libName} - 下载成功但平台 [${availablePlatforms.join(', ')}] 不可用，已记录`);
         }
 

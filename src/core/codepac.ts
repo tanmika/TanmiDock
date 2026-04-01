@@ -344,6 +344,8 @@ export interface DownloadResult {
   tempDir: string;
   /** 库目录: tempDir/libName */
   libDir: string;
+  /** codepac 实际下载到的全部平台目录（清理前） */
+  allPlatformDirs: string[];
   /** 实际保留的平台目录名（用户请求的） */
   platformDirs: string[];
   /** 共享文件列表 */
@@ -467,6 +469,7 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
     return {
       tempDir,
       libDir,
+      allPlatformDirs: downloadedPlatforms,
       platformDirs,
       sharedFiles,
       cleanedPlatforms,

@@ -107,6 +107,8 @@ export interface LibraryInfo {
   url: string;
   platforms: string[];
   size: number;
+  /** 是否确认为真正的 General 库；缺失时表示历史数据，需要结合 Store 结构推断 */
+  isGeneral?: boolean;
   /**
    * 引用该库的项目 hash 列表
    * @deprecated 使用 StoreEntry.usedBy 替代
