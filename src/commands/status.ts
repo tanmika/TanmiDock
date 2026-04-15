@@ -9,6 +9,7 @@ import { parseProjectDependencies, findCodepacConfig, parseCodepacDep, extractDe
 import { getRegistry } from '../core/registry.js';
 import * as store from '../core/store.js';
 import * as linker from '../core/linker.js';
+import { collectProjectDependencyGraph } from './link.js';
 import { resolvePath, shrinkHome } from '../core/platform.js';
 import { formatSize } from '../utils/disk.js';
 import { info, warn, success, hint, blank, separator, title, colorize, tree as printTree } from '../utils/logger.js';
@@ -16,6 +17,21 @@ import { selectWithCancel, PROMPT_CANCELLED } from '../utils/prompt.js';
 import { findSubmoduleConfigs } from '../utils/git.js';
 import type { ParsedDependency } from '../types/index.js';
 import type { TreeItem } from '../utils/logger.js';
+
+interface ManualRuleStatus {
+  key: string;
+  libName: string;
+  commit?: string;
+  platforms: string[];
+}
+
+function parseManualRuleKey(key: string): { libName: string; commit?: string } {
+  const atIndex = key.lastIndexOf('@');
+  if (atIndex === -1) {
+    return { libName: key };
+  }
+  return { libName: key.slice(0, atIndex), commit: key.slice(atIndex + 1) };
+}
 
 interface StatusOptions {
   all?: boolean;
@@ -153,6 +169,15 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
   const thirdPartyDir = path.dirname(configPath);
   const projectInfo = registry.getProject(registry.hashPath(normalizedPath));
   const registeredPath = normalizedPath;
+  const projectDependencies = await collectProjectDependencyGraph(normalizedPath).catch(() => []);
+  const projectLibNames = new Set(projectDependencies.map((dep) => dep.libName));
+  const projectRuleKeys = new Set(projectDependencies.map((dep) => `${dep.libName}@${dep.commit}`));
+  const manualRules: ManualRuleStatus[] = registry.listManualUnavailableRules()
+    .filter((rule) => projectLibNames.has(rule.key) || projectRuleKeys.has(rule.key))
+    .map((rule) => {
+      const parsed = parseManualRuleKey(rule.key);
+      return { key: rule.key, libName: parsed.libName, commit: parsed.commit, platforms: rule.platforms };
+    });
 
   // 显示项目信息
   title(`项目: ${shrinkHome(absolutePath)}`);
@@ -165,6 +190,10 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
     info(`平台: ${projectInfo.platforms.join(', ') || '未指定'}`);
   } else {
     warn('此项目尚未链接');
+  }
+
+  if (manualRules.length > 0) {
+    info(`手动平台缺失规则: ${manualRules.length} 条`);
   }
 
   blank();
@@ -264,6 +293,7 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
         broken,
         unlinked,
       },
+      manualUnavailableRules: manualRules,
       brokenList,
       unlinkedList,
     };
@@ -310,6 +340,14 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
     warn('未链接的库:');
     for (const item of unlinkedList) {
       info(`  - ${item}`);
+    }
+  }
+
+  if (manualRules.length > 0) {
+    blank();
+    info('手动平台缺失规则:');
+    for (const rule of manualRules) {
+      info(`  - ${rule.commit ? `${rule.libName}@${rule.commit.slice(0, 8)}` : `${rule.libName} (所有 commit)`}: ${rule.platforms.join(', ')}`);
     }
   }
 

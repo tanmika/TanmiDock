@@ -186,6 +186,31 @@ describe('TC-019: status 命令测试', () => {
       expect(jsonOutput.dependencies.broken).toBe(0);
       expect(jsonOutput.dependencies.unlinked).toBe(0);
     });
+
+    it('should include current-project manual unavailable rules in json output', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libStatusManualRule';
+      const commit = 'statusmanual1234';
+
+      await createLinkedProject(
+        env,
+        [{ libName, commit, platforms: ['macOS'] }],
+        ['macOS']
+      );
+
+      const registry = await loadRegistry(env);
+      registry.manualUnavailablePlatforms[libName] = ['wasm'];
+      await saveRegistry(env, registry);
+
+      const jsonOutput = (await runStatusAndGetJson(env)) as {
+        manualUnavailableRules: Array<{ key: string; platforms: string[] }>;
+      };
+
+      expect(jsonOutput.manualUnavailableRules).toEqual([
+        { key: libName, libName, platforms: ['wasm'] },
+      ]);
+    });
   });
 
   describe('S-4.1.2: 未链接项目的状态显示', () => {

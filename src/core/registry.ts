@@ -40,7 +40,15 @@ class RegistryManager {
     try {
       const registryPath = getRegistryPath();
       const content = await fs.readFile(registryPath, 'utf-8');
-      this.registry = JSON.parse(content) as Registry;
+      const parsed = JSON.parse(content) as Partial<Registry>;
+      this.registry = {
+        ...EMPTY_REGISTRY,
+        ...parsed,
+        projects: parsed.projects ?? {},
+        libraries: parsed.libraries ?? {},
+        stores: parsed.stores ?? {},
+        manualUnavailablePlatforms: parsed.manualUnavailablePlatforms ?? {},
+      };
     } catch {
       this.registry = { ...EMPTY_REGISTRY };
     }
@@ -430,6 +438,52 @@ class RegistryManager {
   listLibraries(): LibraryInfo[] {
     this.ensureLoaded();
     return Object.values(this.registry.libraries);
+  }
+
+  getManualUnavailableRuleKey(libName: string, commit?: string): string {
+    return commit ? `${libName}@${commit}` : libName;
+  }
+
+  listManualUnavailableRules(): Array<{ key: string; platforms: string[] }> {
+    this.ensureLoaded();
+    return Object.entries(this.registry.manualUnavailablePlatforms)
+      .map(([key, platforms]) => ({ key, platforms: [...platforms] }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+  }
+
+  getManualUnavailablePlatforms(libName: string, commit: string): string[] {
+    this.ensureLoaded();
+    const libPlatforms = this.registry.manualUnavailablePlatforms[libName] ?? [];
+    const exactPlatforms = this.registry.manualUnavailablePlatforms[
+      this.getManualUnavailableRuleKey(libName, commit)
+    ] ?? [];
+    return [...new Set([...libPlatforms, ...exactPlatforms])];
+  }
+
+  addManualUnavailablePlatforms(libName: string, platforms: string[], commit?: string): string[] {
+    this.ensureLoaded();
+    const key = this.getManualUnavailableRuleKey(libName, commit);
+    const nextPlatforms = [...new Set([
+      ...(this.registry.manualUnavailablePlatforms[key] ?? []),
+      ...platforms,
+    ])].sort();
+    this.registry.manualUnavailablePlatforms[key] = nextPlatforms;
+    return nextPlatforms;
+  }
+
+  removeManualUnavailablePlatforms(libName: string, platforms: string[], commit?: string): string[] {
+    this.ensureLoaded();
+    const key = this.getManualUnavailableRuleKey(libName, commit);
+    const remaining = (this.registry.manualUnavailablePlatforms[key] ?? [])
+      .filter((platform) => !platforms.includes(platform));
+
+    if (remaining.length === 0) {
+      delete this.registry.manualUnavailablePlatforms[key];
+      return [];
+    }
+
+    this.registry.manualUnavailablePlatforms[key] = remaining;
+    return [...remaining];
   }
 
   /**

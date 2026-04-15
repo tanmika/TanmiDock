@@ -53,6 +53,17 @@ interface SelectConfig<T> {
   loop?: boolean;
 }
 
+interface SearchSelectChoice<T> extends SelectChoice<T> {
+  searchText?: string;
+}
+
+interface SearchSelectConfig<T> {
+  message: string;
+  choices: SearchSelectChoice<T>[];
+  default?: T;
+  pageSize?: number;
+}
+
 const selectTheme = {
   icon: { cursor: figures.pointer },
   style: {
@@ -64,6 +75,16 @@ const selectTheme = {
 
 function isSelectable<T>(item: SelectChoice<T> | typeof Separator.prototype): item is SelectChoice<T> {
   return !Separator.isSeparator(item) && !item.disabled;
+}
+
+function getPrintableKey(
+  key: { name?: string; ctrl?: boolean; meta?: boolean; sequence?: string }
+): string | null {
+  if (key.ctrl || key.meta) return null;
+  const raw = key.sequence ?? '';
+  if (raw.length !== 1) return null;
+  if (raw < ' ' || raw === '\u007f') return null;
+  return raw;
 }
 
 /**
@@ -178,6 +199,114 @@ export const selectWithCancel = createPrompt(
     );
 
     return `${prefix} ${styleText('bold', config.message)}\n${page}\n${helpTip}`;
+  }
+);
+
+/**
+ * 支持输入字符快速搜索的单选
+ */
+export const searchSelectWithCancel = createPrompt(
+  <T,>(config: SearchSelectConfig<T>, done: (value: T | typeof PROMPT_CANCELLED) => void) => {
+    const { pageSize = 8 } = config;
+    const theme = makeTheme(selectTheme);
+    const [status, setStatus] = useState<Status>('idle');
+    const [cancelled, setCancelled] = useState(false);
+    const [query, setQuery] = useState('');
+    const prefix = usePrefix({ status, theme });
+
+    const items = useMemo(
+      () => config.choices.map((choice) => ({
+        value: choice.value,
+        name: choice.name ?? String(choice.value),
+        description: choice.description,
+        disabled: choice.disabled ?? false,
+        searchText: `${choice.name} ${choice.searchText ?? ''}`.toLowerCase(),
+      })),
+      [config.choices]
+    );
+
+    const filtered = useMemo(() => {
+      const normalized = query.trim().toLowerCase();
+      if (!normalized) return items;
+      return items.filter((item) => item.searchText.includes(normalized));
+    }, [items, query]);
+
+    const defaultIndex = useMemo(() => {
+      if (!('default' in config)) return 0;
+      const index = filtered.findIndex((item) => item.value === config.default && !item.disabled);
+      return index >= 0 ? index : 0;
+    }, [config.default, filtered]);
+
+    const [active, setActive] = useState(defaultIndex);
+    const safeActive = filtered.length === 0 ? -1 : Math.min(active, filtered.length - 1);
+    const selectedChoice = safeActive >= 0 ? filtered[safeActive] : null;
+
+    useKeypress((key, rl) => {
+      if (isEscapeKey(key)) {
+        setCancelled(true);
+        setStatus('done');
+        done(PROMPT_CANCELLED);
+        return;
+      }
+
+      if (key.name === 'backspace') {
+        setQuery(query.slice(0, -1));
+        setActive(0);
+        return;
+      }
+
+      if (isEnterKey(key)) {
+        if (selectedChoice) {
+          setStatus('done');
+          done(selectedChoice.value);
+        }
+        return;
+      }
+
+      if (filtered.length === 0) return;
+
+      if (isUpKey(key)) {
+        setActive(active <= 0 ? filtered.length - 1 : active - 1);
+        return;
+      } else if (isDownKey(key)) {
+        setActive(active >= filtered.length - 1 ? 0 : active + 1);
+        return;
+      }
+
+      const printable = getPrintableKey(key);
+      if (printable) {
+        setQuery(query + printable);
+        setActive(0);
+      }
+    });
+
+    const page = usePagination({
+      items: filtered,
+      active: safeActive < 0 ? 0 : safeActive,
+      renderItem: ({ item, isActive }) => {
+        const cursor = isActive ? figures.pointer : ' ';
+        const line = isActive
+          ? `${cursor} ${styleText('cyan', item.name)}`
+          : `${cursor} ${item.name}`;
+
+        if (item.description && isActive) {
+          return `${line}\n   ${styleText('cyan', item.description)}`;
+        }
+        return line;
+      },
+      pageSize,
+      loop: true,
+    });
+
+    if (status === 'done') {
+      const displayText = cancelled ? '(已取消)' : selectedChoice?.name ?? '';
+      return `${prefix} ${config.message} ${styleText('cyan', displayText)}`;
+    }
+
+    const queryLine = `搜索: ${query || styleText('dim', '输入字符筛选')}`;
+    const content = filtered.length === 0 ? styleText('dim', '无匹配项') : page;
+    const helpTip = styleText('dim', '输入筛选 • ↑↓ 选择 • ⏎ 确认 • Backspace 删除 • esc 取消');
+    return `${prefix} ${styleText('bold', config.message)}\n${queryLine}\n${content}\n${helpTip}`;
   }
 );
 

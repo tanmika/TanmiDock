@@ -12,7 +12,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { expect } from 'vitest';
+import { expect, vi } from 'vitest';
 import type { Registry, StoreEntry, LibraryInfo } from '../../src/types/index.js';
 
 // ============ 类型定义 ============
@@ -393,7 +393,18 @@ export async function saveRegistry(env: TestEnv, registry: Registry): Promise<vo
 /**
  * 命令类型
  */
-export type CommandName = 'clean' | 'link' | 'unlink' | 'status' | 'repair' | 'verify' | 'init' | 'reset';
+export type CommandName =
+  | 'clean'
+  | 'link'
+  | 'unlink'
+  | 'status'
+  | 'repair'
+  | 'verify'
+  | 'init'
+  | 'reset'
+  | 'unavailableAdd'
+  | 'unavailableRemove'
+  | 'unavailableList';
 
 /**
  * 命令选项类型
@@ -434,6 +445,12 @@ export interface ResetOptions {
   commit?: string;
   global?: boolean;
   yes?: boolean;
+}
+
+export interface UnavailableOptions {
+  searchResult?: unknown;
+  selectedPlatforms?: string[];
+  applyToAllCommits?: boolean;
 }
 
 /**
@@ -488,6 +505,12 @@ export async function runCommand(
 export async function runCommand(
   command: 'reset',
   options: ResetOptions,
+  env: TestEnv,
+  projectPath?: string
+): Promise<void>;
+export async function runCommand(
+  command: 'unavailableAdd' | 'unavailableRemove' | 'unavailableList',
+  options: UnavailableOptions,
   env: TestEnv,
   projectPath?: string
 ): Promise<void>;
@@ -574,6 +597,61 @@ export async function runCommand(
         },
         projectPath ?? env.projectDir
       );
+      break;
+    }
+    case 'unavailableAdd': {
+      const prompt = await import('../../src/utils/prompt.js');
+      const unavailable = await import('../../src/commands/unavailable.js');
+      const searchSpy = vi.spyOn(prompt, 'searchSelectWithCancel').mockResolvedValue(
+        (options as UnavailableOptions).searchResult ?? prompt.PROMPT_CANCELLED
+      );
+      const checkboxSpy = vi.spyOn(prompt, 'checkboxWithCancel').mockResolvedValue(
+        (options as UnavailableOptions).selectedPlatforms ?? prompt.PROMPT_CANCELLED
+      );
+      const confirmSpy = vi.spyOn(prompt, 'confirmWithCancel').mockResolvedValue(
+        (options as UnavailableOptions).applyToAllCommits ?? prompt.PROMPT_CANCELLED
+      );
+      const previousCwd = process.cwd();
+      process.chdir(projectPath ?? env.projectDir);
+      try {
+        await unavailable.addUnavailableInteractive();
+      } finally {
+        process.chdir(previousCwd);
+        searchSpy.mockRestore();
+        checkboxSpy.mockRestore();
+        confirmSpy.mockRestore();
+      }
+      break;
+    }
+    case 'unavailableRemove': {
+      const prompt = await import('../../src/utils/prompt.js');
+      const unavailable = await import('../../src/commands/unavailable.js');
+      const searchSpy = vi.spyOn(prompt, 'searchSelectWithCancel').mockResolvedValue(
+        (options as UnavailableOptions).searchResult ?? prompt.PROMPT_CANCELLED
+      );
+      const checkboxSpy = vi.spyOn(prompt, 'checkboxWithCancel').mockResolvedValue(
+        (options as UnavailableOptions).selectedPlatforms ?? prompt.PROMPT_CANCELLED
+      );
+      const previousCwd = process.cwd();
+      process.chdir(projectPath ?? env.projectDir);
+      try {
+        await unavailable.removeUnavailableInteractive();
+      } finally {
+        process.chdir(previousCwd);
+        searchSpy.mockRestore();
+        checkboxSpy.mockRestore();
+      }
+      break;
+    }
+    case 'unavailableList': {
+      const unavailable = await import('../../src/commands/unavailable.js');
+      const previousCwd = process.cwd();
+      process.chdir(projectPath ?? env.projectDir);
+      try {
+        await unavailable.listUnavailableRules();
+      } finally {
+        process.chdir(previousCwd);
+      }
       break;
     }
   }

@@ -70,6 +70,7 @@ export interface Registry {
   projects: Record<string, ProjectInfo>;
   libraries: Record<string, LibraryInfo>; // 旧字段，兼容读取
   stores: Record<string, StoreEntry>; // 新字段，按平台存储
+  manualUnavailablePlatforms: Record<string, string[]>;
 }
 
 /**
@@ -147,6 +148,7 @@ export const EMPTY_REGISTRY: Registry = {
   projects: {},
   libraries: {},
   stores: {},
+  manualUnavailablePlatforms: {},
 };
 
 // ============ codepac 配置解析 ============

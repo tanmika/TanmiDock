@@ -11,6 +11,7 @@ import { createMigrateCommand } from './commands/migrate.js';
 import { createCheckCommand } from './commands/check.js';
 import { createUpdateCommand } from './commands/update.js';
 import { createResetCommand } from './commands/reset.js';
+import { createUnavailableCommand } from './commands/unavailable.js';
 import { showDashboard } from './commands/dashboard.js';
 import { Transaction } from './core/transaction.js';
 import { releaseGlobalLock } from './utils/global-lock.js';
@@ -112,6 +113,7 @@ program.addCommand(createMigrateCommand());
 program.addCommand(createCheckCommand());
 program.addCommand(createUpdateCommand());
 program.addCommand(createResetCommand());
+program.addCommand(createUnavailableCommand());
 
 // 无参数时显示工作台
 if (process.argv.length === 2) {
