@@ -193,6 +193,86 @@ export function isSparseOnlyCommon(sparse: object | string | undefined): boolean
   return keys.length === 0 || (keys.length === 1 && keys[0] === 'common');
 }
 
+function interpolateSparseVars(text: string, vars?: Record<string, string>): string {
+  if (!vars) return text;
+
+  return text.replace(/\$\{([^}]+)\}/g, (_match, key: string) => {
+    return vars[key] ?? `\$\{${key}\}`;
+  });
+}
+
+export function resolveSparseConfig(
+  sparse: object | string | undefined,
+  vars?: Record<string, string>
+): Record<string, unknown[]> | undefined {
+  if (!sparse) return undefined;
+
+  if (typeof sparse === 'string') {
+    try {
+      const resolved = interpolateSparseVars(sparse, vars);
+      const parsed = JSON.parse(resolved);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return undefined;
+      }
+      return parsed as Record<string, unknown[]>;
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (typeof sparse !== 'object' || Array.isArray(sparse)) {
+    return undefined;
+  }
+
+  return sparse as Record<string, unknown[]>;
+}
+
+export function getRequestedPlatformTargets(
+  requestedPlatform: string,
+  sparse: object | string | undefined,
+  vars?: Record<string, string>
+): string[] {
+  const sparseConfig = resolveSparseConfig(sparse, vars);
+  const rawItems = sparseConfig?.[requestedPlatform];
+  if (!Array.isArray(rawItems)) {
+    return [normalizePlatformValue(requestedPlatform)];
+  }
+
+  const platformItems = rawItems
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => normalizePlatformValue(item))
+    .filter((item) => isPlatformDir(item));
+
+  if (platformItems.length === 0) {
+    return [normalizePlatformValue(requestedPlatform)];
+  }
+
+  return [...new Set(platformItems)];
+}
+
+export function getRequestedPlatformsTargetMap(
+  requestedPlatforms: string[],
+  sparse: object | string | undefined,
+  vars?: Record<string, string>
+): Map<string, string[]> {
+  return new Map(
+    requestedPlatforms.map((platform) => [
+      platform,
+      getRequestedPlatformTargets(platform, sparse, vars),
+    ])
+  );
+}
+
+export function collectRequestedPlatformTargets(
+  requestedPlatforms: string[],
+  sparse: object | string | undefined,
+  vars?: Record<string, string>
+): string[] {
+  return [...new Set(
+    requestedPlatforms.flatMap((platform) => getRequestedPlatformTargets(platform, sparse, vars))
+  )];
+}
+
 /**
  * 获取配置目录路径
  * - 支持 TANMI_DOCK_HOME 环境变量覆盖（用于测试和开发）

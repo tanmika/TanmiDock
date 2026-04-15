@@ -73,14 +73,18 @@ vi.mock('../../src/core/codepac.js', () => ({
   default: { download: vi.fn() },
   setProxyConfig: vi.fn(),
 }));
-vi.mock('../../src/core/platform.js', () => ({
-  resolvePath: vi.fn(),
-  getPlatformHelpText: vi.fn(),
-  GENERAL_PLATFORM: 'general',
-  SHARED_PLATFORM: '_shared',
-  pathsEqual: vi.fn(),
-  isSparseOnlyCommon: vi.fn(),
-}));
+vi.mock('../../src/core/platform.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/core/platform.js')>();
+  return {
+    ...actual,
+    resolvePath: vi.fn(),
+    getPlatformHelpText: vi.fn(),
+    GENERAL_PLATFORM: 'general',
+    SHARED_PLATFORM: '_shared',
+    pathsEqual: vi.fn(),
+    isSparseOnlyCommon: vi.fn(),
+  };
+});
 vi.mock('../../src/core/transaction.js', () => ({
   Transaction: vi.fn(),
 }));
@@ -385,6 +389,28 @@ describe('link helpers', () => {
   });
 
   describe('assessDownloadResult', () => {
+    it('should treat sparse mapped request as satisfied by actual platform directory', async () => {
+      const { assessDownloadResult } = await import('../../src/commands/link.js');
+
+      const result = assessDownloadResult(
+        ['wasm'],
+        { wasm: ['macOS'] },
+        {
+          tempDir: '/tmp/tanmi-dock-0',
+          libDir: '/tmp/tanmi-dock-0/libPixCook',
+          allPlatformDirs: ['macOS'],
+          platformDirs: ['macOS'],
+          sharedFiles: ['README.md'],
+          cleanedPlatforms: [],
+        }
+      );
+
+      expect(result.satisfiedRequested).toEqual(['wasm']);
+      expect(result.downloadedRequested).toEqual(['macOS']);
+      expect(result.unavailableRequested).toEqual([]);
+      expect(result.isPureGeneral).toBe(false);
+    });
+
     it('should not classify as General when only unrequested platforms were downloaded', async () => {
       const { assessDownloadResult } = await import('../../src/commands/link.js');
 

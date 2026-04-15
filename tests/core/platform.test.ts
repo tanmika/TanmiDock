@@ -15,6 +15,9 @@ import {
   isAbsolutePath,
   joinPath,
   isSparseOnlyCommon,
+  resolveSparseConfig,
+  getRequestedPlatformTargets,
+  collectRequestedPlatformTargets,
 } from '../../src/core/platform.js';
 
 describe('platform', () => {
@@ -173,6 +176,43 @@ describe('platform', () => {
       expect(isSparseOnlyCommon(undefined)).toBe(false);
       // @ts-expect-error - testing null case
       expect(isSparseOnlyCommon(null)).toBe(false);
+    });
+  });
+
+  describe('resolveSparseConfig', () => {
+    it('should parse string sparse config with vars', () => {
+      const sparse = '{"wasm":["${EM_LIB_PLATFORM}"],"common":["include"]}';
+      expect(resolveSparseConfig(sparse, { EM_LIB_PLATFORM: 'macOS' })).toEqual({
+        wasm: ['macOS'],
+        common: ['include'],
+      });
+    });
+
+    it('should return undefined when sparse string is invalid json', () => {
+      expect(resolveSparseConfig('{invalid}', { EM_LIB_PLATFORM: 'macOS' })).toBeUndefined();
+    });
+  });
+
+  describe('requested platform targets', () => {
+    it('should resolve sparse mapping to actual platform directories', () => {
+      expect(
+        getRequestedPlatformTargets('wasm', { wasm: ['macOS'] })
+      ).toEqual(['macOS']);
+    });
+
+    it('should fallback to requested platform when sparse target is not a platform directory', () => {
+      expect(
+        getRequestedPlatformTargets('wasm', { wasm: ['include', 'README.md'] })
+      ).toEqual(['wasm']);
+    });
+
+    it('should collect mapped actual platform directories without duplication', () => {
+      expect(
+        collectRequestedPlatformTargets(
+          ['wasm', 'macOS'],
+          { wasm: ['macOS'], macOS: ['macOS'] }
+        )
+      ).toEqual(['macOS']);
     });
   });
 });

@@ -710,6 +710,34 @@ describe('codepac', () => {
       expect(mockRm).toHaveBeenCalled();
     });
 
+    it('should retain mapped carrier platform directories for sparse requests', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'macOS-asan', isDirectory: () => true },
+        { name: 'README.md', isDirectory: () => false },
+      ]);
+
+      mockSpawn.mockReturnValue(createMockProcess(0));
+
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: 'abc123',
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['wasm'],
+        sparse: { wasm: ['macOS'] },
+      });
+
+      expect(result.allPlatformDirs).toEqual(['macOS', 'macOS-asan']);
+      expect(result.platformDirs).toEqual(['macOS']);
+      expect(result.cleanedPlatforms).toEqual(['macOS-asan']);
+      expect(result.sharedFiles).toEqual(['README.md']);
+    });
+
     it('should pass multiple platforms to codepac with -p flag', async () => {
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);

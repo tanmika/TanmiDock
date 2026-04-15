@@ -25,7 +25,16 @@ import type { NestedAbsorbInfo, AbsorbLocalResult } from '../core/store.js';
 import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { setProxyConfig } from '../core/codepac.js';
-import { resolvePath, getPlatformHelpText, GENERAL_PLATFORM, SHARED_PLATFORM, pathsEqual, isSparseOnlyCommon, KNOWN_PLATFORM_VALUES } from '../core/platform.js';
+import {
+  resolvePath,
+  getPlatformHelpText,
+  GENERAL_PLATFORM,
+  SHARED_PLATFORM,
+  pathsEqual,
+  isSparseOnlyCommon,
+  KNOWN_PLATFORM_VALUES,
+  getRequestedPlatformTargets,
+} from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
 import { getDirSize, getDirectoryIntegrity } from '../utils/fs-utils.js';
@@ -131,33 +140,136 @@ interface LinkScopeResult {
 
 interface DownloadAssessment {
   downloadedRequested: string[];
+  satisfiedRequested: string[];
   unavailableRequested: string[];
   hasAnyPlatformArtifacts: boolean;
   isPureGeneral: boolean;
 }
 
+function resolveRequestedPlatformsByActual(
+  requestedPlatforms: string[],
+  sparse: ParsedDependency['sparse'],
+  actualPlatforms: string[],
+  vars?: Record<string, string>
+): RequestedPlatformStoreState {
+  const actualExisting = [...new Set(actualPlatforms)];
+  const actualPlatformSet = new Set(actualExisting);
+  const satisfiedRequested = requestedPlatforms.filter((requestedPlatform) => {
+    const targets = getRequestedPlatformTargets(requestedPlatform, sparse, vars);
+    return targets.some((target) => actualPlatformSet.has(target));
+  });
+
+  return {
+    actualExisting,
+    satisfiedRequested,
+    missingRequested: requestedPlatforms.filter((platform) => !satisfiedRequested.includes(platform)),
+  };
+}
+
 export function assessDownloadResult(
   requestedPlatforms: string[],
   sparse: ParsedDependency['sparse'],
-  downloadResult: codepac.DownloadResult
+  downloadResult: codepac.DownloadResult,
+  vars?: Record<string, string>
 ): DownloadAssessment {
-  const downloadedRequested = downloadResult.platformDirs.filter((platform) =>
-    requestedPlatforms.includes(platform)
-  );
-  const unavailableRequested = requestedPlatforms.filter(
-    (platform) => !downloadedRequested.includes(platform)
-  );
+  const downloadedActual = new Set(downloadResult.platformDirs);
+  const {
+    satisfiedRequested,
+    missingRequested,
+  } = resolveRequestedPlatformsByActual(requestedPlatforms, sparse, downloadResult.platformDirs, vars);
+  const downloadedRequested = [...new Set(
+    satisfiedRequested.flatMap((requestedPlatform) =>
+      getRequestedPlatformTargets(requestedPlatform, sparse, vars)
+        .filter((target) => downloadedActual.has(target))
+    )
+  )];
+  const unavailableRequested = missingRequested;
   const hasAnyPlatformArtifacts = downloadResult.allPlatformDirs.length > 0;
-  const isPureGeneral =
+  const isPureGeneral = Boolean(
     (!sparse || isSparseOnlyCommon(sparse)) &&
-    !hasAnyPlatformArtifacts;
+    !hasAnyPlatformArtifacts
+  );
 
   return {
     downloadedRequested,
+    satisfiedRequested,
     unavailableRequested,
     hasAnyPlatformArtifacts,
     isPureGeneral,
   };
+}
+
+interface RequestedPlatformStoreState {
+  actualExisting: string[];
+  satisfiedRequested: string[];
+  missingRequested: string[];
+}
+
+async function resolveRequestedStoreState(
+  dependency: ParsedDependency,
+  requestedPlatforms: string[],
+  vars?: Record<string, string>
+): Promise<RequestedPlatformStoreState> {
+  const resolvedExisting: string[] = [];
+  const candidatePlatforms = [...new Set(
+    requestedPlatforms.flatMap((platform) =>
+      getRequestedPlatformTargets(platform, dependency.sparse, vars)
+    )
+  )];
+
+  for (const platform of candidatePlatforms) {
+    if (await store.exists(dependency.libName, dependency.commit, platform)) {
+      resolvedExisting.push(platform);
+    }
+  }
+
+  return resolveRequestedPlatformsByActual(
+    requestedPlatforms,
+    dependency.sparse,
+    resolvedExisting,
+    vars
+  );
+}
+
+function getBlockedRequestedPlatforms(
+  registry: ReturnType<typeof getRegistry>,
+  dependency: ParsedDependency,
+  requestedPlatforms: string[],
+  vars?: Record<string, string>
+): string[] {
+  const { manualPlatforms, autoPlatforms } = resolveUnavailablePlatforms(registry, dependency);
+  const manualBlocked = requestedPlatforms.filter((platform) => manualPlatforms.includes(platform));
+  const autoBlocked = requestedPlatforms.filter((platform) => {
+    if (!autoPlatforms.includes(platform)) return false;
+    const targets = getRequestedPlatformTargets(platform, dependency.sparse, vars);
+    return targets.length === 1 && targets[0] === platform;
+  });
+  return [...new Set([...manualBlocked, ...autoBlocked])];
+}
+
+function clearSatisfiedAutoUnavailablePlatforms(
+  registry: ReturnType<typeof getRegistry>,
+  dependency: ParsedDependency,
+  satisfiedRequested: string[]
+): void {
+  if (satisfiedRequested.length === 0) return;
+
+  const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+  const library = registry.getLibrary(libKey);
+  if (!library?.unavailablePlatforms || library.unavailablePlatforms.length === 0) return;
+
+  const nextUnavailable = library.unavailablePlatforms.filter(
+    (platform) => !satisfiedRequested.includes(platform)
+  );
+
+  if (nextUnavailable.length === library.unavailablePlatforms.length) {
+    return;
+  }
+
+  registry.updateLibrary(libKey, {
+    unavailablePlatforms: nextUnavailable,
+    lastAccess: new Date().toISOString(),
+  });
 }
 
 function upsertLibraryAvailability(
@@ -209,6 +321,109 @@ export async function resolveLibraryGeneralState(
   }
 
   return store.isGeneralLib(dependency.libName, dependency.commit);
+}
+
+interface UnavailableResolution {
+  platforms: string[];
+  manualPlatforms: string[];
+  autoPlatforms: string[];
+}
+
+export function resolveUnavailablePlatforms(
+  registry: ReturnType<typeof getRegistry>,
+  dependency: Pick<ParsedDependency, 'libName' | 'commit'>
+): UnavailableResolution {
+  const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
+  const autoPlatforms = registry.getLibrary(libKey)?.unavailablePlatforms || [];
+  const manualPlatforms = registry.getManualUnavailablePlatforms(dependency.libName, dependency.commit);
+  return {
+    platforms: [...new Set([...manualPlatforms, ...autoPlatforms])],
+    manualPlatforms,
+    autoPlatforms,
+  };
+}
+
+export interface ProjectDependencyCandidate {
+  libName: string;
+  commit: string;
+  branch: string;
+  url: string;
+  scope?: string;
+  source: 'direct' | 'nested' | 'submodule';
+}
+
+export async function collectProjectDependencyGraph(projectRoot: string): Promise<ProjectDependencyCandidate[]> {
+  const { normalizedPath, configPath } = await resolveProjectRootPath(projectRoot);
+  if (!configPath) {
+    throw new Error('只能在项目目录下使用');
+  }
+
+  const results: ProjectDependencyCandidate[] = [];
+  const seenDeps = new Set<string>();
+  const visitedConfigs = new Set<string>();
+  const queue: Array<{ configPath: string; scope?: string; source: 'direct' | 'nested' | 'submodule' }> = [
+    { configPath, source: 'direct' },
+  ];
+
+  const submodules = await findSubmoduleConfigs(normalizedPath);
+  for (const submodule of submodules) {
+    queue.push({ configPath: submodule.configPath, scope: submodule.relativePath, source: 'submodule' });
+  }
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (visitedConfigs.has(current.configPath)) continue;
+    visitedConfigs.add(current.configPath);
+
+    let parsedConfig;
+    try {
+      parsedConfig = await parseCodepacDep(current.configPath);
+    } catch {
+      continue;
+    }
+
+    for (const dependency of extractDependencies(parsedConfig)) {
+      const key = `${dependency.libName}:${dependency.commit}:${current.scope ?? ''}`;
+      if (!seenDeps.has(key)) {
+        seenDeps.add(key);
+        results.push({ ...dependency, scope: current.scope, source: current.source });
+      }
+    }
+
+    for (const action of extractActions(parsedConfig)) {
+      let parsedAction;
+      try {
+        parsedAction = parseActionCommand(action.command);
+      } catch {
+        continue;
+      }
+
+      const nestedConfigPath = path.resolve(
+        path.dirname(current.configPath),
+        parsedAction.configDir,
+        'codepac-dep.json'
+      );
+
+      let nested;
+      try {
+        nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries);
+      } catch {
+        continue;
+      }
+
+      for (const dependency of nested.dependencies) {
+        const key = `${dependency.libName}:${dependency.commit}:${current.scope ?? ''}`;
+        if (!seenDeps.has(key)) {
+          seenDeps.add(key);
+          results.push({ ...dependency, scope: current.scope, source: 'nested' });
+        }
+      }
+
+      queue.push({ configPath: nestedConfigPath, scope: current.scope, source: 'nested' });
+    }
+  }
+
+  return results;
 }
 
 // ============ SubmoduleConfig 扩展（带选择的可选配置） ============
@@ -323,7 +538,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
   // 2. 分类依赖
   const scopePath = path.dirname(path.dirname(configPath));
-  const classified = await classifyDependencies(dependencies, scopePath, configPath, platforms);
+  const classified = await classifyDependencies(dependencies, scopePath, configPath, platforms, configVars);
 
   const stats = {
     linked: 0, relink: 0, replace: 0, absorb: 0, missing: 0, linkNew: 0,
@@ -413,13 +628,23 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
     const needDownloadItems: Array<{ libName: string; commit: string; reason: string }> = [];
     for (const item of classified) {
       const { dependency, status } = item;
+      const blockedPlatforms = getBlockedRequestedPlatforms(registry, dependency, platforms, configVars);
+      const requestedPlatforms = platforms.filter(
+        (platform) => !blockedPlatforms.includes(platform)
+      );
       if (status === DependencyStatus.MISSING) {
-        needDownloadItems.push({
-          libName: dependency.libName, commit: dependency.commit, reason: '缺失',
-        });
+        if (requestedPlatforms.length > 0) {
+          const { missingRequested } = await resolveRequestedStoreState(dependency, requestedPlatforms, configVars);
+          if (missingRequested.length === 0) {
+            continue;
+          }
+          needDownloadItems.push({
+            libName: dependency.libName, commit: dependency.commit, reason: '缺失',
+          });
+        }
       } else if (status === DependencyStatus.ABSORB) {
-        const { missing } = await store.checkPlatformCompleteness(
-          dependency.libName, dependency.commit, platforms
+        const { missingRequested: missing } = await resolveRequestedStoreState(
+          dependency, requestedPlatforms, configVars
         );
         if (missing.length > 0) {
           needDownloadItems.push({
@@ -428,8 +653,8 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           });
         }
       } else if (status === DependencyStatus.LINK_NEW) {
-        const { missing } = await store.checkPlatformCompleteness(
-          dependency.libName, dependency.commit, platforms
+        const { missingRequested: missing } = await resolveRequestedStoreState(
+          dependency, requestedPlatforms, configVars
         );
         if (missing.length > 0) {
           needDownloadItems.push({
@@ -478,6 +703,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
       switch (status) {
         case DependencyStatus.LINKED: {
+          const blockedPlatforms = getBlockedRequestedPlatforms(registry, dependency, platforms, configVars);
+          const requestedPlatforms = platforms.filter(
+            (platform) => !blockedPlatforms.includes(platform)
+          );
           const isLinkedGeneral = await resolveLibraryGeneralState(dependency);
           if (!isLinkedGeneral) {
             const supplementResult = await supplementMissingPlatforms(
@@ -487,9 +716,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
             if (supplementResult.downloaded.length > 0) {
               const linkedCommitPath = path.join(storePath, dependency.libName, dependency.commit);
-              const { existing: allExisting } = await store.checkPlatformCompleteness(
-                dependency.libName, dependency.commit, platforms
+              const { actualExisting: allExisting, satisfiedRequested } = await resolveRequestedStoreState(
+                dependency, requestedPlatforms, configVars
               );
+              clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
               tx.recordOp('link', localPath, linkedCommitPath);
               await linker.linkLib(localPath, linkedCommitPath, allExisting);
               await ensureLinkedRegistryState(
@@ -504,12 +734,16 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 已补充平台 [${supplementResult.downloaded.join(', ')}]`);
             }
           }
+          const { actualExisting: linkedExisting, satisfiedRequested } = await resolveRequestedStoreState(
+            dependency, requestedPlatforms, configVars
+          );
+          clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
           await ensureLinkedRegistryState(
             dependency.libName,
             dependency.commit,
             dependency.branch,
             dependency.url,
-            isLinkedGeneral ? [GENERAL_PLATFORM] : platforms,
+            isLinkedGeneral ? [GENERAL_PLATFORM] : linkedExisting,
             projectHash,
             isLinkedGeneral
           );
@@ -517,6 +751,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
         }
 
         case DependencyStatus.RELINK: {
+          const blockedPlatforms = getBlockedRequestedPlatforms(registry, dependency, platforms, configVars);
+          const requestedPlatforms = platforms.filter(
+            (platform) => !blockedPlatforms.includes(platform)
+          );
           const relinkCommitPath = path.join(storePath, dependency.libName, dependency.commit);
           const isRelinkGeneral = await resolveLibraryGeneralState(dependency);
 
@@ -543,9 +781,11 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             );
             await registerNestedLibraries(relinkSupplementResult.nestedLibraries, projectHash);
 
-            const { existing: relinkExisting } = await store.checkPlatformCompleteness(
-              dependency.libName, dependency.commit, platforms
-            );
+            const {
+              actualExisting: relinkExisting,
+              satisfiedRequested,
+            } = await resolveRequestedStoreState(dependency, requestedPlatforms, configVars);
+            clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
 
             if (relinkExisting.length === 0) {
               const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
@@ -553,13 +793,19 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               const relinkAvailablePlatforms = relinkCommitEntries
                 .filter(e => e.isDirectory() && e.name !== '_shared' && KNOWN_PLATFORM_VALUES.includes(e.name))
                 .map(e => e.name);
-              warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 不支持 ${platforms.join('/')} 平台 [可用: ${relinkAvailablePlatforms.join(', ')}]`);
+              warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 已按规则跳过平台 [${platforms.join('/')}], 可用平台 [${relinkAvailablePlatforms.join(', ')}]`);
               const relinkLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
               const relinkLib = registry.getLibrary(relinkLibKey);
               if (relinkLib) {
                 const unavailable = relinkLib.unavailablePlatforms || [];
-                for (const p of platforms) {
-                  if (!unavailable.includes(p) && !relinkAvailablePlatforms.includes(p)) unavailable.push(p);
+                const missingRequested = resolveRequestedPlatformsByActual(
+                  requestedPlatforms,
+                  dependency.sparse,
+                  relinkAvailablePlatforms,
+                  configVars
+                ).missingRequested;
+                for (const requestedPlatform of missingRequested) {
+                  if (!unavailable.includes(requestedPlatform)) unavailable.push(requestedPlatform);
                 }
                 registry.updateLibrary(relinkLibKey, { unavailablePlatforms: unavailable });
               }
@@ -590,6 +836,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
         }
 
         case DependencyStatus.REPLACE: {
+          const blockedPlatforms = getBlockedRequestedPlatforms(registry, dependency, platforms, configVars);
+          const requestedPlatforms = platforms.filter(
+            (platform) => !blockedPlatforms.includes(platform)
+          );
           const replaceSize = await getDirSize(localPath);
           const replaceCommitPath = path.join(storePath, dependency.libName, dependency.commit);
           const isReplaceGeneral = await resolveLibraryGeneralState(dependency);
@@ -616,9 +866,11 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             );
             await registerNestedLibraries(replaceSupplementResult.nestedLibraries, projectHash);
 
-            const { existing: replaceExisting } = await store.checkPlatformCompleteness(
-              dependency.libName, dependency.commit, platforms
-            );
+            const {
+              actualExisting: replaceExisting,
+              satisfiedRequested,
+            } = await resolveRequestedStoreState(dependency, requestedPlatforms, configVars);
+            clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
 
             if (replaceExisting.length === 0) {
               const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
@@ -626,13 +878,19 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               const replaceAvailablePlatforms = replaceCommitEntries
                 .filter(e => e.isDirectory() && e.name !== '_shared' && KNOWN_PLATFORM_VALUES.includes(e.name))
                 .map(e => e.name);
-              warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 不支持 ${platforms.join('/')} 平台 [可用: ${replaceAvailablePlatforms.join(', ')}]`);
+              warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 已按规则跳过平台 [${platforms.join('/')}], 可用平台 [${replaceAvailablePlatforms.join(', ')}]`);
               const replaceLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
               const replaceLib = registry.getLibrary(replaceLibKey);
               if (replaceLib) {
                 const unavailable = replaceLib.unavailablePlatforms || [];
-                for (const p of platforms) {
-                  if (!unavailable.includes(p) && !replaceAvailablePlatforms.includes(p)) unavailable.push(p);
+                const missingRequested = resolveRequestedPlatformsByActual(
+                  requestedPlatforms,
+                  dependency.sparse,
+                  replaceAvailablePlatforms,
+                  configVars
+                ).missingRequested;
+                for (const requestedPlatform of missingRequested) {
+                  if (!unavailable.includes(requestedPlatform)) unavailable.push(requestedPlatform);
                 }
                 registry.updateLibrary(replaceLibKey, { unavailablePlatforms: unavailable });
               }
@@ -662,6 +920,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
         }
 
         case DependencyStatus.ABSORB: {
+          const blockedPlatforms = getBlockedRequestedPlatforms(registry, dependency, platforms, configVars);
+          const requestedPlatforms = platforms.filter(
+            (platform) => !blockedPlatforms.includes(platform)
+          );
           const storeCommitPath = path.join(storePath, dependency.libName, dependency.commit);
           const { KNOWN_PLATFORM_VALUES } = await import('../core/platform.js');
           const localDirEntries = await fs.readdir(localPath, { withFileTypes: true });
@@ -669,16 +931,29 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             .filter(entry => entry.isDirectory() && KNOWN_PLATFORM_VALUES.includes(entry.name))
             .map(entry => entry.name);
 
-          const finalPlatforms = localPlatforms.filter(p => finalLinkPlatforms.includes(p));
+          const requestedTargets = [...new Set(
+            requestedPlatforms.flatMap((platform) =>
+              getRequestedPlatformTargets(platform, dependency.sparse, configVars)
+            )
+          )];
+          const finalPlatforms = localPlatforms.filter(
+            (platform) => requestedTargets.includes(platform)
+          );
 
           if (finalPlatforms.length === 0 && localPlatforms.length > 0) {
-            warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 不支持 ${platforms.join('/')} 平台 [本地有: ${localPlatforms.join(', ')}]`);
+            warn(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 已按规则跳过平台 [${platforms.join('/')}], 本地有 [${localPlatforms.join(', ')}]`);
             const absorbLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
             const absorbLib = registry.getLibrary(absorbLibKey);
             if (absorbLib) {
               const unavailable = absorbLib.unavailablePlatforms || [];
-              for (const p of platforms) {
-                if (!unavailable.includes(p) && !localPlatforms.includes(p)) unavailable.push(p);
+              const missingRequested = resolveRequestedPlatformsByActual(
+                requestedPlatforms,
+                dependency.sparse,
+                localPlatforms,
+                configVars
+              ).missingRequested;
+              for (const requestedPlatform of missingRequested) {
+                if (!unavailable.includes(requestedPlatform)) unavailable.push(requestedPlatform);
               }
               registry.updateLibrary(absorbLibKey, { unavailablePlatforms: unavailable });
             }
@@ -802,8 +1077,12 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
         case DependencyStatus.LINK_NEW: {
           const linkNewCommitPath = path.join(storePath, dependency.libName, dependency.commit);
-          const { missing } = await store.checkPlatformCompleteness(
-            dependency.libName, dependency.commit, platforms
+          const blockedPlatforms = getBlockedRequestedPlatforms(registry, dependency, platforms, configVars);
+          const requestedPlatforms = platforms.filter(
+            (platform) => !blockedPlatforms.includes(platform)
+          );
+          const { missingRequested: missing } = await resolveRequestedStoreState(
+            dependency, requestedPlatforms, configVars
           );
 
           const linkNewLibId = `${dependency.libName}@${dependency.commit}`;
@@ -833,7 +1112,14 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             }
 
             try {
-              const filteredDownloaded = downloadResult.platformDirs.filter(p => missing.includes(p));
+              const assessment = assessDownloadResult(
+                missing,
+                dependency.sparse,
+                downloadResult,
+                configVars
+              );
+              clearSatisfiedAutoUnavailablePlatforms(registry, dependency, assessment.satisfiedRequested);
+              const filteredDownloaded = assessment.downloadedRequested;
               if (filteredDownloaded.length > 0) {
                 tx.recordOp('absorb', linkNewCommitPath, downloadResult.libDir);
                 const linkNewAbsorbResult = await store.absorbLib(
@@ -846,9 +1132,11 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             }
           }
 
-          const { existing: linkNewExisting } = await store.checkPlatformCompleteness(
-            dependency.libName, dependency.commit, platforms
-          );
+          const {
+            actualExisting: linkNewExisting,
+            satisfiedRequested,
+          } = await resolveRequestedStoreState(dependency, requestedPlatforms, configVars);
+          clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
           const isLinkNewGeneral = await resolveLibraryGeneralState(dependency);
 
           if (isLinkNewGeneral) {
@@ -877,8 +1165,14 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             const lnLib = registry.getLibrary(lnLibKey);
             if (lnLib) {
               const unavailable = lnLib.unavailablePlatforms || [];
-              for (const p of platforms) {
-                if (!unavailable.includes(p) && !availablePlatforms.includes(p)) unavailable.push(p);
+              const missingRequested = resolveRequestedPlatformsByActual(
+                requestedPlatforms,
+                dependency.sparse,
+                availablePlatforms,
+                configVars
+              ).missingRequested;
+              for (const requestedPlatform of missingRequested) {
+                if (!unavailable.includes(requestedPlatform)) unavailable.push(requestedPlatform);
               }
               registry.updateLibrary(lnLibKey, { unavailablePlatforms: unavailable });
             }
@@ -902,7 +1196,12 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
       }
 
       // 无论当前是跳过、补平台还是重建链接，都要把本地残留的平台目录清理到最终平台集合
-      await linker.cleanupLocalExtraPlatforms(localPath, finalLinkPlatforms);
+      const desiredLocalPlatforms = await resolveStoredPlatforms(
+        dependency.libName,
+        dependency.commit,
+        finalLinkPlatforms
+      );
+      await linker.cleanupLocalExtraPlatforms(localPath, desiredLocalPlatforms);
       await tx.save();
     }
 
@@ -936,36 +1235,43 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
             try {
               const storeCommitPath = path.join(storePath, dependency.libName, dependency.commit);
-              const { existing, missing } = await store.checkPlatformCompleteness(
-                dependency.libName, dependency.commit, platforms
+              const blockedPlatforms = getBlockedRequestedPlatforms(registry, dependency, platforms, configVars);
+              const requestedPlatforms = platforms.filter(
+                (platform) => !blockedPlatforms.includes(platform)
               );
+              const {
+                actualExisting: existing,
+                missingRequested: missing,
+                satisfiedRequested,
+              } = await resolveRequestedStoreState(dependency, requestedPlatforms, configVars);
+              clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
 
               if (missing.length === 0) {
                 pLog.info(`${dependency.libName} 所有平台已存在，直接链接...`);
                 tx.recordOp('link', localPath, storeCommitPath);
-                await linker.linkLib(localPath, storeCommitPath, platforms);
+                await linker.linkLib(localPath, storeCommitPath, existing);
                 await ensureLinkedRegistryState(
                   dependency.libName,
                   dependency.commit,
                   dependency.branch,
                   dependency.url,
-                  platforms,
+                  existing,
                   projectHash,
                   false
                 );
-                pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 链接完成 [${platforms.join(', ')}]`);
-                return { success: true, name: dependency.libName, downloadedPlatforms: platforms, skippedPlatforms: [] };
+                pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 链接完成 [${existing.join(', ')}]`);
+                return { success: true, name: dependency.libName, downloadedPlatforms: existing, skippedPlatforms: [] };
               }
 
               const dlLibKey = registry.getLibraryKey(dependency.libName, dependency.commit);
               const historyLib = registry.getLibrary(dlLibKey);
-              const unavailablePlatforms = historyLib?.unavailablePlatforms || [];
+              const unavailablePlatforms = blockedPlatforms;
               const dlToDownload = missing.filter(p => !unavailablePlatforms.includes(p));
               const knownUnavailable = missing.filter(p => unavailablePlatforms.includes(p));
 
               if (dlToDownload.length === 0) {
                 if (knownUnavailable.length > 0) {
-                  pLog.warn(`${dependency.libName} 平台 [${knownUnavailable.join(', ')}] 不支持（远程不存在）`);
+                  pLog.warn(`${dependency.libName} 平台 [${knownUnavailable.join(', ')}] 已按规则跳过`);
                 }
                 return { success: false, name: dependency.libName, skipped: true, skippedPlatforms: missing, unsupported: true };
               }
@@ -999,8 +1305,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                 const assessment = assessDownloadResult(
                   dlToDownload,
                   dependency.sparse,
-                  downloadResult
+                  downloadResult,
+                  configVars
                 );
+                clearSatisfiedAutoUnavailablePlatforms(registry, dependency, assessment.satisfiedRequested);
 
                 if (assessment.isPureGeneral) {
                   upsertLibraryAvailability(dependency, {
@@ -1047,7 +1355,12 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
                 const linkPlatforms = [...existing, ...filteredDownloaded];
                 if (linkPlatforms.length === 0) {
-                  return { success: false, name: dependency.libName, skipped: true, skippedPlatforms: platforms };
+                  return {
+                    success: false,
+                    name: dependency.libName,
+                    skipped: true,
+                    skippedPlatforms: requestedPlatforms,
+                  };
                 }
 
                 tx.recordOp('link', localPath, storeCommitPath);
@@ -1062,7 +1375,12 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                   false
                 );
 
-                const notLinkedPlatforms = platforms.filter((p) => !linkPlatforms.includes(p));
+                const notLinkedPlatforms = resolveRequestedPlatformsByActual(
+                  requestedPlatforms,
+                  dependency.sparse,
+                  linkPlatforms,
+                  configVars
+                ).missingRequested;
                 pLog.success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - 下载完成 [${linkPlatforms.join(', ')}]`);
                 return { success: true, name: dependency.libName, downloadedPlatforms: linkPlatforms, skippedPlatforms: notLinkedPlatforms };
               } finally {
@@ -1135,19 +1453,24 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
     await syncCacheFile(configPath);
 
     // 11. 构建返回结果
-    const primaryPlatform = platforms[0];
-    const linkedDeps = classified
-      .filter((c) => {
-        if (c.status === DependencyStatus.MISSING) return downloadedLibs.includes(c.dependency.libName);
-        return true;
-      })
-      .map((c) => ({
-        libName: c.dependency.libName,
-        commit: c.dependency.commit,
-        platform: generalLibs.has(c.dependency.libName) ? GENERAL_PLATFORM : primaryPlatform,
-        linkedPath: path.relative(projectRoot, c.localPath),
+    const linkedDeps: LinkScopeResult['linkedDeps'] = [];
+    for (const item of classified) {
+      if (item.status === DependencyStatus.MISSING && !downloadedLibs.includes(item.dependency.libName)) {
+        continue;
+      }
+
+      const actualPlatforms = generalLibs.has(item.dependency.libName)
+        ? [GENERAL_PLATFORM]
+        : await resolveStoredPlatforms(item.dependency.libName, item.dependency.commit, platforms);
+
+      linkedDeps.push({
+        libName: item.dependency.libName,
+        commit: item.dependency.commit,
+        platform: actualPlatforms[0] ?? platforms[0],
+        linkedPath: path.relative(projectRoot, item.localPath),
         scope,
-      }));
+      });
+    }
 
     return {
       linkedDeps, nestedLinkedDeps, generalLibs, downloadedLibs, savedBytes, finalLinkPlatforms, stats,
@@ -1932,7 +2255,8 @@ async function classifyDependencies(
   dependencies: ParsedDependency[],
   projectPath: string,
   configPath: string,
-  platforms: string[]
+  platforms: string[],
+  vars?: Record<string, string>
 ): Promise<ClassifiedDependency[]> {
   const result: ClassifiedDependency[] = [];
   const thirdPartyDir = path.dirname(configPath);
@@ -1945,9 +2269,16 @@ async function classifyDependencies(
   for (const dep of dependencies) {
     const localPath = path.join(thirdPartyDir, dep.libName);
     const storeLibPath = store.getLibraryPath(storePath, dep.libName, dep.commit, primaryPlatform);
+    const blockedPlatforms = getBlockedRequestedPlatforms(getRegistry(), dep, platforms, vars);
+    const requestedPlatforms = platforms.filter(
+      (platform) => !blockedPlatforms.includes(platform)
+    );
 
-    // 检查 Store 中是否有任意请求的平台（而非只检查主平台）
-    const { existing: rawExisting } = await store.checkPlatformCompleteness(dep.libName, dep.commit, platforms);
+    // 检查 Store 中是否有任意请求的平台（支持 sparse 承载目录）
+    const {
+      actualExisting: rawExisting,
+      satisfiedRequested,
+    } = await resolveRequestedStoreState(dep, requestedPlatforms, vars);
 
     // 完整性校验：验证 existing 平台的文件完整性
     const { valid: verifiedExisting, corrupted } = await verifyExistingPlatforms(dep.libName, dep.commit, rawExisting);
@@ -1967,6 +2298,10 @@ async function classifyDependencies(
     // 也检查是否为 General 库（有 _shared 且有内容）
     const isGeneral = await resolveLibraryGeneralState(dep);
     const inStore = existing.length > 0 || isGeneral;
+
+    if (satisfiedRequested.length > 0) {
+      clearSatisfiedAutoUnavailablePlatforms(getRegistry(), dep, satisfiedRequested);
+    }
 
     // 用于非 inStore 情况的本地路径状态检查
     const expectedTarget = isGeneral
@@ -2071,22 +2406,26 @@ async function supplementMissingPlatforms(
   options: SupplementOptions = {}
 ): Promise<SupplementResult> {
   const result: SupplementResult = { downloaded: [], unavailable: [], nestedLibraries: [] };
-
-  // 1. 检查平台完整性
-  const { missing } = await store.checkPlatformCompleteness(
-    dependency.libName,
-    dependency.commit,
-    platforms
+  const blockedPlatforms = getBlockedRequestedPlatforms(registry, dependency, platforms, options.vars);
+  const requestedPlatforms = platforms.filter(
+    (platform) => !blockedPlatforms.includes(platform)
   );
 
+  // 1. 检查平台完整性
+  const { missingRequested, satisfiedRequested } = await resolveRequestedStoreState(
+    dependency,
+    requestedPlatforms,
+    options.vars
+  );
+  const missing = missingRequested;
+
   if (missing.length === 0) {
+    clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
     return result;
   }
 
   // 2. 获取已知不可用平台
-  const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
-  const libInfo = registry.getLibrary(libKey);
-  const unavailablePlatforms = libInfo?.unavailablePlatforms || [];
+  const unavailablePlatforms = blockedPlatforms;
 
   // 3. 计算需要下载的平台（排除已知不可用的，除非强制下载）
   const toDownload = options.forceDownload
@@ -2096,7 +2435,7 @@ async function supplementMissingPlatforms(
   if (toDownload.length === 0) {
     // 所有缺失平台都是已知不可用的
     if (missing.length > 0) {
-      hint(`${dependency.libName} 平台 [${missing.join(', ')}] 远程不存在（已记录）`);
+      hint(`${dependency.libName} 平台 [${missing.join(', ')}] 已按规则跳过`);
     }
     result.unavailable = missing.filter((p) => unavailablePlatforms.includes(p));
     return result;
@@ -2126,10 +2465,13 @@ async function supplementMissingPlatforms(
       const assessment = assessDownloadResult(
         toDownload,
         dependency.sparse,
-        downloadResult
+        downloadResult,
+        options.vars
       );
       const downloaded = assessment.downloadedRequested;
       result.downloaded = downloaded;
+
+      clearSatisfiedAutoUnavailablePlatforms(registry, dependency, assessment.satisfiedRequested);
 
       // 6. 记录新发现的不可用平台
       const notFound = assessment.unavailableRequested;
@@ -2498,7 +2840,6 @@ async function linkNestedDependencies(
   const nestedTargetDir = path.join(thirdPartyDir, targetDir);
   const { tx, registry, projectHash, projectRoot, dryRun, download, generalLibs, downloadedLibs, nestedLinkedDeps } = options;
   const { platforms, vars } = context;
-  const primaryPlatform = platforms[0];
 
   for (const dep of dependencies) {
     const localPath = path.join(nestedTargetDir, dep.libName);
@@ -2519,7 +2860,7 @@ async function linkNestedDependencies(
     // 检查 Store 状态和历史记录
     const libKey = registry.getLibraryKey(dep.libName, dep.commit);
     const historyLib = registry.getLibrary(libKey);
-    const unavailablePlatforms = historyLib?.unavailablePlatforms || [];
+    const unavailablePlatforms = getBlockedRequestedPlatforms(registry, dep, platforms, vars);
 
     // 过滤掉已知不可用的平台
     const availablePlatforms = platforms.filter(p => !unavailablePlatforms.includes(p));
@@ -2527,12 +2868,12 @@ async function linkNestedDependencies(
 
     let storeHas = false;
     const existingPlatforms: string[] = [];
-    for (const p of availablePlatforms) {
-      if (await store.exists(dep.libName, dep.commit, p)) {
-        existingPlatforms.push(p);
-        storeHas = true;
-      }
+    const initialStoreState = await resolveRequestedStoreState(dep, availablePlatforms, vars);
+    existingPlatforms.push(...initialStoreState.actualExisting);
+    if (initialStoreState.satisfiedRequested.length > 0) {
+      clearSatisfiedAutoUnavailablePlatforms(registry, dep, initialStoreState.satisfiedRequested);
     }
+    storeHas = existingPlatforms.length > 0;
 
     // 完整性校验：验证 existing 平台的文件完整性（与 classifyDependencies 同逻辑）
     if (existingPlatforms.length > 0) {
@@ -2556,7 +2897,7 @@ async function linkNestedDependencies(
 
     // 如果所有平台都已知不可用，跳过
     if (availablePlatforms.length === 0 && knownUnavailable.length > 0 && !isGeneral) {
-      warn(`${indent}  ${dep.libName} - 平台 [${knownUnavailable.join(', ')}] 不支持（远程不存在）`);
+      warn(`${indent}  ${dep.libName} - 平台 [${knownUnavailable.join(', ')}] 已按规则跳过`);
       continue;
     }
 
@@ -2598,19 +2939,27 @@ async function linkNestedDependencies(
                 vars,
               });
 
-              if (downloadResult.platformDirs.length > 0) {
+              const assessment = assessDownloadResult(
+                availablePlatforms,
+                dep.sparse,
+                downloadResult,
+                vars
+              );
+              clearSatisfiedAutoUnavailablePlatforms(registry, dep, assessment.satisfiedRequested);
+
+              if (assessment.downloadedRequested.length > 0) {
                 // 有平台内容 → 吸收平台目录，重新分类为平台库
                 tx.recordOp('absorb', storeCommitPath, downloadResult.libDir);
                 const nestedAbsorbResult = await store.absorbLib(
                   downloadResult.libDir,
-                  downloadResult.platformDirs,
+                  assessment.downloadedRequested,
                   dep.libName,
                   dep.commit
                 );
                 await registerNestedLibraries(nestedAbsorbResult.nestedLibraries, projectHash);
-                existingPlatforms.push(...downloadResult.platformDirs);
+                existingPlatforms.push(...assessment.downloadedRequested);
                 isGeneral = false;
-                info(`${indent}  ${dep.libName} - 补充平台内容 [${downloadResult.platformDirs.join(', ')}]`);
+                info(`${indent}  ${dep.libName} - 补充平台内容 [${assessment.downloadedRequested.join(', ')}]`);
               }
               if (downloadResult.cleanedPlatforms.length > 0) {
                 hint(`${indent}  已过滤: ${downloadResult.cleanedPlatforms.join(', ')}`);
@@ -2687,7 +3036,7 @@ async function linkNestedDependencies(
         nestedLinkedDeps.push({
           libName: dep.libName,
           commit: dep.commit,
-          platform: isGeneral ? GENERAL_PLATFORM : primaryPlatform,
+          platform: isGeneral ? GENERAL_PLATFORM : (linkedPlatforms[0] ?? availablePlatforms[0]),
           linkedPath: path.relative(projectRoot, localPath),
         });
 
@@ -2779,7 +3128,7 @@ async function linkNestedDependencies(
         nestedLinkedDeps.push({
           libName: dep.libName,
           commit: dep.commit,
-          platform: primaryPlatform,
+          platform: allPlatforms[0],
           linkedPath: path.relative(projectRoot, localPath),
         });
         success(`${indent}  ${dep.libName} - 链接完成 [${allPlatforms.join(', ')}]`);
@@ -2827,8 +3176,10 @@ async function linkNestedDependencies(
         const assessment = assessDownloadResult(
           availablePlatforms,
           dep.sparse,
-          downloadResult
+          downloadResult,
+          vars
         );
+        clearSatisfiedAutoUnavailablePlatforms(registry, dep, assessment.satisfiedRequested);
 
         if (assessment.isPureGeneral) {
           // General 库处理
@@ -2888,7 +3239,7 @@ async function linkNestedDependencies(
           nestedLinkedDeps.push({
             libName: dep.libName,
             commit: dep.commit,
-            platform: primaryPlatform,
+            platform: assessment.downloadedRequested[0],
             linkedPath: path.relative(projectRoot, localPath),
           });
 

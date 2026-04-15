@@ -7,7 +7,12 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import os from 'os';
-import { isPlatformDir, normalizePlatformValue, getBaseKeyForCodepac } from './platform.js';
+import {
+  isPlatformDir,
+  normalizePlatformValue,
+  getBaseKeyForCodepac,
+  collectRequestedPlatformTargets,
+} from './platform.js';
 import type { ProxyConfig } from '../types/index.js';
 import * as logger from '../utils/logger.js';
 
@@ -346,7 +351,7 @@ export interface DownloadResult {
   libDir: string;
   /** codepac 实际下载到的全部平台目录（清理前） */
   allPlatformDirs: string[];
-  /** 实际保留的平台目录名（用户请求的） */
+  /** 实际保留的平台目录名（满足请求的平台承载目录） */
   platformDirs: string[];
   /** 共享文件列表 */
   sharedFiles: string[];
@@ -446,13 +451,13 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
 
     // 后处理：清理用户未请求的平台目录
     // 例如用户只请求 macOS，但 codepac 下载了 macOS 和 macOS-asan
-    const requestedSet = new Set(platforms);
+    const requestedTargets = new Set(collectRequestedPlatformTargets(platforms, sparse, vars));
     const platformDirs: string[] = [];
     const cleanedPlatforms: string[] = [];
 
     for (const platform of downloadedPlatforms) {
-      if (requestedSet.has(platform)) {
-        // 用户请求的平台，保留
+      if (requestedTargets.has(platform)) {
+        // 请求平台直接命中，或通过 sparse 映射命中承载目录时保留
         platformDirs.push(platform);
       } else {
         // 用户未请求的平台，删除
