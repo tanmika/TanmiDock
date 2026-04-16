@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-04-16
+
+### Fixed
+
+- **修复 sparse 平台承载映射语义**:
+  - `td link` 现在能正确处理 `sparse: { "wasm": ["macOS"] }` 这类配置
+  - 请求平台与真实承载目录分离处理，Store 命中、下载结果判定、链接与清理逻辑保持一致
+  - Store 已有承载目录时，请求平台不会重复下载，也不会再误报 `skipped` 或 `unavailable`
+- **修复映射平台在真实项目中的链接行为**:
+  - `PixWeb-PresetUtils` 这类 wasm 链路消费 `libPixCook/macOS/include` 的项目，`td link -p wasm` 现在会稳定生成 `macOS` 链接
+  - 项目依赖记录与 Store 记录统一保存真实平台目录，避免后续 `status`、`check`、`clean` 出现语义漂移
+
+## [0.9.2] - 2026-04-15
+
+### Added
+
+- **新增 `td unavailable` 平台缺失规则管理命令**:
+  - `td unavailable add` 支持交互式为库或指定 commit 登记手动平台缺失规则
+  - `td unavailable remove` 支持交互式移除已登记的平台缺失规则
+  - `td unavailable list` 支持查看当前项目命中的手动规则
+- **新增搜索式单选交互组件**:
+  - 交互式选择库时支持输入字符快速筛选，便于在依赖较多的项目中定位目标库
+
+### Changed
+
+- **扩展 Registry 手动规则存储**:
+  - Registry 新增 `manualUnavailablePlatforms` 字段
+  - 支持按库名或按 `lib@commit` 两种粒度读取和维护规则
+- **扩展 `td status` 手动规则展示**:
+  - 当前项目命中的手动平台缺失规则会显示在终端输出中
+  - `td status --json` 新增 `manualUnavailableRules` 字段
+
 ## [0.9.1] - 2026-03-30
 
 ### Added
@@ -387,7 +419,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform support (macOS and Windows)
 - codepac integration for dependency download
 
-[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/tanmika/TanmiDock/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/tanmika/TanmiDock/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/tanmika/TanmiDock/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/tanmika/TanmiDock/compare/v0.8.3...v0.9.0
 [0.8.3]: https://github.com/tanmika/TanmiDock/compare/v0.8.2...v0.8.3
