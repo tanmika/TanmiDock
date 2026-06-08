@@ -26,7 +26,6 @@ import * as linker from '../core/linker.js';
 import * as codepac from '../core/codepac.js';
 import { setProxyConfig } from '../core/codepac.js';
 import {
-  resolvePath,
   getPlatformHelpText,
   GENERAL_PLATFORM,
   SHARED_PLATFORM,
@@ -34,10 +33,11 @@ import {
   isSparseOnlyCommon,
   KNOWN_PLATFORM_VALUES,
   getRequestedPlatformTargets,
+  resolveSparseConfig,
 } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
-import { getDirSize, getDirectoryIntegrity } from '../utils/fs-utils.js';
+import { getDirSize } from '../utils/fs-utils.js';
 import { ProgressTracker, DownloadMonitor, MultiBarManager } from '../utils/progress.js';
 import { success, warn, error, info, hint, blank, separator, debug } from '../utils/logger.js';
 import { verifyLocalCommit, findSubmoduleConfigs } from '../utils/git.js';
@@ -45,8 +45,8 @@ import type { SubmoduleConfig } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
 import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext, StoreEntry } from '../types/index.js';
 import { withGlobalLock } from '../utils/global-lock.js';
-import { confirmAction, selectPlatforms, parsePlatformArgs, selectOption, selectOptionalConfigs, PROMPT_CANCELLED } from '../utils/prompt.js';
-import type { OptionalConfig, SelectOptionalConfigsOptions } from '../utils/prompt.js';
+import { selectPlatforms, parsePlatformArgs, selectOption, selectOptionalConfigs, PROMPT_CANCELLED } from '../utils/prompt.js';
+import type { SelectOptionalConfigsOptions } from '../utils/prompt.js';
 import pLimit from 'p-limit';
 import { EXIT_CODES } from '../utils/exit-codes.js';
 
@@ -207,7 +207,7 @@ interface RequestedPlatformStoreState {
 }
 
 async function resolveRequestedStoreState(
-  dependency: ParsedDependency,
+  dependency: Pick<ParsedDependency, 'libName' | 'commit' | 'sparse'>,
   requestedPlatforms: string[],
   vars?: Record<string, string>
 ): Promise<RequestedPlatformStoreState> {
@@ -221,6 +221,15 @@ async function resolveRequestedStoreState(
   for (const platform of candidatePlatforms) {
     if (await store.exists(dependency.libName, dependency.commit, platform)) {
       resolvedExisting.push(platform);
+    } else {
+      const registry = getRegistry();
+      const storeKey = registry.getStoreKey(dependency.libName, dependency.commit, platform);
+      if (registry.getStore(storeKey)) {
+        registry.removeStore(storeKey);
+        const storePath = await store.getStorePath();
+        const platformPath = store.getLibraryPath(storePath, dependency.libName, dependency.commit, platform);
+        await fs.rm(platformPath, { recursive: true, force: true }).catch(() => {});
+      }
     }
   }
 
@@ -311,14 +320,109 @@ function upsertLibraryAvailability(
 }
 
 export async function resolveLibraryGeneralState(
-  dependency: Pick<ParsedDependency, 'libName' | 'commit'>
+  dependency: Pick<ParsedDependency, 'libName' | 'commit' | 'sparse'>,
+  requestedPlatforms: string[] = [],
+  vars?: Record<string, string>
 ): Promise<boolean> {
   const registry = getRegistry();
   const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
   const library = registry.getLibrary(libKey);
+  const sparseConfig = resolveSparseConfig(dependency.sparse, vars);
+  const hasPlatformSparse = sparseConfig
+    ? Object.keys(sparseConfig).some((key) => key !== 'common')
+    : Boolean(dependency.sparse && !isSparseOnlyCommon(dependency.sparse));
+  const hasPlatformLibraryHistory = requestedPlatforms.length > 0
+    && library?.isGeneral === false
+    && library.platforms.some((platform) => platform !== GENERAL_PLATFORM);
+
+  if (requestedPlatforms.length > 0) {
+    const requestedState = await resolveRequestedStoreState(
+      dependency,
+      requestedPlatforms,
+      vars
+    );
+    if (requestedState.actualExisting.length > 0) {
+      if (library?.isGeneral === true) {
+        registry.updateLibrary(libKey, {
+          platforms: requestedState.actualExisting,
+          isGeneral: false,
+          lastAccess: new Date().toISOString(),
+        });
+      }
+      return false;
+    }
+  }
+
+  if (requestedPlatforms.length > 0 && library?.isGeneral === true) {
+    const requestedTargets = [...new Set(
+      requestedPlatforms.flatMap((platform) =>
+        getRequestedPlatformTargets(platform, dependency.sparse, vars)
+      )
+    )];
+    const storePath = await store.getStorePath();
+    const commitPath = path.join(storePath, dependency.libName, dependency.commit);
+    try {
+      const entries = await fs.readdir(commitPath, { withFileTypes: true });
+      let hasRequestedPlatformDir = false;
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !requestedTargets.includes(entry.name)) continue;
+        if (await store.exists(dependency.libName, dependency.commit, entry.name)) {
+          hasRequestedPlatformDir = true;
+          break;
+        }
+      }
+      if (hasRequestedPlatformDir) {
+        return false;
+      }
+    } catch {
+      // Store 目录不存在时继续使用历史记录或后续 General 检测
+    }
+  }
+
+  if (requestedPlatforms.length > 0 && hasPlatformSparse) {
+    if (library?.isGeneral === true) {
+      registry.updateLibrary(libKey, {
+        isGeneral: false,
+        lastAccess: new Date().toISOString(),
+      });
+    }
+    return false;
+  }
+
+  if (hasPlatformLibraryHistory) {
+    return false;
+  }
 
   if (typeof library?.isGeneral === 'boolean') {
-    return library.isGeneral;
+    if (library.isGeneral) {
+      const hasGeneralContent = await store.exists(dependency.libName, dependency.commit, GENERAL_PLATFORM);
+      if (!hasGeneralContent) {
+        registry.updateLibrary(libKey, {
+          isGeneral: false,
+          lastAccess: new Date().toISOString(),
+        });
+        return false;
+      }
+
+      const actualGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
+      if (!actualGeneral) {
+        registry.updateLibrary(libKey, {
+          isGeneral: false,
+          lastAccess: new Date().toISOString(),
+        });
+      }
+      return actualGeneral;
+    }
+
+    const actualGeneral = await store.isGeneralLib(dependency.libName, dependency.commit);
+    if (actualGeneral) {
+      registry.updateLibrary(libKey, {
+        platforms: [GENERAL_PLATFORM],
+        isGeneral: true,
+        lastAccess: new Date().toISOString(),
+      });
+    }
+    return actualGeneral;
   }
 
   return store.isGeneralLib(dependency.libName, dependency.commit);
@@ -484,6 +588,21 @@ async function selectSubmodules(
   return selected.map(s => ({ ...s }));
 }
 
+function buildSubmoduleOptionalConfigState(
+  submodules: SubmoduleConfigWithSelection[]
+): Record<string, string[]> | undefined {
+  const state: Record<string, string[]> = {};
+
+  for (const submodule of submodules) {
+    const names = submodule.selectedOptionalConfigs?.map((config) => config.name) ?? [];
+    if (names.length > 0) {
+      state[submodule.relativePath] = names;
+    }
+  }
+
+  return Object.keys(state).length > 0 ? state : undefined;
+}
+
 /**
  * 单个 scope（主项目或 submodule）的链接处理
  *
@@ -511,11 +630,14 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
   info(`分析 ${scopeName}: ${configPath}`);
   let dependencies: ParsedDependency[];
   let configVars: Record<string, string> | undefined;
+  const selectedActions: ActionConfig[] = [];
 
   try {
     const result = await parseProjectDependencies(path.dirname(path.dirname(configPath)));
     dependencies = result.dependencies;
     configVars = result.vars;
+    const topLevelConfig = await parseCodepacDep(configPath);
+    selectedActions.push(...extractActions(topLevelConfig));
 
     // 合并可选配置依赖
     if (optionalConfigs && optionalConfigs.length > 0) {
@@ -524,6 +646,8 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           const optionalResult = await parseCodepacDep(optionalConfig.path);
           const optionalDeps = extractDependencies(optionalResult);
           dependencies = mergeDepLists(dependencies, optionalDeps);
+          configVars = { ...configVars, ...optionalResult.vars };
+          selectedActions.push(...extractActions(optionalResult));
           info(`  + ${optionalConfig.name}: ${optionalDeps.length} 个依赖`);
         } catch (optErr) {
           warn(`无法解析可选配置 ${optionalConfig.name}: ${(optErr as Error).message}`);
@@ -696,10 +820,8 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
   }
 
   // 7. 逐个处理依赖（LINKED/RELINK/REPLACE/ABSORB/LINK_NEW）
-  try {
-    for (const item of classified) {
+  for (const item of classified) {
       const { dependency, status, localPath } = item;
-      const libKey = registry.getLibraryKey(dependency.libName, dependency.commit);
 
       await store.ensureCompatibleStore(storePath, dependency.libName, dependency.commit);
 
@@ -709,7 +831,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           const requestedPlatforms = platforms.filter(
             (platform) => !blockedPlatforms.includes(platform)
           );
-          const isLinkedGeneral = await resolveLibraryGeneralState(dependency);
+          const isLinkedGeneral = await resolveLibraryGeneralState(dependency, requestedPlatforms, configVars);
           if (!isLinkedGeneral) {
             const supplementResult = await supplementMissingPlatforms(
               dependency, platforms, registry, tx, {
@@ -761,7 +883,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             (platform) => !blockedPlatforms.includes(platform)
           );
           const relinkCommitPath = path.join(storePath, dependency.libName, dependency.commit);
-          const isRelinkGeneral = await resolveLibraryGeneralState(dependency);
+          const isRelinkGeneral = await resolveLibraryGeneralState(dependency, requestedPlatforms, configVars);
 
           if (isRelinkGeneral) {
             tx.recordOp('unlink', localPath);
@@ -850,7 +972,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           );
           const replaceSize = await getDirSize(localPath);
           const replaceCommitPath = path.join(storePath, dependency.libName, dependency.commit);
-          const isReplaceGeneral = await resolveLibraryGeneralState(dependency);
+          const isReplaceGeneral = await resolveLibraryGeneralState(dependency, requestedPlatforms, configVars);
 
           if (isReplaceGeneral) {
             const sharedPath = path.join(replaceCommitPath, '_shared');
@@ -1152,7 +1274,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             satisfiedRequested,
           } = await resolveRequestedStoreState(dependency, requestedPlatforms, configVars);
           clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
-          const isLinkNewGeneral = await resolveLibraryGeneralState(dependency);
+          const isLinkNewGeneral = await resolveLibraryGeneralState(dependency, requestedPlatforms, configVars);
 
           if (isLinkNewGeneral) {
             const sharedPath = path.join(linkNewCommitPath, '_shared');
@@ -1442,8 +1564,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
     }
 
     // 9. 处理嵌套依赖 (actions)
-    const topLevelConfig = await parseCodepacDep(configPath);
-    const actions = extractActions(topLevelConfig);
+    const actions = selectedActions;
 
     const nestedLinkedDeps: NestedLinkedDep[] = [];
 
@@ -1491,10 +1612,6 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
     return {
       linkedDeps, nestedLinkedDeps, generalLibs, downloadedLibs, savedBytes, finalLinkPlatforms, stats,
     };
-  } catch (err) {
-    // 将异常传播给调用者（linkProject 的 try-catch 会处理回滚）
-    throw err;
-  }
 }
 
 /**
@@ -1552,9 +1669,10 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     process.exit(EXIT_CODES.NOINPUT);
   }
 
-  // 发现可选配置文件
-  const thirdpartyDir = path.join(normalizedPath, '3rdparty');
-  const configDiscovery = await findAllCodepacConfigs(thirdpartyDir);
+  // 发现可选配置文件，扫描位置跟随实际主配置所在目录。
+  const configDiscovery = discoveredConfigPath
+    ? await findAllCodepacConfigs(path.dirname(discoveredConfigPath))
+    : null;
   let selectedOptionalConfigs: OptionalConfigInfo[] = [];
 
   if (configDiscovery && configDiscovery.optionalConfigs.length > 0) {
@@ -1607,11 +1725,18 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
 
       // 为选中的 submodule 处理可选配置
       for (const sub of selectedSubmodules) {
-        if (sub.optionalConfigs.length > 0 && !options.yes && process.stdout.isTTY) {
+        if (sub.optionalConfigs.length === 0) continue;
+
+        const rememberedConfigs = existingProject?.submoduleOptionalConfigs?.[sub.relativePath] ?? [];
+        if (options.yes) {
+          sub.selectedOptionalConfigs = sub.optionalConfigs.filter((configInfo) =>
+            rememberedConfigs.includes(configInfo.name)
+          );
+        } else if (process.stdout.isTTY) {
           info(`${sub.name} 发现可选配置:`);
           const selected = await selectOptionalConfigs(
             sub.optionalConfigs,
-            { isTTY: true, specifiedConfigs: [] }
+            { isTTY: true, specifiedConfigs: rememberedConfigs }
           );
           if (selected !== PROMPT_CANCELLED) {
             sub.selectedOptionalConfigs = selected;
@@ -1744,16 +1869,6 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
     }
 
     // === 阶段 5: 合并结果、注册项目 ===
-    const allGeneralLibs = new Set([
-      ...mainResult.generalLibs,
-      ...subResults.flatMap(r => [...r.generalLibs]),
-    ]);
-
-    const allDownloadedLibs = [
-      ...mainResult.downloadedLibs,
-      ...subResults.flatMap(r => r.downloadedLibs),
-    ];
-
     // 合并所有依赖
     const allLinkedDeps = [
       ...mainResult.linkedDeps,
@@ -1777,6 +1892,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
         ? selectedOptionalConfigs.map(c => c.name) : undefined,
       submodules: selectedSubmodules.length > 0
         ? selectedSubmodules.map(s => s.relativePath) : undefined,
+      submoduleOptionalConfigs: buildSubmoduleOptionalConfigState(selectedSubmodules),
     });
 
     // 更新 Store 引用关系
@@ -1947,11 +2063,7 @@ async function registerSharedStore(
 ): Promise<boolean> {
   const registry = getRegistry();
   const storeKey = registry.getStoreKey(libName, commit, SHARED_PLATFORM);
-
-  // 如果已存在，不重复注册
-  if (registry.getStore(storeKey)) {
-    return true;
-  }
+  const existingEntry = registry.getStore(storeKey);
 
   // 检查 _shared 目录是否存在
   const storePath = await config.getStorePath();
@@ -1970,17 +2082,26 @@ async function registerSharedStore(
 
   // 计算 _shared 完整性信息并注册
   const integrity = await store.captureIntegrity(libName, commit, SHARED_PLATFORM);
-  registry.addStore({
-    libName,
-    commit,
-    platform: SHARED_PLATFORM,
-    branch,
-    url,
-    ...integrity,
-    usedBy: [], // _shared 不追踪引用，生命周期跟随平台
-    createdAt: new Date().toISOString(),
-    lastAccess: new Date().toISOString(),
-  });
+  if (existingEntry) {
+    registry.updateStore(storeKey, {
+      branch: existingEntry.branch || branch,
+      url: existingEntry.url || url,
+      ...integrity,
+      lastAccess: new Date().toISOString(),
+    });
+  } else {
+    registry.addStore({
+      libName,
+      commit,
+      platform: SHARED_PLATFORM,
+      branch,
+      url,
+      ...integrity,
+      usedBy: [], // _shared 不追踪引用，生命周期跟随平台
+      createdAt: new Date().toISOString(),
+      lastAccess: new Date().toISOString(),
+    });
+  }
 
   debug(`注册 _shared: ${libName}:${commit.slice(0, 8)} (${formatSize(integrity.size)})`);
   return true;
@@ -2014,6 +2135,14 @@ async function ensureStoreInfo(
   } else if (existingEntry.fileCount == null) {
     const integrity = await store.captureIntegrity(libName, commit, platform);
     registry.updateStore(storeKey, integrity);
+  }
+
+  if (existingEntry && ((!existingEntry.branch && branch) || (!existingEntry.url && url))) {
+    registry.updateStore(storeKey, {
+      branch: existingEntry.branch || branch,
+      url: existingEntry.url || url,
+      lastAccess: new Date().toISOString(),
+    });
   }
 
   if (projectHash) {
@@ -2316,7 +2445,7 @@ async function classifyDependencies(
 
     const existing = verifiedExisting;
     // 也检查是否为 General 库（有 _shared 且有内容）
-    const isGeneral = await resolveLibraryGeneralState(dep);
+    const isGeneral = await resolveLibraryGeneralState(dep, requestedPlatforms, vars);
     const inStore = existing.length > 0 || isGeneral;
 
     if (satisfiedRequested.length > 0) {
@@ -2859,7 +2988,7 @@ async function linkNestedDependencies(
     indent: string;
   }
 ): Promise<void> {
-  const { thirdPartyDir, targetDir, nestedConfigPath, context, options, indent } = params;
+  const { thirdPartyDir, targetDir, context, options, indent } = params;
   // 计算嵌套依赖的实际目标目录
   const nestedTargetDir = path.join(thirdPartyDir, targetDir);
   const { tx, registry, projectHash, projectRoot, dryRun, download, generalLibs, downloadedLibs, nestedLinkedDeps } = options;
@@ -2882,8 +3011,6 @@ async function linkNestedDependencies(
     }
 
     // 检查 Store 状态和历史记录
-    const libKey = registry.getLibraryKey(dep.libName, dep.commit);
-    const historyLib = registry.getLibrary(libKey);
     const unavailablePlatforms = getBlockedRequestedPlatforms(registry, dep, platforms, vars);
 
     // 过滤掉已知不可用的平台
@@ -2891,7 +3018,7 @@ async function linkNestedDependencies(
     const knownUnavailable = platforms.filter(p => unavailablePlatforms.includes(p));
 
     let storeHas = false;
-    const existingPlatforms: string[] = [];
+    let existingPlatforms: string[] = [];
     const initialStoreState = await resolveRequestedStoreState(dep, availablePlatforms, vars);
     existingPlatforms.push(...initialStoreState.actualExisting);
     if (initialStoreState.satisfiedRequested.length > 0) {
@@ -2904,6 +3031,7 @@ async function linkNestedDependencies(
       const { valid: verifiedPlatforms, corrupted } = await verifyExistingPlatforms(
         dep.libName, dep.commit, existingPlatforms
       );
+      existingPlatforms = verifiedPlatforms;
       if (corrupted.length > 0) {
         for (const p of corrupted) {
           const storeKey = registry.getStoreKey(dep.libName, dep.commit, p);
@@ -2913,11 +3041,11 @@ async function linkNestedDependencies(
           );
           await fs.rm(platformPath, { recursive: true, force: true }).catch(() => {});
         }
-        storeHas = verifiedPlatforms.length > 0;
       }
+      storeHas = existingPlatforms.length > 0;
     }
 
-    let isGeneral = await resolveLibraryGeneralState(dep);
+    let isGeneral = await resolveLibraryGeneralState(dep, availablePlatforms, vars);
 
     // 如果所有平台都已知不可用，跳过
     if (availablePlatforms.length === 0 && knownUnavailable.length > 0 && !isGeneral) {
@@ -3357,9 +3485,37 @@ export async function verifyExistingPlatforms(
     const storeKey = registry.getStoreKey(libName, commit, platform);
     const entry = registry.getStore(storeKey);
 
-    // 没有 StoreEntry，跳过校验视为合法
     if (!entry) {
+      try {
+        const integrity = await store.captureIntegrity(libName, commit, platform);
+        if (integrity.fileCount === 0) {
+          corrupted.push(platform);
+          warn(`${libName} (${commit.slice(0, 7)}) ${platform}: Store 目录为空`);
+          continue;
+        }
+        registry.addStore({
+          libName,
+          commit,
+          platform,
+          branch: '',
+          url: '',
+          ...integrity,
+          usedBy: [],
+          createdAt: new Date().toISOString(),
+          lastAccess: new Date().toISOString(),
+        });
+      } catch {
+        corrupted.push(platform);
+        warn(`${libName} (${commit.slice(0, 7)}) ${platform}: Store 完整性回填失败`);
+        continue;
+      }
       valid.push(platform);
+      continue;
+    }
+
+    if (entry.fileCount === 0) {
+      corrupted.push(platform);
+      warn(`${libName} (${commit.slice(0, 7)}) ${platform}: Store 记录为空`);
       continue;
     }
 
@@ -3368,16 +3524,24 @@ export async function verifyExistingPlatforms(
       try {
         const integrity = await store.captureIntegrity(libName, commit, platform);
         registry.updateStore(storeKey, integrity);
+        if (integrity.fileCount === 0) {
+          corrupted.push(platform);
+          warn(`${libName} (${commit.slice(0, 7)}) ${platform}: Store 目录为空`);
+          continue;
+        }
       } catch {
-        // 回填失败不影响正常流程
+        corrupted.push(platform);
+        warn(`${libName} (${commit.slice(0, 7)}) ${platform}: Store 完整性回填失败`);
+        continue;
       }
       valid.push(platform);
       continue;
     }
 
-    const result = await store.quickVerify(libName, commit, platform, {
+    const result = await store.fullVerify(libName, commit, platform, {
       size: entry.size,
       fileCount: entry.fileCount,
+      contentHash: entry.contentHash,
     });
 
     if (result.valid) {

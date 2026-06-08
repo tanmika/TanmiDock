@@ -86,6 +86,7 @@ export interface ProjectInfo {
   dependencies: DependencyRef[];
   optionalConfigs?: string[]; // 用户选择的可选配置文件名列表
   submodules?: string[]; // 上次选择的 submodule 相对路径列表（记忆用户选择）
+  submoduleOptionalConfigs?: Record<string, string[]>; // 每个 submodule 上次选择的可选配置
 }
 
 /**

@@ -53,6 +53,31 @@ async function createProjectConfig(
   );
 }
 
+async function writeConfig(
+  configPath: string,
+  deps: Array<{ libName: string; commit: string }>,
+  actions?: Array<{ command: string; dir?: string }>
+): Promise<void> {
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({
+      version: '1.0.0',
+      vars: {},
+      repos: {
+        common: deps.map(d => ({
+          url: `https://github.com/test/${d.libName}.git`,
+          commit: d.commit,
+          branch: 'main',
+          dir: d.libName,
+        })),
+      },
+      ...(actions ? { actions: { common: actions.map(action => ({ command: action.command, dir: action.dir ?? '' })) } } : {}),
+    }, null, 2),
+    'utf-8'
+  );
+}
+
 /**
  * 创建已链接的测试项目
  */
@@ -339,6 +364,149 @@ describe('TC-019: status 命令测试', () => {
       expect(jsonOutput.dependencies.linked).toBe(1); // libB
       expect(jsonOutput.dependencies.broken).toBe(1); // libA
       expect(jsonOutput.dependencies.unlinked).toBe(1); // libC
+    });
+  });
+
+  describe('S-4.2.3: 扩展依赖统计', () => {
+    it('should include action nested dependencies with targetdir in project status', async () => {
+      env = await createTestEnv();
+
+      await createMockStoreDataV2(env, {
+        libName: 'libMainAction',
+        commit: 'mainaction123456',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+      await createMockStoreDataV2(env, {
+        libName: 'libNestedAction',
+        commit: 'nestedaction123',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      await writeConfig(
+        path.join(env.projectDir, '3rdparty', 'codepac-dep.json'),
+        [{ libName: 'libMainAction', commit: 'mainaction123456' }],
+        [{ command: 'codepac install libNestedAction --configdir nestedCfg --targetdir .' }]
+      );
+      await writeConfig(
+        path.join(env.projectDir, '3rdparty', 'nestedCfg', 'codepac-dep.json'),
+        [{ libName: 'libNestedAction', commit: 'nestedaction123' }]
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const jsonOutput = (await runStatusAndGetJson(env)) as {
+        dependencies: { total: number; linked: number; broken: number; unlinked: number };
+      };
+
+      expect(jsonOutput.dependencies.total).toBe(2);
+      expect(jsonOutput.dependencies.linked).toBe(2);
+      expect(await isSymlink(path.join(env.projectDir, '3rdparty', 'libNestedAction', 'macOS'))).toBe(true);
+    });
+
+    it('should include actions from remembered optional configs', async () => {
+      env = await createTestEnv();
+
+      await createMockStoreDataV2(env, {
+        libName: 'libMainOptionalAction',
+        commit: 'mainoptaction12',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+      await createMockStoreDataV2(env, {
+        libName: 'libOptionalNested',
+        commit: 'optnested123456',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      await writeConfig(
+        path.join(env.projectDir, '3rdparty', 'codepac-dep.json'),
+        [{ libName: 'libMainOptionalAction', commit: 'mainoptaction12' }]
+      );
+      await writeConfig(
+        path.join(env.projectDir, '3rdparty', 'codepac-dep-inner.json'),
+        [],
+        [{ command: 'codepac install libOptionalNested --configdir optionalNested --targetdir .' }]
+      );
+      await writeConfig(
+        path.join(env.projectDir, '3rdparty', 'optionalNested', 'codepac-dep.json'),
+        [{ libName: 'libOptionalNested', commit: 'optnested123456' }]
+      );
+
+      await runCommand(
+        'link',
+        { platform: ['macOS'], yes: true, config: ['inner'] },
+        env,
+        env.projectDir
+      );
+
+      const jsonOutput = (await runStatusAndGetJson(env)) as {
+        dependencies: { total: number; linked: number };
+      };
+
+      expect(jsonOutput.dependencies.total).toBe(2);
+      expect(jsonOutput.dependencies.linked).toBe(2);
+    });
+
+    it('should include remembered submodule optional configs in submodule status', async () => {
+      env = await createTestEnv();
+
+      await createMockStoreDataV2(env, {
+        libName: 'libSubMainStatus',
+        commit: 'submainstatus12',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+      await createMockStoreDataV2(env, {
+        libName: 'libSubInnerStatus',
+        commit: 'subinnerstatus',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      await writeConfig(path.join(env.projectDir, '3rdparty', 'codepac-dep.json'), []);
+      await fs.writeFile(
+        path.join(env.projectDir, '.gitmodules'),
+        [
+          '[submodule "SubStatus"]',
+          '  path = modules/SubStatus',
+          '  url = https://github.com/test/SubStatus.git',
+        ].join('\n'),
+        'utf-8'
+      );
+      await writeConfig(
+        path.join(env.projectDir, 'modules', 'SubStatus', '3rdparty', 'codepac-dep.json'),
+        [{ libName: 'libSubMainStatus', commit: 'submainstatus12' }]
+      );
+      await writeConfig(
+        path.join(env.projectDir, 'modules', 'SubStatus', '3rdparty', 'codepac-dep-inner.json'),
+        [{ libName: 'libSubInnerStatus', commit: 'subinnerstatus' }]
+      );
+
+      const registry = await loadRegistry(env);
+      registry.projects[hashPath(env.projectDir)] = {
+        path: env.projectDir,
+        configPath: '3rdparty/codepac-dep.json',
+        lastLinked: new Date().toISOString(),
+        platforms: ['macOS'],
+        dependencies: [],
+        submodules: ['modules/SubStatus'],
+        submoduleOptionalConfigs: {
+          'modules/SubStatus': ['inner'],
+        },
+      };
+      await saveRegistry(env, registry);
+
+      await runCommand('link', { platform: ['macOS'], yes: true, config: [] }, env, env.projectDir);
+
+      const jsonOutput = (await runStatusAndGetJson(env)) as {
+        submodules: Array<{ dependencies: { total: number; linked: number } }>;
+      };
+
+      expect(jsonOutput.submodules[0].dependencies.total).toBe(2);
+      expect(jsonOutput.submodules[0].dependencies.linked).toBe(2);
     });
   });
 

@@ -198,42 +198,119 @@ export function extractActions(config: CodepacDep): ActionConfig[] {
  * @returns 解析后的 action 对象
  */
 export function parseActionCommand(command: string): ParsedAction {
+  const tokens = tokenizeActionCommand(command);
+
   // 检查是否以 codepac install 开头
-  if (!command.startsWith('codepac install ')) {
+  if (tokens[0] !== 'codepac' || tokens[1] !== 'install') {
     throw new Error(`无法解析 action 命令，期望 'codepac install' 开头: ${command}`);
   }
 
-  // 提取 --configdir 参数
-  const configDirMatch = command.match(/--configdir\s+(\S+)/);
-  if (!configDirMatch) {
+  const libraries: string[] = [];
+  let configDir: string | undefined;
+  let targetDir: string | undefined;
+  let disableAction = false;
+
+  for (let index = 2; index < tokens.length; index++) {
+    const token = tokens[index];
+
+    if (token === '--disable_action' || token === '-dc') {
+      disableAction = true;
+      continue;
+    }
+
+    if (token === '--configdir' || token === '-cd') {
+      configDir = readActionOptionValue(tokens, index, token, command);
+      index++;
+      continue;
+    }
+
+    if (token === '--targetdir' || token === '-td') {
+      targetDir = readActionOptionValue(tokens, index, token, command);
+      index++;
+      continue;
+    }
+
+    if (token.startsWith('--') || token.startsWith('-')) {
+      const next = tokens[index + 1];
+      if (next && !next.startsWith('-')) {
+        index++;
+      }
+      continue;
+    }
+
+    libraries.push(token);
+  }
+
+  if (!configDir) {
     throw new Error(`无法解析 action 命令，缺少 --configdir 参数: ${command}`);
   }
-  const configDir = configDirMatch[1];
-
-  // 提取 --targetdir 参数（可选，默认为 configdir）
-  const targetDirMatch = command.match(/--targetdir\s+(\S+)/);
-  const targetDir = targetDirMatch ? targetDirMatch[1] : configDir;
-
-  // 检查 --disable_action 标志
-  const disableAction = command.includes('--disable_action');
-
-  // 提取库名列表（在 'codepac install ' 后，--configdir 前的部分）
-  const afterInstall = command.slice('codepac install '.length);
-  const beforeConfigDir = afterInstall.split('--configdir')[0].trim();
-
-  // 过滤掉任何以 -- 开头的参数
-  const libraries = beforeConfigDir
-    .split(/\s+/)
-    .filter(lib => lib && !lib.startsWith('--'));
 
   // 旧格式兼容：如果没有指定库名，libraries 为空数组
   // 调用方需要从 configDir 中读取 codepac-dep.json 来获取所有库
   return {
     libraries,
     configDir,
-    targetDir,
+    targetDir: targetDir ?? configDir,
     disableAction,
   };
+}
+
+function readActionOptionValue(tokens: string[], index: number, option: string, command: string): string {
+  const value = tokens[index + 1];
+  if (!value || value.startsWith('-')) {
+    throw new Error(`无法解析 action 命令，${option} 缺少参数值: ${command}`);
+  }
+  return value;
+}
+
+function tokenizeActionCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+
+  for (const char of command) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.length > 0) {
+    tokens.push(current);
+  }
+
+  return tokens;
 }
 
 /**

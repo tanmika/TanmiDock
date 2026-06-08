@@ -12,8 +12,9 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import crypto from 'crypto';
 import { expect, vi } from 'vitest';
-import type { Registry, StoreEntry, LibraryInfo } from '../../src/types/index.js';
+import type { Registry } from '../../src/types/index.js';
 
 // ============ 类型定义 ============
 
@@ -75,12 +76,13 @@ export async function createTestEnv(): Promise<TestEnv> {
 
   // 创建初始配置文件
   const config = {
-    version: '1.1.0',
+    version: '1.2.0',
     initialized: true,
     storePath: storeDir,
     cleanStrategy: 'unreferenced',
     unusedDays: 30,
     autoDownload: true,
+    gitLightweightDownload: true,
     unverifiedLocalStrategy: 'absorb', // 测试中默认吸收无 .git 的本地目录
   };
   await fs.writeFile(
@@ -420,6 +422,7 @@ export interface LinkOptions {
   download?: boolean;
   dryRun?: boolean;
   config?: string[];
+  submodules?: boolean;
 }
 
 export interface UnlinkOptions {
@@ -545,6 +548,7 @@ export async function runCommand(
         download: linkOpts.download ?? false,
         dryRun: linkOpts.dryRun ?? false,
         config: linkOpts.config,
+        submodules: linkOpts.submodules ?? true,
       });
       break;
     }
@@ -811,7 +815,6 @@ export async function createMockStoreDataV2(
  * 使用 md5 前 12 位，与 src/core/registry.ts 中的 hashPath 一致
  */
 export function hashPath(p: string): string {
-  const crypto = require('crypto');
   return crypto.createHash('md5').update(p).digest('hex').slice(0, 12);
 }
 

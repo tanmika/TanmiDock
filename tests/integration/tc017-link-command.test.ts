@@ -628,6 +628,56 @@ describe('TC-017: link 命令测试', () => {
       expect(registryAfter.libraries[`${libName}:${commit}`].platforms).toEqual(['general']);
       expect(registryAfter.stores[`${libName}:${commit}:general`].usedBy).toContain(projectHash);
     });
+
+    it('should prefer real requested platform over stale General metadata', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libOpenCvWasm';
+      const commit = '42fa7acff61d98db0271ac23a8bfd34a489870e9';
+
+      await createMockStoreDataV2(env, {
+        libName,
+        commit,
+        platforms: ['wasm'],
+        sharedFiles: {
+          'codepac-dep.json': '{}',
+        },
+      });
+      await createTestProject(env, [
+        {
+          libName,
+          commit,
+          createLocal: false,
+        },
+      ]);
+
+      const registryBefore = await loadRegistry(env);
+      registryBefore.libraries[`${libName}:${commit}`].platforms = ['general'];
+      registryBefore.libraries[`${libName}:${commit}`].isGeneral = true;
+      registryBefore.stores[`${libName}:${commit}:general`] = {
+        libName,
+        commit,
+        platform: 'general',
+        branch: 'main',
+        url: `https://github.com/test/${libName}.git`,
+        size: 0,
+        fileCount: 0,
+        usedBy: [hashPath(env.projectDir)],
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      await saveRegistry(env, registryBefore);
+
+      await runCommand('link', { platform: ['wasm'], yes: true }, env, env.projectDir);
+
+      const localWasmPath = path.join(env.projectDir, '3rdparty', libName, 'wasm');
+      await verifySymlink(localWasmPath, path.join(env.storeDir, libName, commit, 'wasm'));
+
+      const registryAfter = await loadRegistry(env);
+      expect(registryAfter.libraries[`${libName}:${commit}`].isGeneral).toBe(false);
+      expect(registryAfter.libraries[`${libName}:${commit}`].platforms).toEqual(['wasm']);
+      expect(registryAfter.stores[`${libName}:${commit}:wasm`].usedBy).toContain(hashPath(env.projectDir));
+    });
   });
 
   describe('S-2.2.3: Registry 记录正确更新', () => {
@@ -793,6 +843,86 @@ describe('TC-017: link 命令测试', () => {
       // 验证文件内容
       const content = await fs.readFile(cmakePath, 'utf-8');
       expect(content).toBe('# CMake configuration');
+    });
+  });
+
+  describe('S-2.2.5: action 嵌套依赖损坏 Store', () => {
+    it('should not relink nested action dependency when target Store platform is empty', async () => {
+      env = await createTestEnv();
+
+      const mainLib = { libName: 'libImageCodecMain', commit: 'imagecodecmain1' };
+      const nestedLib = { libName: 'libjxl', commit: 'libjxlcommit123' };
+
+      await createMockStoreDataV2(env, {
+        ...mainLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+      await createMockStoreDataV2(env, {
+        ...nestedLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await fs.mkdir(path.join(thirdPartyDir, 'libImageCodec'), { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${mainLib.libName}.git`,
+                commit: mainLib.commit,
+                branch: 'main',
+                dir: mainLib.libName,
+              },
+            ],
+          },
+          actions: {
+            common: [
+              {
+                command: 'codepac install libjxl --configdir libImageCodec --targetdir .',
+                dir: '',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'libImageCodec', 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${nestedLib.libName}.git`,
+                commit: nestedLib.commit,
+                branch: 'main',
+                dir: nestedLib.libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const nestedLocalPath = path.join(thirdPartyDir, nestedLib.libName);
+      await fs.rm(nestedLocalPath, { recursive: true, force: true });
+      await fs.rm(path.join(env.storeDir, nestedLib.libName, nestedLib.commit, 'macOS'), { recursive: true, force: true });
+      await fs.mkdir(path.join(env.storeDir, nestedLib.libName, nestedLib.commit, 'macOS'), { recursive: true });
+
+      await runCommand('link', { platform: ['macOS'], yes: true, download: false }, env, env.projectDir);
+
+      const registry = await loadRegistry(env);
+      expect(registry.stores[`${nestedLib.libName}:${nestedLib.commit}:macOS`]).toBeUndefined();
+      await expect(fs.lstat(path.join(nestedLocalPath, 'macOS'))).rejects.toThrow();
     });
   });
 

@@ -197,7 +197,7 @@ function interpolateSparseVars(text: string, vars?: Record<string, string>): str
   if (!vars) return text;
 
   return text.replace(/\$\{([^}]+)\}/g, (_match, key: string) => {
-    return vars[key] ?? `\$\{${key}\}`;
+    return vars[key] ?? `\${${key}}`;
   });
 }
 
@@ -235,7 +235,7 @@ export function getRequestedPlatformTargets(
   const sparseConfig = resolveSparseConfig(sparse, vars);
   const rawItems = sparseConfig?.[requestedPlatform];
   if (!Array.isArray(rawItems)) {
-    return [normalizePlatformValue(requestedPlatform)];
+    return [normalizePlatformValue(platformKeyToValue(requestedPlatform) ?? requestedPlatform)];
   }
 
   const platformItems = rawItems

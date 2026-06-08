@@ -194,6 +194,12 @@ describe('platform', () => {
   });
 
   describe('requested platform targets', () => {
+    it('should resolve platform key to actual platform directory without sparse config', () => {
+      expect(getRequestedPlatformTargets('mac', undefined)).toEqual(['macOS']);
+      expect(getRequestedPlatformTargets('win', undefined)).toEqual(['Win']);
+      expect(getRequestedPlatformTargets('ios', undefined)).toEqual(['iOS']);
+    });
+
     it('should resolve sparse mapping to actual platform directories', () => {
       expect(
         getRequestedPlatformTargets('wasm', { wasm: ['macOS'] })

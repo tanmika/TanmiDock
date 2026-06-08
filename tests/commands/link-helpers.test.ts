@@ -30,6 +30,7 @@ vi.mock('../../src/core/config.js', () => ({
     proxy: undefined,
     unverifiedLocalStrategy: 'download',
     sharedSymlinkFolders: true,
+    gitLightweightDownload: true,
   })),
   updateConfig: vi.fn(),
 }));
@@ -64,6 +65,9 @@ vi.mock('../../src/core/store.js', () => ({
   absorbLib: vi.fn(),
   captureIntegrity: vi.fn(),
   quickVerify: vi.fn(),
+  fullVerify: vi.fn(),
+  exists: vi.fn(),
+  isGeneralLib: vi.fn(),
 }));
 vi.mock('../../src/core/linker.js', () => ({
   linkLib: vi.fn(),
@@ -164,6 +168,57 @@ describe('link helpers', () => {
       const registryMock = {
         getStoreKey: vi.fn((lib: string, commit: string, platform: string) => `${lib}:${commit}:${platform}`),
         getStore: vi.fn().mockReturnValue({ size: 1024 }), // 无 fileCount
+        updateStore: vi.fn(),
+      };
+      const { getRegistry } = await import('../../src/core/registry.js') as {
+        getRegistry: ReturnType<typeof vi.fn>;
+      };
+      (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
+
+      const storeMock = await import('../../src/core/store.js') as {
+        captureIntegrity: ReturnType<typeof vi.fn>;
+      };
+      storeMock.captureIntegrity.mockResolvedValue({ size: 2048, fileCount: 15, contentHash: 'hash123' });
+
+      const { verifyExistingPlatforms } = await import('../../src/commands/link.js');
+      const result = await verifyExistingPlatforms('mylib', 'abc123', ['macOS', 'iOS']);
+
+      expect(result.valid).toEqual(['macOS', 'iOS']);
+      expect(result.corrupted).toEqual([]);
+    });
+
+    it('should mark old StoreEntry as corrupted when backfilled directory is empty', async () => {
+      const registryMock = {
+        getStoreKey: vi.fn((lib: string, commit: string, platform: string) => `${lib}:${commit}:${platform}`),
+        getStore: vi.fn().mockReturnValue({ size: 1024 }),
+        updateStore: vi.fn(),
+      };
+      const { getRegistry } = await import('../../src/core/registry.js') as {
+        getRegistry: ReturnType<typeof vi.fn>;
+      };
+      (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
+
+      const storeMock = await import('../../src/core/store.js') as {
+        captureIntegrity: ReturnType<typeof vi.fn>;
+      };
+      storeMock.captureIntegrity.mockResolvedValue({
+        size: 0,
+        fileCount: 0,
+        contentHash: 'd41d8cd98f00b204e9800998ecf8427e',
+      });
+
+      const { verifyExistingPlatforms } = await import('../../src/commands/link.js');
+      const result = await verifyExistingPlatforms('mylib', 'abc123', ['macOS']);
+
+      expect(result.valid).toEqual([]);
+      expect(result.corrupted).toEqual(['macOS']);
+      expect(registryMock.updateStore).toHaveBeenCalled();
+    });
+
+    it('should mark existing StoreEntry as corrupted when fileCount is zero', async () => {
+      const registryMock = {
+        getStoreKey: vi.fn((lib: string, commit: string, platform: string) => `${lib}:${commit}:${platform}`),
+        getStore: vi.fn().mockReturnValue({ size: 0, fileCount: 0 }),
       };
       const { getRegistry } = await import('../../src/core/registry.js') as {
         getRegistry: ReturnType<typeof vi.fn>;
@@ -171,10 +226,10 @@ describe('link helpers', () => {
       (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
 
       const { verifyExistingPlatforms } = await import('../../src/commands/link.js');
-      const result = await verifyExistingPlatforms('mylib', 'abc123', ['macOS', 'iOS']);
+      const result = await verifyExistingPlatforms('mylib', 'abc123', ['macOS']);
 
-      expect(result.valid).toEqual(['macOS', 'iOS']);
-      expect(result.corrupted).toEqual([]);
+      expect(result.valid).toEqual([]);
+      expect(result.corrupted).toEqual(['macOS']);
     });
 
     it('should mark corrupted when quickVerify fails', async () => {
@@ -188,9 +243,9 @@ describe('link helpers', () => {
       (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
 
       const storeMock = await import('../../src/core/store.js') as {
-        quickVerify: ReturnType<typeof vi.fn>;
+        fullVerify: ReturnType<typeof vi.fn>;
       };
-      storeMock.quickVerify.mockResolvedValue({ valid: false, reason: 'fileCount mismatch' });
+      storeMock.fullVerify.mockResolvedValue({ valid: false, reason: 'fileCount mismatch' });
 
       const { verifyExistingPlatforms } = await import('../../src/commands/link.js');
       const result = await verifyExistingPlatforms('mylib', 'abc123', ['macOS']);
@@ -210,9 +265,9 @@ describe('link helpers', () => {
       (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
 
       const storeMock = await import('../../src/core/store.js') as {
-        quickVerify: ReturnType<typeof vi.fn>;
+        fullVerify: ReturnType<typeof vi.fn>;
       };
-      storeMock.quickVerify.mockResolvedValue({ valid: true });
+      storeMock.fullVerify.mockResolvedValue({ valid: true });
 
       const { verifyExistingPlatforms } = await import('../../src/commands/link.js');
       const result = await verifyExistingPlatforms('mylib', 'abc123', ['macOS', 'iOS']);
@@ -227,6 +282,94 @@ describe('link helpers', () => {
 
       expect(result.valid).toEqual([]);
       expect(result.corrupted).toEqual([]);
+    });
+  });
+
+  describe('resolveLibraryGeneralState', () => {
+    beforeEach(async () => {
+      const storeMock = await import('../../src/core/store.js') as {
+        exists: ReturnType<typeof vi.fn>;
+        isGeneralLib: ReturnType<typeof vi.fn>;
+      };
+      storeMock.exists.mockReset();
+      storeMock.isGeneralLib.mockReset();
+    });
+
+    it('should correct stale General library info when requested platform exists', async () => {
+      const registryMock = {
+        getLibraryKey: vi.fn((lib: string, commit: string) => `${lib}:${commit}`),
+        getStoreKey: vi.fn((lib: string, commit: string, platform: string) => `${lib}:${commit}:${platform}`),
+        getStore: vi.fn().mockReturnValue(undefined),
+        removeStore: vi.fn(),
+        getLibrary: vi.fn().mockReturnValue({
+          libName: 'libopencv',
+          commit: 'abc123',
+          platforms: ['general'],
+          isGeneral: true,
+        }),
+        updateLibrary: vi.fn(),
+      };
+      const { getRegistry } = await import('../../src/core/registry.js') as {
+        getRegistry: ReturnType<typeof vi.fn>;
+      };
+      (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
+
+      const storeMock = await import('../../src/core/store.js') as {
+        exists: ReturnType<typeof vi.fn>;
+      };
+      storeMock.exists.mockResolvedValue(true);
+
+      const { resolveLibraryGeneralState } = await import('../../src/commands/link.js');
+      const result = await resolveLibraryGeneralState(
+        { libName: 'libopencv', commit: 'abc123' },
+        ['wasm']
+      );
+
+      expect(result).toBe(false);
+      expect(registryMock.updateLibrary).toHaveBeenCalledWith('libopencv:abc123', {
+        platforms: ['wasm'],
+        isGeneral: false,
+        lastAccess: expect.any(String),
+      });
+    });
+
+    it('should not treat platform sparse library as General when only shared content exists', async () => {
+      const registryMock = {
+        getLibraryKey: vi.fn((lib: string, commit: string) => `${lib}:${commit}`),
+        getStoreKey: vi.fn((lib: string, commit: string, platform: string) => `${lib}:${commit}:${platform}`),
+        getStore: vi.fn().mockReturnValue(undefined),
+        removeStore: vi.fn(),
+        getLibrary: vi.fn().mockReturnValue({
+          libName: 'libopencv',
+          commit: 'abc123',
+          platforms: ['general'],
+          isGeneral: true,
+        }),
+        updateLibrary: vi.fn(),
+      };
+      const { getRegistry } = await import('../../src/core/registry.js') as {
+        getRegistry: ReturnType<typeof vi.fn>;
+      };
+      (getRegistry as ReturnType<typeof vi.fn>).mockReturnValue(registryMock);
+
+      const storeMock = await import('../../src/core/store.js') as {
+        getStorePath: ReturnType<typeof vi.fn>;
+        exists: ReturnType<typeof vi.fn>;
+      };
+      storeMock.getStorePath.mockResolvedValue('/store');
+      storeMock.exists.mockResolvedValue(false);
+
+      const { resolveLibraryGeneralState } = await import('../../src/commands/link.js');
+      const result = await resolveLibraryGeneralState(
+        { libName: 'libopencv', commit: 'abc123', sparse: { common: ['include'], wasm: ['wasm'] } },
+        ['wasm']
+      );
+
+      expect(result).toBe(false);
+      expect(registryMock.updateLibrary).toHaveBeenCalledWith('libopencv:abc123', {
+        isGeneral: false,
+        lastAccess: expect.any(String),
+      });
     });
   });
 

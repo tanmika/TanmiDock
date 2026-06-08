@@ -5,17 +5,24 @@ import path from 'path';
 import fs from 'fs/promises';
 import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
-import { parseProjectDependencies, findCodepacConfig, parseCodepacDep, extractDependencies, resolveProjectRootPath } from '../core/parser.js';
+import {
+  findCodepacConfig,
+  parseCodepacDep,
+  extractDependencies,
+  extractActions,
+  parseActionCommand,
+  extractNestedDependencies,
+  resolveProjectRootPath,
+  findAllCodepacConfigs,
+} from '../core/parser.js';
+import type { OptionalConfigInfo } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
-import * as store from '../core/store.js';
 import * as linker from '../core/linker.js';
-import { collectProjectDependencyGraph } from './link.js';
 import { resolvePath, shrinkHome } from '../core/platform.js';
 import { formatSize } from '../utils/disk.js';
 import { info, warn, success, hint, blank, separator, title, colorize, tree as printTree } from '../utils/logger.js';
 import { selectWithCancel, PROMPT_CANCELLED } from '../utils/prompt.js';
 import { findSubmoduleConfigs } from '../utils/git.js';
-import type { ParsedDependency } from '../types/index.js';
 import type { TreeItem } from '../utils/logger.js';
 
 interface ManualRuleStatus {
@@ -23,6 +30,12 @@ interface ManualRuleStatus {
   libName: string;
   commit?: string;
   platforms: string[];
+}
+
+interface StatusDependency {
+  libName: string;
+  commit: string;
+  localPath: string;
 }
 
 function parseManualRuleKey(key: string): { libName: string; commit?: string } {
@@ -150,13 +163,13 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
   }
 
   // 解析依赖（先解析，获取 configPath）
-  let dependencies: ParsedDependency[];
   let configPath: string;
 
   try {
-    const result = await parseProjectDependencies(normalizedPath);
-    dependencies = result.dependencies;
-    configPath = result.configPath;
+    configPath = await findCodepacConfig(normalizedPath) ?? '';
+    if (!configPath) {
+      throw new Error('找不到 codepac-dep.json 配置文件，已搜索: 3rdparty, .');
+    }
   } catch (err) {
     warn((err as Error).message);
     process.exit(1);
@@ -166,12 +179,22 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
   const registry = getRegistry();
   await registry.load();
 
-  const thirdPartyDir = path.dirname(configPath);
   const projectInfo = registry.getProject(registry.hashPath(normalizedPath));
   const registeredPath = normalizedPath;
-  const projectDependencies = await collectProjectDependencyGraph(normalizedPath).catch(() => []);
-  const projectLibNames = new Set(projectDependencies.map((dep) => dep.libName));
-  const projectRuleKeys = new Set(projectDependencies.map((dep) => `${dep.libName}@${dep.commit}`));
+  const dependencies = await collectStatusDependencies({
+    projectRoot: normalizedPath,
+    configPath,
+    projectInfo,
+    includeSubmodules: false,
+  });
+  const allProjectDependencies = await collectStatusDependencies({
+    projectRoot: normalizedPath,
+    configPath,
+    projectInfo,
+    includeSubmodules: true,
+  });
+  const projectLibNames = new Set(allProjectDependencies.map((dep) => dep.libName));
+  const projectRuleKeys = new Set(allProjectDependencies.map((dep) => `${dep.libName}@${dep.commit}`));
   const manualRules: ManualRuleStatus[] = registry.listManualUnavailableRules()
     .filter((rule) => projectLibNames.has(rule.key) || projectRuleKeys.has(rule.key))
     .map((rule) => {
@@ -206,8 +229,7 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
   const unlinkedList: string[] = [];
 
   for (const dep of dependencies) {
-    const localPath = path.join(thirdPartyDir, dep.libName);
-    const linkStatus = await checkLinkStatus(localPath);
+    const linkStatus = await checkLinkStatus(dep.localPath);
 
     if (linkStatus.isLinked) {
       if (linkStatus.isValid) {
@@ -253,13 +275,13 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
 
     if (isLinked) {
       try {
-        const subConfig = await parseCodepacDep(sub.configPath);
-        const subDeps = extractDependencies(subConfig);
-        const subThirdPartyDir = path.dirname(sub.configPath);
+        const subDeps = await collectScopeStatusDependencies(
+          sub.configPath,
+          projectInfo?.submoduleOptionalConfigs?.[sub.relativePath] ?? []
+        );
 
         for (const dep of subDeps) {
-          const localPath = path.join(subThirdPartyDir, dep.libName);
-          const linkStatus = await checkLinkStatus(localPath);
+          const linkStatus = await checkLinkStatus(dep.localPath);
 
           if (linkStatus.isLinked) {
             if (linkStatus.isValid) {
@@ -303,7 +325,7 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
         path: s.path,
         isLinked: s.isLinked,
         dependencies: {
-          total: s.depCount,
+          total: s.isLinked ? s.linked + s.broken + s.unlinked : s.depCount,
           linked: s.linked,
           broken: s.broken,
           unlinked: s.unlinked,
@@ -498,6 +520,145 @@ async function showTreeView(
   }
 
   printTree(treeItems);
+}
+
+async function collectStatusDependencies(params: {
+  projectRoot: string;
+  configPath: string;
+  projectInfo: ReturnType<ReturnType<typeof getRegistry>['getProject']> | undefined;
+  includeSubmodules: boolean;
+}): Promise<StatusDependency[]> {
+  const { projectRoot, configPath, projectInfo, includeSubmodules } = params;
+  const dependencies = await collectScopeStatusDependencies(configPath, projectInfo?.optionalConfigs ?? []);
+
+  if (!includeSubmodules || !projectInfo?.submodules || projectInfo.submodules.length === 0) {
+    return dependencies;
+  }
+
+  const submoduleConfigs = await findSubmoduleConfigs(projectRoot);
+  const selectedSubmodules = submoduleConfigs.filter((submodule) =>
+    projectInfo.submodules?.includes(submodule.relativePath)
+  );
+
+  for (const submodule of selectedSubmodules) {
+    dependencies.push(...await collectScopeStatusDependencies(
+      submodule.configPath,
+      projectInfo.submoduleOptionalConfigs?.[submodule.relativePath] ?? []
+    ));
+  }
+
+  return dependencies;
+}
+
+async function collectScopeStatusDependencies(
+  configPath: string,
+  selectedOptionalConfigNames: string[]
+): Promise<StatusDependency[]> {
+  const dependencies: StatusDependency[] = [];
+  const seen = new Set<string>();
+  const visitedConfigs = new Set<string>();
+
+  async function addConfigDependencies(currentConfigPath: string): Promise<void> {
+    if (visitedConfigs.has(currentConfigPath)) return;
+    visitedConfigs.add(currentConfigPath);
+
+    const config = await parseCodepacDep(currentConfigPath);
+    const configDir = path.dirname(currentConfigPath);
+
+    for (const dependency of extractDependencies(config)) {
+      addStatusDependency(dependencies, seen, {
+        libName: dependency.libName,
+        commit: dependency.commit,
+        localPath: path.join(configDir, dependency.libName),
+      });
+    }
+
+    await collectActionStatusDependencies({
+      actions: extractActions(config),
+      baseConfigDir: configDir,
+      targetRootDir: configDir,
+      dependencies,
+      seen,
+    });
+  }
+
+  await addConfigDependencies(configPath);
+
+  const optionalConfigs = await resolveSelectedOptionalConfigs(configPath, selectedOptionalConfigNames);
+  for (const optionalConfig of optionalConfigs) {
+    await addConfigDependencies(optionalConfig.path);
+  }
+
+  return dependencies;
+}
+
+async function resolveSelectedOptionalConfigs(
+  configPath: string,
+  names: string[]
+): Promise<OptionalConfigInfo[]> {
+  if (names.length === 0) return [];
+  const discovery = await findAllCodepacConfigs(path.dirname(configPath));
+  if (!discovery) return [];
+  return names
+    .map((name) => discovery.optionalConfigs.find((config) => config.name === name))
+    .filter((config): config is OptionalConfigInfo => Boolean(config));
+}
+
+async function collectActionStatusDependencies(params: {
+  actions: Array<{ command: string; dir?: string }>;
+  baseConfigDir: string;
+  targetRootDir: string;
+  dependencies: StatusDependency[];
+  seen: Set<string>;
+}): Promise<void> {
+  const { actions, baseConfigDir, targetRootDir, dependencies, seen } = params;
+
+  for (const action of actions) {
+    let parsedAction;
+    try {
+      parsedAction = parseActionCommand(action.command);
+    } catch {
+      continue;
+    }
+
+    const nestedConfigPath = path.resolve(baseConfigDir, parsedAction.configDir, 'codepac-dep.json');
+    let nested;
+    try {
+      nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries);
+    } catch {
+      continue;
+    }
+
+    const nestedTargetDir = path.resolve(targetRootDir, parsedAction.targetDir);
+    for (const dependency of nested.dependencies) {
+      addStatusDependency(dependencies, seen, {
+        libName: dependency.libName,
+        commit: dependency.commit,
+        localPath: path.join(nestedTargetDir, dependency.libName),
+      });
+    }
+
+    if (!parsedAction.disableAction && nested.nestedActions.length > 0) {
+      await collectActionStatusDependencies({
+        actions: nested.nestedActions,
+        baseConfigDir: path.dirname(nestedConfigPath),
+        targetRootDir: nestedTargetDir,
+        dependencies,
+        seen,
+      });
+    }
+  }
+}
+
+function addStatusDependency(
+  dependencies: StatusDependency[],
+  seen: Set<string>,
+  dependency: StatusDependency
+): void {
+  const key = `${dependency.libName}:${dependency.commit}:${dependency.localPath}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  dependencies.push(dependency);
 }
 
 /**

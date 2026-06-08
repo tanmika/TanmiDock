@@ -88,16 +88,30 @@ export async function exists(libName: string, commit: string, platform: string):
       // General 库检查 _shared 目录是否存在且有内容
       const sharedPath = path.join(storePath, libName, commit, '_shared');
       await fs.access(sharedPath);
-      const entries = await fs.readdir(sharedPath);
-      return entries.length > 0; // 空目录视为不存在
+      return await hasVisibleContent(sharedPath);
     }
 
     const libPath = getLibraryPath(storePath, libName, commit, platform);
     await fs.access(libPath);
-    return true;
+    return await hasVisibleContent(libPath);
   } catch {
     return false;
   }
+}
+
+export async function hasVisibleContent(dirPath: string): Promise<boolean> {
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+  for (const entry of entries) {
+    const name = typeof entry === 'string' ? entry : entry.name;
+    if (name.startsWith('.')) continue;
+    if (typeof entry === 'string') return true;
+    if (typeof entry.isFile === 'function' && entry.isFile()) return true;
+    if (typeof entry.isSymbolicLink === 'function' && entry.isSymbolicLink()) return true;
+    if (entry.isDirectory() && await hasVisibleContent(path.join(dirPath, name))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -883,13 +897,18 @@ export async function isGeneralLib(libName: string, commit: string): Promise<boo
 
     // 检查 _shared 目录是否有内容（空目录不算 General 库）
     const sharedPath = path.join(commitPath, '_shared');
-    const sharedEntries = await fs.readdir(sharedPath);
-    if (sharedEntries.length === 0) return false;
+    if (!await hasVisibleContent(sharedPath)) return false;
 
     // KNOWN_PLATFORM_VALUES 已在文件顶部静态导入
-    const hasPlatform = entries.some(e =>
-      e.isDirectory() && KNOWN_PLATFORM_VALUES.includes(e.name)
-    );
+    let hasPlatform = false;
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !KNOWN_PLATFORM_VALUES.includes(entry.name)) continue;
+      const platformPath = path.join(commitPath, entry.name);
+      if (await hasVisibleContent(platformPath)) {
+        hasPlatform = true;
+        break;
+      }
+    }
 
     return !hasPlatform;
   } catch {
@@ -1005,6 +1024,7 @@ export default {
   checkPlatformCompleteness,
   isGeneralLib,
   captureIntegrity,
+  hasVisibleContent,
   quickVerify,
   fullVerify,
 };

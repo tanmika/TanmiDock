@@ -405,6 +405,44 @@ describe('parseActionCommand', () => {
     expect(result.disableAction).toBe(true);
   });
 
+  it('should parse action options regardless of argument order', () => {
+    const command = 'codepac install lib1 --targetdir out --disable_action --configdir deps';
+
+    const result = parseActionCommand(command);
+
+    expect(result.libraries).toEqual(['lib1']);
+    expect(result.configDir).toBe('deps');
+    expect(result.targetDir).toBe('out');
+    expect(result.disableAction).toBe(true);
+  });
+
+  it('should parse quoted config and target directories', () => {
+    const command = 'codepac install lib1 lib2 --configdir "dir with space" --targetdir "out dir"';
+
+    const result = parseActionCommand(command);
+
+    expect(result.libraries).toEqual(['lib1', 'lib2']);
+    expect(result.configDir).toBe('dir with space');
+    expect(result.targetDir).toBe('out dir');
+  });
+
+  it('should parse short action option names', () => {
+    const command = 'codepac install lib1 -td out -cd deps -dc';
+
+    const result = parseActionCommand(command);
+
+    expect(result.libraries).toEqual(['lib1']);
+    expect(result.configDir).toBe('deps');
+    expect(result.targetDir).toBe('out');
+    expect(result.disableAction).toBe(true);
+  });
+
+  it('should throw when action option value is missing', () => {
+    const command = 'codepac install lib1 --configdir --targetdir out';
+
+    expect(() => parseActionCommand(command)).toThrow('--configdir 缺少参数值');
+  });
+
   it('should use configDir as default targetDir when not specified', () => {
     // Given: 没有指定 --targetdir
     const command = 'codepac install lib1 --configdir myDeps';

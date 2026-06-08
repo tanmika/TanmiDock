@@ -141,12 +141,29 @@ describe('store', () => {
     it('should return true when library exists', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
       fsMock.access.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue([
+        { name: 'lib.a', isFile: () => true, isDirectory: () => false },
+      ]);
+      fsUtilsMock.countFiles.mockResolvedValue(1);
 
       const { exists } = await import('../../src/core/store.js');
       const result = await exists('mylib', 'abc123', 'macOS');
 
       expect(result).toBe(true);
       expect(fsMock.access).toHaveBeenCalledWith(path.join('/store', 'mylib', 'abc123', 'macOS'));
+    });
+
+    it('should return false when platform directory is empty or only hidden files', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue([
+        { name: '.gitkeep', isFile: () => true, isDirectory: () => false },
+      ]);
+
+      const { exists } = await import('../../src/core/store.js');
+      const result = await exists('mylib', 'abc123', 'macOS');
+
+      expect(result).toBe(false);
     });
 
     it('should return false when library does not exist', async () => {
@@ -1109,6 +1126,28 @@ describe('store', () => {
     });
   });
 
+  describe('exists', () => {
+    it('should return false when platform directory has no files', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue([]);
+
+      const { exists } = await import('../../src/core/store.js');
+      await expect(exists('mylib', 'abc123', 'macOS')).resolves.toBe(false);
+    });
+
+    it('should return true when platform directory has files', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+      fsMock.access.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue([
+        { name: 'lib.a', isFile: () => true, isDirectory: () => false },
+      ]);
+
+      const { exists } = await import('../../src/core/store.js');
+      await expect(exists('mylib', 'abc123', 'macOS')).resolves.toBe(true);
+    });
+  });
+
   describe('absorbLocalLib', () => {
     it('should call absorbLib when platform directories exist', async () => {
       configMock.getStorePath.mockResolvedValue('/store');
@@ -1161,6 +1200,32 @@ describe('store', () => {
       expect(result.platforms).toEqual(['general']);
       expect(result.size).toBe(1024);
       expect(result.nestedLibraries).toEqual([]);
+    });
+  });
+
+  describe('General directory detection', () => {
+    it('should not treat _shared with only hidden files as General content', async () => {
+      configMock.getStorePath.mockResolvedValue('/store');
+
+      fsMock.readdir.mockImplementation(async (p: string, options?: { withFileTypes?: boolean }) => {
+        if (p === '/store/mylib/abc123' && options?.withFileTypes) {
+          return [
+            { name: '_shared', isDirectory: () => true },
+          ];
+        }
+        if (p === '/store/mylib/abc123/_shared') {
+          return [
+            { name: '.DS_Store', isFile: () => true, isDirectory: () => false },
+            { name: '.keep', isFile: () => true, isDirectory: () => false },
+          ];
+        }
+        return [];
+      });
+
+      const { exists, isGeneralLib } = await import('../../src/core/store.js');
+
+      await expect(exists('mylib', 'abc123', 'general')).resolves.toBe(false);
+      await expect(isGeneralLib('mylib', 'abc123')).resolves.toBe(false);
     });
   });
 });
