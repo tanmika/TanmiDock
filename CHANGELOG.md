@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-11
+
+### Added
+
+- 新增 Git 轻量下载配置项 `gitLightweightDownload`，默认开启。
+- `td config` 支持查看和修改 Git 轻量下载开关。
+
+### Changed
+
+- 下载阶段优先使用 Git 非完整拉取，仅获取指定平台和必要共享内容，以降低临时下载空间消耗。
+- 配置版本升级到 `1.2.0`，旧配置会自动补齐 Git 轻量下载默认值。
+
 ## [0.9.3] - 2026-04-16
 
 ### Fixed
@@ -419,7 +431,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform support (macOS and Windows)
 - codepac integration for dependency download
 
-[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/tanmika/TanmiDock/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/tanmika/TanmiDock/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/tanmika/TanmiDock/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/tanmika/TanmiDock/compare/v0.9.0...v0.9.1
