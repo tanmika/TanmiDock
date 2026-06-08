@@ -27,7 +27,7 @@ describe('config command', () => {
     vi.clearAllMocks();
   });
 
-  it('should register get and set subcommands for sharedSymlinkFolders usage', async () => {
+  it('should register get and set subcommands for configurable options', async () => {
     const { createConfigCommand } = await import('../../src/commands/config.js');
 
     const command = createConfigCommand();
@@ -72,5 +72,41 @@ describe('config command', () => {
     expect(config.parseConfigValue).toHaveBeenCalledWith('sharedSymlinkFolders', 'false');
     expect(config.set).toHaveBeenCalledWith('sharedSymlinkFolders', false);
     expect(logger.success).toHaveBeenCalledWith('配置已更新: sharedSymlinkFolders = false');
+  });
+
+  it('should support get gitLightweightDownload', async () => {
+    const config = await import('../../src/core/config.js');
+    vi.mocked(config.isValidConfigKey).mockReturnValue(true);
+    vi.mocked(config.get).mockResolvedValue(true);
+
+    const logger = await import('../../src/utils/logger.js');
+    const { createConfigCommand } = await import('../../src/commands/config.js');
+
+    const command = createConfigCommand();
+    await command.parseAsync(['node', 'config', 'get', 'gitLightweightDownload'], {
+      from: 'node',
+    });
+
+    expect(config.get).toHaveBeenCalledWith('gitLightweightDownload');
+    expect(logger.info).toHaveBeenCalledWith('true');
+  });
+
+  it('should support set gitLightweightDownload', async () => {
+    const config = await import('../../src/core/config.js');
+    vi.mocked(config.isValidConfigKey).mockReturnValue(true);
+    vi.mocked(config.parseConfigValue).mockReturnValue(false);
+    vi.mocked(config.set).mockResolvedValue(undefined);
+
+    const logger = await import('../../src/utils/logger.js');
+    const { createConfigCommand } = await import('../../src/commands/config.js');
+
+    const command = createConfigCommand();
+    await command.parseAsync(['node', 'config', 'set', 'gitLightweightDownload', 'false'], {
+      from: 'node',
+    });
+
+    expect(config.parseConfigValue).toHaveBeenCalledWith('gitLightweightDownload', 'false');
+    expect(config.set).toHaveBeenCalledWith('gitLightweightDownload', false);
+    expect(logger.success).toHaveBeenCalledWith('配置已更新: gitLightweightDownload = false');
   });
 });

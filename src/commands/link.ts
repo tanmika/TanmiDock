@@ -117,6 +117,7 @@ interface LinkScopeParams {
   dryRun: boolean;
   yes: boolean;
   concurrency: number;
+  gitLightweightDownload: boolean;
   optionalConfigs?: OptionalConfigInfo[];
   scope?: string;
 }
@@ -494,6 +495,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
     scanExtraPlatforms,
     registry, tx, projectHash, projectRoot, storePath,
     download, dryRun, yes, concurrency,
+    gitLightweightDownload,
     optionalConfigs,
     scope,
   } = params;
@@ -710,7 +712,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           const isLinkedGeneral = await resolveLibraryGeneralState(dependency);
           if (!isLinkedGeneral) {
             const supplementResult = await supplementMissingPlatforms(
-              dependency, platforms, registry, tx, { vars: configVars }
+              dependency, platforms, registry, tx, {
+                vars: configVars,
+                useGitLightweightDownload: gitLightweightDownload,
+              }
             );
             await registerNestedLibraries(supplementResult.nestedLibraries, projectHash);
 
@@ -777,7 +782,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，重建链接`);
           } else {
             const relinkSupplementResult = await supplementMissingPlatforms(
-              dependency, platforms, registry, tx, { vars: configVars }
+              dependency, platforms, registry, tx, {
+                vars: configVars,
+                useGitLightweightDownload: gitLightweightDownload,
+              }
             );
             await registerNestedLibraries(relinkSupplementResult.nestedLibraries, projectHash);
 
@@ -862,7 +870,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             success(`${dependency.libName} (${dependency.commit.slice(0, 7)}) - General 库，创建链接`);
           } else {
             const replaceSupplementResult = await supplementMissingPlatforms(
-              dependency, platforms, registry, tx, { vars: configVars }
+              dependency, platforms, registry, tx, {
+                vars: configVars,
+                useGitLightweightDownload: gitLightweightDownload,
+              }
             );
             await registerNestedLibraries(replaceSupplementResult.nestedLibraries, projectHash);
 
@@ -1008,7 +1019,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
             await registerNestedLibraries(absorbResult.nestedLibraries, projectHash);
 
             const absorbSupplementResult = await supplementMissingPlatforms(
-              dependency, platforms, registry, tx, { vars: configVars }
+              dependency, platforms, registry, tx, {
+                vars: configVars,
+                useGitLightweightDownload: gitLightweightDownload,
+              }
             );
             await registerNestedLibraries(absorbSupplementResult.nestedLibraries, projectHash);
 
@@ -1100,6 +1114,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               downloadResult = await codepac.downloadToTemp({
                 url: dependency.url, commit: dependency.commit, branch: dependency.branch,
                 libName: dependency.libName, platforms: missing, sparse: dependency.sparse, vars: configVars,
+                useGitLightweightDownload: gitLightweightDownload,
                 onTempDirCreated: (_tempDir, libDir) => { linkNewMonitor.start(libDir); },
                 onHeartbeat: (message) => { linkNewMonitor.heartbeat(message); },
               });
@@ -1290,6 +1305,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
                   url: dependency.url, commit: dependency.commit, branch: dependency.branch,
                   libName: dependency.libName, platforms: dlToDownload, sparse: dependency.sparse,
                   vars: configVars,
+                  useGitLightweightDownload: gitLightweightDownload,
                   onTempDirCreated: (_tempDir, libDir) => { downloadMonitor.start(libDir); },
                   onHeartbeat: (message) => { downloadMonitor.heartbeat(message); },
                 });
@@ -1444,7 +1460,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
       for (const action of actions) {
         await processAction(action, nestedContext, thirdPartyDir, {
           tx, registry, projectHash, projectRoot, dryRun, download, yes,
-          generalLibs, downloadedLibs, nestedLinkedDeps,
+          gitLightweightDownload, generalLibs, downloadedLibs, nestedLinkedDeps,
         });
       }
     }
@@ -1496,6 +1512,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   if (cfg?.logLevel) setLogLevel(cfg.logLevel);
   if (cfg?.proxy) setProxyConfig(cfg.proxy);
   const concurrency = cfg?.concurrency ?? 5;
+  const gitLightweightDownload = cfg?.gitLightweightDownload ?? true;
 
   const registry = getRegistry();
   await registry.load();
@@ -1666,6 +1683,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       dryRun: options.dryRun,
       yes: options.yes,
       concurrency,
+      gitLightweightDownload,
       optionalConfigs: selectedOptionalConfigs,
     });
 
@@ -1691,6 +1709,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           dryRun: true,
           yes: options.yes,
           concurrency,
+          gitLightweightDownload,
           optionalConfigs: sub.selectedOptionalConfigs,
           scope: sub.relativePath,
         });
@@ -1717,6 +1736,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
         dryRun: options.dryRun,
         yes: options.yes,
         concurrency,
+        gitLightweightDownload,
         optionalConfigs: sub.selectedOptionalConfigs,
         scope: sub.relativePath,
       });
@@ -2390,6 +2410,8 @@ interface SupplementOptions {
   forceDownload?: boolean;
   /** codepac 变量定义（用于解析 sparse 中的变量引用） */
   vars?: Record<string, string>;
+  /** 是否使用 Git 非完整拉取以降低下载空间消耗 */
+  useGitLightweightDownload?: boolean;
 }
 
 interface SupplementResult {
@@ -2453,6 +2475,7 @@ async function supplementMissingPlatforms(
       platforms: toDownload,
       sparse: dependency.sparse,
       vars: options.vars,
+      useGitLightweightDownload: options.useGitLightweightDownload,
     });
 
     // 提示清理的平台（如果有）
@@ -2642,6 +2665,7 @@ interface ProcessActionOptions {
   dryRun: boolean;
   download: boolean;
   yes: boolean;
+  gitLightweightDownload: boolean;
   generalLibs: Set<string>;
   downloadedLibs: string[];
   nestedLinkedDeps: NestedLinkedDep[];
@@ -2937,6 +2961,7 @@ async function linkNestedDependencies(
                 platforms: availablePlatforms,
                 sparse: dep.sparse,
                 vars,
+                useGitLightweightDownload: options.gitLightweightDownload,
               });
 
               const assessment = assessDownloadResult(
@@ -2994,7 +3019,7 @@ async function linkNestedDependencies(
             platforms,
             registry,
             tx,
-            { vars }
+            { vars, useGitLightweightDownload: options.gitLightweightDownload }
           );
 
           // 注册嵌套依赖
@@ -3097,7 +3122,7 @@ async function linkNestedDependencies(
           platforms,
           registry,
           tx,
-          { vars }
+          { vars, useGitLightweightDownload: options.gitLightweightDownload }
         );
 
         // 注册嵌套依赖
@@ -3161,6 +3186,7 @@ async function linkNestedDependencies(
             platforms: availablePlatforms,
             sparse: dep.sparse,
             vars,
+            useGitLightweightDownload: options.gitLightweightDownload,
             onTempDirCreated: (_tempDir, libDir) => { downloadMonitor.start(libDir); },
             onHeartbeat: (message) => { downloadMonitor.heartbeat(message); },
           });

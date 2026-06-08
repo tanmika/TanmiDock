@@ -5,7 +5,7 @@
 // ============ 版本常量 ============
 
 /** 当前配置版本 */
-export const CURRENT_CONFIG_VERSION = '1.1.0';
+export const CURRENT_CONFIG_VERSION = '1.2.0';
 /** 最低支持版本 */
 export const MIN_SUPPORTED_VERSION = '1.0.0';
 
@@ -29,6 +29,7 @@ export interface DockConfig {
   proxy?: ProxyConfig; // 代理配置，可选
   unverifiedLocalStrategy: UnverifiedLocalStrategy; // 无法验证commit的本地库处理策略
   sharedSymlinkFolders?: boolean; // _shared目录是否使用符号链接，默认true
+  gitLightweightDownload?: boolean; // Git 非完整拉取，默认 true，可降低临时下载空间消耗
 }
 
 export type CleanStrategy = 'unreferenced' | 'unused' | 'manual' | 'capacity';
@@ -48,7 +49,7 @@ export interface ProxyConfig {
  * 默认配置
  */
 export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
-  version: '1.0.0',
+  version: CURRENT_CONFIG_VERSION,
   initialized: false,
   cleanStrategy: 'unreferenced',
   unusedDays: 30,
@@ -58,6 +59,7 @@ export const DEFAULT_CONFIG: Omit<DockConfig, 'storePath'> = {
   logLevel: 'info',
   unverifiedLocalStrategy: 'download',
   sharedSymlinkFolders: true,
+  gitLightweightDownload: true,
 };
 
 // ============ 注册表相关 ============

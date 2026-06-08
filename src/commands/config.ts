@@ -32,6 +32,7 @@ export function createConfigCommand(): Command {
   unreferencedThreshold    无引用容量阈值 (capacity 策略时生效)，格式: 10GB
   maxStoreSize             最大存储大小，兼容旧配置使用
   autoDownload             缺失依赖时是否自动下载: true/false
+  gitLightweightDownload   Git 非完整拉取，可有效降低空间消耗: true/false
   sharedSymlinkFolders     _shared 一级目录是否使用符号链接: true/false
   concurrency              并发下载数: 1/2/3/5/99(不限制)
   logLevel                 日志级别: debug/verbose/info/warn/error
@@ -43,6 +44,7 @@ export function createConfigCommand(): Command {
   td config get storePath                获取存储路径
   td config get sharedSymlinkFolders     获取 _shared 目录链接策略
   td config set concurrency 5            设置并发数
+  td config set gitLightweightDownload false  使用完整拉取
   td config set sharedSymlinkFolders false  临时切换为复制模式
   td config set proxy '{"http":"http://127.0.0.1:7890"}'`
     );
@@ -96,6 +98,7 @@ const READABLE_CONFIG_KEYS = [
   'unreferencedThreshold',
   'maxStoreSize',
   'autoDownload',
+  'gitLightweightDownload',
   'sharedSymlinkFolders',
   'concurrency',
   'logLevel',
@@ -147,6 +150,13 @@ const CONFIG_META: ConfigMeta[] = [
     type: 'number',
   },
   { key: 'autoDownload', label: '自动下载', description: '缺失依赖时自动下载', editable: true, type: 'boolean' },
+  {
+    key: 'gitLightweightDownload',
+    label: 'Git 轻量下载',
+    description: '使用 Git 非完整拉取，可有效降低空间消耗',
+    editable: true,
+    type: 'boolean',
+  },
   {
     key: 'sharedSymlinkFolders',
     label: '共享目录符号链接',

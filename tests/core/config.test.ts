@@ -31,6 +31,7 @@ describe('config', () => {
       expect(isValidConfigKey('maxStoreSize')).toBe(true);
       expect(isValidConfigKey('autoDownload')).toBe(true);
       expect(isValidConfigKey('sharedSymlinkFolders')).toBe(true);
+      expect(isValidConfigKey('gitLightweightDownload')).toBe(true);
       expect(isValidConfigKey('initialized')).toBe(true);
       expect(isValidConfigKey('version')).toBe(true);
     });
@@ -63,6 +64,14 @@ describe('config', () => {
       expect(parseConfigValue('initialized', 'true')).toBe(true);
       expect(parseConfigValue('sharedSymlinkFolders', 'true')).toBe(true);
       expect(parseConfigValue('sharedSymlinkFolders', 'false')).toBe(false);
+      expect(parseConfigValue('gitLightweightDownload', 'true')).toBe(true);
+      expect(parseConfigValue('gitLightweightDownload', 'false')).toBe(false);
+    });
+
+    it('should throw for invalid gitLightweightDownload boolean values', () => {
+      expect(() => parseConfigValue('gitLightweightDownload', 'yes')).toThrow(
+        '有效值: true, false'
+      );
     });
 
     it('should parse number values correctly', () => {
@@ -90,10 +99,11 @@ describe('config', () => {
       const config = getDefaultConfig('/test/store');
       expect(config.storePath).toBe('/test/store');
       expect(config.initialized).toBe(true);
-      expect(config.version).toBe('1.0.0');
+      expect(config.version).toBe('1.2.0');
       expect(config.cleanStrategy).toBe('unreferenced');
       expect(config.autoDownload).toBe(true);
       expect(config.sharedSymlinkFolders).toBe(true);
+      expect(config.gitLightweightDownload).toBe(true);
     });
 
     it('should expand ~ in storePath', () => {
@@ -126,11 +136,12 @@ describe('config with fs mock', () => {
   describe('load', () => {
     it('should return config when file exists', async () => {
       const mockConfig = {
-        version: '1.1.0',
+        version: '1.2.0',
         initialized: true,
         storePath: '/test/store',
         cleanStrategy: 'unreferenced',
         autoDownload: true,
+        gitLightweightDownload: true,
       };
       fsMock.readFile.mockResolvedValue(JSON.stringify(mockConfig));
 
@@ -138,6 +149,51 @@ describe('config with fs mock', () => {
       const config = await load();
 
       expect(config).toEqual(mockConfig);
+    });
+
+    it('should backfill gitLightweightDownload when migrating v1.1.0 config', async () => {
+      const legacyConfig = {
+        version: '1.1.0',
+        initialized: true,
+        storePath: '/test/store',
+        cleanStrategy: 'unreferenced',
+        autoDownload: true,
+        sharedSymlinkFolders: true,
+      };
+      fsMock.readFile.mockResolvedValue(JSON.stringify(legacyConfig));
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.writeFile.mockResolvedValue(undefined);
+
+      const { load } = await import('../../src/core/config.js');
+      const config = await load();
+
+      expect(config?.version).toBe('1.2.0');
+      expect(config?.gitLightweightDownload).toBe(true);
+
+      const writtenContent = JSON.parse(fsMock.writeFile.mock.calls[0][1]);
+      expect(writtenContent.version).toBe('1.2.0');
+      expect(writtenContent.gitLightweightDownload).toBe(true);
+    });
+
+    it('should preserve disabled gitLightweightDownload during v1.1.0 migration', async () => {
+      const legacyConfig = {
+        version: '1.1.0',
+        initialized: true,
+        storePath: '/test/store',
+        cleanStrategy: 'unreferenced',
+        autoDownload: true,
+        sharedSymlinkFolders: true,
+        gitLightweightDownload: false,
+      };
+      fsMock.readFile.mockResolvedValue(JSON.stringify(legacyConfig));
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.writeFile.mockResolvedValue(undefined);
+
+      const { load } = await import('../../src/core/config.js');
+      const config = await load();
+
+      expect(config?.version).toBe('1.2.0');
+      expect(config?.gitLightweightDownload).toBe(false);
     });
 
     it('should backfill sharedSymlinkFolders when migrating v1.0.0 config', async () => {
@@ -155,11 +211,14 @@ describe('config with fs mock', () => {
       const { load } = await import('../../src/core/config.js');
       const config = await load();
 
-      expect(config?.version).toBe('1.1.0');
+      expect(config?.version).toBe('1.2.0');
       expect(config?.sharedSymlinkFolders).toBe(true);
+      expect(config?.gitLightweightDownload).toBe(true);
 
       const writtenContent = JSON.parse(fsMock.writeFile.mock.calls[0][1]);
+      expect(writtenContent.version).toBe('1.2.0');
       expect(writtenContent.sharedSymlinkFolders).toBe(true);
+      expect(writtenContent.gitLightweightDownload).toBe(true);
     });
 
     it('should return null when file does not exist', async () => {

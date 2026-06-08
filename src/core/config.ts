@@ -97,6 +97,14 @@ const migrations: Record<string, MigrationFn> = {
       sharedSymlinkFolders: config.sharedSymlinkFolders ?? true,
     };
   },
+  '1.1.0': (config) => {
+    // v1.1.0 → v1.2.0：新增 Git 非完整拉取开关，默认开启以降低下载空间消耗。
+    return {
+      ...config,
+      version: '1.2.0',
+      gitLightweightDownload: config.gitLightweightDownload ?? true,
+    };
+  },
 };
 
 /**
@@ -202,6 +210,7 @@ export function isValidConfigKey(key: string): key is keyof DockConfig {
     'proxy',
     'unverifiedLocalStrategy',
     'sharedSymlinkFolders',
+    'gitLightweightDownload',
   ];
   return validKeys.includes(key as keyof DockConfig);
 }
@@ -238,6 +247,11 @@ export function parseConfigValue(
     case 'autoDownload':
     case 'initialized':
     case 'sharedSymlinkFolders':
+      return value === 'true';
+    case 'gitLightweightDownload':
+      if (value !== 'true' && value !== 'false') {
+        throw new Error(`无效的 ${key} 值: ${value}，有效值: true, false`);
+      }
       return value === 'true';
     case 'unusedDays':
     case 'maxStoreSize':

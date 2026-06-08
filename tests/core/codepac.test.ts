@@ -32,6 +32,8 @@ const mockUnlink = vi.fn();
 const mockMkdir = vi.fn();
 const mockRm = vi.fn();
 const mockReaddir = vi.fn();
+const mockStat = vi.fn();
+const mockReadFile = vi.fn();
 vi.mock('fs/promises', () => ({
   default: {
     writeFile: (...args: unknown[]) => mockWriteFile(...args),
@@ -39,12 +41,16 @@ vi.mock('fs/promises', () => ({
     mkdir: (...args: unknown[]) => mockMkdir(...args),
     rm: (...args: unknown[]) => mockRm(...args),
     readdir: (...args: unknown[]) => mockReaddir(...args),
+    stat: (...args: unknown[]) => mockStat(...args),
+    readFile: (...args: unknown[]) => mockReadFile(...args),
   },
   writeFile: (...args: unknown[]) => mockWriteFile(...args),
   unlink: (...args: unknown[]) => mockUnlink(...args),
   mkdir: (...args: unknown[]) => mockMkdir(...args),
   rm: (...args: unknown[]) => mockRm(...args),
   readdir: (...args: unknown[]) => mockReaddir(...args),
+  stat: (...args: unknown[]) => mockStat(...args),
+  readFile: (...args: unknown[]) => mockReadFile(...args),
 }));
 
 // Mock os for installSingle and downloadToTemp tests
@@ -59,7 +65,7 @@ vi.mock('os', () => ({
 import * as codepac from '../../src/core/codepac.js';
 
 // 创建模拟进程的辅助函数
-function createMockProcess(exitCode = 0, stderrData = '') {
+function createMockProcess(exitCode = 0, stderrData = '', stdoutData = '') {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: EventEmitter;
     stderr: EventEmitter;
@@ -69,6 +75,9 @@ function createMockProcess(exitCode = 0, stderrData = '') {
 
   // 延迟触发事件，模拟异步行为
   setImmediate(() => {
+    if (stdoutData) {
+      proc.stdout.emit('data', Buffer.from(stdoutData));
+    }
     if (stderrData) {
       proc.stderr.emit('data', Buffer.from(stderrData));
     }
@@ -88,6 +97,8 @@ describe('codepac', () => {
     mockMkdir.mockReset();
     mockRm.mockReset();
     mockReaddir.mockReset();
+    mockStat.mockReset();
+    mockReadFile.mockReset();
     mockExecShouldFail = false;
   });
 
@@ -604,6 +615,691 @@ describe('codepac', () => {
   });
 
   describe('downloadToTemp', () => {
+    const fullCommit = '1234567890abcdef1234567890abcdef12345678';
+
+    it('should prefer git lightweight download when it succeeds', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\nWin\ninclude\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'macOS/libtsa.a\ninclude/header.h\nWin/libtsa.lib\n');
+        }
+        return createMockProcess(0);
+      });
+
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining([
+          'clone',
+          '--filter=blob:none',
+          '--depth',
+          '1',
+          '--single-branch',
+          '--no-checkout',
+          '--branch',
+          'main',
+          'git@example.com:repo/lib.git',
+        ]),
+        expect.objectContaining({
+          env: expect.objectContaining({
+            GIT_LFS_SKIP_SMUDGE: '1',
+          }),
+        })
+      );
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).not.toContain('codepac');
+      expect(result.platformDirs).toEqual(['macOS']);
+      expect(result.sharedFiles).toEqual(['include']);
+    });
+
+    it('should use codepac directly when git lightweight download is disabled', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockReturnValue(createMockProcess(0));
+
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+        useGitLightweightDownload: false,
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toEqual(['codepac']);
+      expect(result.platformDirs).toEqual(['macOS']);
+    });
+
+    it('should resolve platform cli key before verifying git lightweight download', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\nWin\ninclude\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'macOS/libtsa.a\nWin/libtsa.lib\ninclude/header.h\n');
+        }
+        return createMockProcess(0);
+      });
+
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['mac'],
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).not.toContain('codepac');
+      expect(result.platformDirs).toEqual(['macOS']);
+    });
+
+    it('should configure sparse checkout from repository top-level entries when sparse is absent', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\nWin\ninclude\nREADME.md\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'macOS/libtsa.a\nWin/libtsa.lib\ninclude/header.h\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      const sparseSetCall = mockSpawn.mock.calls.find(
+        ([command, args]) => command === 'git'
+          && (args as string[]).includes('sparse-checkout')
+          && (args as string[]).includes('set')
+      );
+      expect(sparseSetCall).toBeDefined();
+
+      const args = sparseSetCall?.[1] as string[];
+      expect(args).toContain('macOS');
+      expect(args).toContain('macOS/**');
+      expect(args).toContain('include');
+      expect(args).toContain('README.md');
+      expect(args).not.toContain('Win');
+      expect(args).not.toContain('Win/**');
+    });
+
+    it('should pull lfs paths from sparse common and requested platform entries', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['wasm'],
+        sparse: { common: ['include'], wasm: ['macOS'] },
+      });
+
+      const lfsPullCall = mockSpawn.mock.calls.find(
+        ([command, args]) => command === 'git' && (args as string[]).includes('pull')
+      );
+      expect(lfsPullCall).toBeDefined();
+
+      const args = lfsPullCall?.[1] as string[];
+      const includeIndex = args.indexOf('--include');
+      expect(args[includeIndex + 1]).toBe('include,include/**,macOS,macOS/**');
+    });
+
+    it('should configure git sparse checkout from sparse common and requested platform entries', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['wasm'],
+        sparse: { common: ['include'], wasm: ['macOS'] },
+      });
+
+      expect(mockSpawn.mock.calls.some(
+        ([command, args]) => command === 'git' && (args as string[]).includes('sparse-checkout') && (args as string[]).includes('init')
+      )).toBe(true);
+      expect(mockSpawn.mock.calls.some(
+        ([command, args]) => command === 'git'
+          && (args as string[]).includes('sparse-checkout')
+          && (args as string[]).includes('set')
+          && (args as string[]).includes('include')
+          && (args as string[]).includes('macOS')
+      )).toBe(true);
+    });
+
+    it('should read sparse platform entries by platform key when requested platform is a directory value', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+        { name: 'cmake', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+        sparse: { common: ['include'], mac: ['macOS', 'cmake'] },
+      });
+
+      const lfsPullCall = mockSpawn.mock.calls.find(
+        ([command, args]) => command === 'git' && (args as string[]).includes('pull')
+      );
+      const args = lfsPullCall?.[1] as string[];
+      const includeIndex = args.indexOf('--include');
+      expect(args[includeIndex + 1]).toBe('include,include/**,macOS,macOS/**,cmake,cmake/**');
+    });
+
+    it('should resolve sparse string with vars before git lfs pull', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['mac'],
+        sparse: '${LIB_SPARSE}',
+        vars: {
+          LIB_SPARSE: '{"common":["include"],"mac":["macOS"]}',
+        },
+      });
+
+      const lfsPullCall = mockSpawn.mock.calls.find(
+        ([command, args]) => command === 'git' && (args as string[]).includes('pull')
+      );
+      const args = lfsPullCall?.[1] as string[];
+      const includeIndex = args.indexOf('--include');
+      expect(args[includeIndex + 1]).toBe('include,include/**,macOS,macOS/**');
+    });
+
+    it('should fallback to codepac when sparse string cannot be resolved', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockReturnValue(createMockProcess(0));
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+        sparse: '${MISSING_SPARSE}',
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toEqual(['codepac']);
+    });
+
+    it('should fetch target commit and retry checkout when shallow checkout fails', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+      ]);
+
+      let checkoutCount = 0;
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\nWin\ninclude\n');
+        }
+        if (command === 'git' && args.includes('checkout')) {
+          checkoutCount += 1;
+          return checkoutCount === 1 ? createMockProcess(1, 'reference is not a tree') : createMockProcess(0);
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'macOS/libtsa.a\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      expect(mockSpawn.mock.calls.some(
+        ([command, args]) => command === 'git' && (args as string[]).includes('fetch') && (args as string[]).includes(fullCommit)
+      )).toBe(true);
+      expect(checkoutCount).toBe(2);
+    });
+
+    it('should fallback to codepac when git checkout does not produce requested platform directory', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir
+        .mockResolvedValueOnce([
+          { name: 'README.md', isDirectory: () => false },
+        ])
+        .mockResolvedValueOnce([
+          { name: 'macOS', isDirectory: () => true },
+        ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\ninclude\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'macOS/libtsa.a\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).toContain('codepac');
+    });
+
+    it('should fallback to codepac when git checkout misses one requested platform directory', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockImplementation(async (targetPath: string) => {
+        if (targetPath.endsWith('/libtest')) {
+          const hasCodepacFallback = mockSpawn.mock.calls.some((call) => call[0] === 'codepac');
+          return hasCodepacFallback
+            ? [
+              { name: 'macOS', isDirectory: () => true },
+              { name: 'Win', isDirectory: () => true },
+            ]
+            : [
+              { name: 'macOS', isDirectory: () => true },
+            ];
+        }
+        if (targetPath.endsWith('/libtest/macOS')) {
+          return [{ name: 'libtsa.a', isDirectory: () => false, isFile: () => true }];
+        }
+        if (targetPath.endsWith('/libtest/Win')) {
+          return [{ name: 'libtsa.lib', isDirectory: () => false, isFile: () => true }];
+        }
+        return [];
+      });
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\nWin\ninclude\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'macOS/libtsa.a\nWin/libtsa.lib\n');
+        }
+        return createMockProcess(0);
+      });
+
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS', 'Win'],
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).toContain('codepac');
+      expect(result.platformDirs).toEqual(['macOS', 'Win']);
+    });
+
+    it('should accept git checkout when all requested platform directories exist', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'Win', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\nWin\ninclude\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'macOS/libtsa.a\nWin/libtsa.lib\ninclude/header.h\n');
+        }
+        return createMockProcess(0);
+      });
+
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS', 'Win'],
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).not.toContain('codepac');
+      expect(result.platformDirs).toEqual(['macOS', 'Win']);
+    });
+
+    it('should fallback to codepac when expected lfs file remains a pointer', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir
+        .mockResolvedValueOnce([
+          { name: 'macOS', isDirectory: () => true },
+        ])
+        .mockResolvedValueOnce([
+          { name: 'macOS', isDirectory: () => true },
+        ]);
+
+      const lfsPointer = [
+        'version https://git-lfs.github.com/spec/v1',
+        'oid sha256:abcdef',
+        'size 100',
+      ].join('\n');
+
+      mockStat.mockResolvedValue({
+        isFile: () => true,
+        size: lfsPointer.length,
+      });
+      mockReadFile.mockResolvedValue(lfsPointer);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\ninclude\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'macOS/libtsa.a\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).toContain('codepac');
+    });
+
+    it('should fallback to codepac when sparse lfs file remains a pointer', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir
+        .mockResolvedValueOnce([
+          { name: 'macOS', isDirectory: () => true },
+          { name: 'include', isDirectory: () => true },
+        ])
+        .mockResolvedValueOnce([
+          { name: 'macOS', isDirectory: () => true },
+          { name: 'include', isDirectory: () => true },
+        ]);
+
+      const lfsPointer = [
+        'version https://git-lfs.github.com/spec/v1',
+        'oid sha256:abcdef',
+        'size 100',
+      ].join('\n');
+
+      mockStat.mockImplementation(async (filePath: string) => ({
+        isFile: () => filePath.endsWith('macOS/libtsa.a'),
+        size: lfsPointer.length,
+      }));
+      mockReadFile.mockImplementation(async (filePath: string) => (
+        filePath.endsWith('macOS/libtsa.a') ? lfsPointer : 'binary-content'
+      ));
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'include/header.h\nmacOS/libtsa.a\nWin/libtsa.lib\n');
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['wasm'],
+        sparse: { common: ['include'], wasm: ['macOS'] },
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).toContain('codepac');
+    });
+
+    it('should ignore unresolved lfs pointer outside sparse include paths', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+        { name: 'include', isDirectory: () => true },
+      ]);
+
+      const lfsPointer = [
+        'version https://git-lfs.github.com/spec/v1',
+        'oid sha256:abcdef',
+        'size 100',
+      ].join('\n');
+
+      mockStat.mockImplementation(async (filePath: string) => ({
+        isFile: () => filePath.endsWith('Win/libtsa.lib'),
+        size: lfsPointer.length,
+      }));
+      mockReadFile.mockImplementation(async (filePath: string) => (
+        filePath.endsWith('Win/libtsa.lib') ? lfsPointer : 'binary-content'
+      ));
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', 'include/header.h\nmacOS/libtsa.a\nWin/libtsa.lib\n');
+        }
+        return createMockProcess(0);
+      });
+
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['wasm'],
+        sparse: { common: ['include'], wasm: ['macOS'] },
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).not.toContain('codepac');
+      expect(result.platformDirs).toEqual(['macOS']);
+    });
+
+    it('should cleanup git directory and fallback to codepac when git clone fails', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('clone')) {
+          return createMockProcess(1, 'filter unsupported');
+        }
+        if (command === 'git') {
+          return createMockProcess(0);
+        }
+        return createMockProcess(0);
+      });
+
+      const onProgress = vi.fn();
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+        onProgress,
+      });
+
+      const commands = mockSpawn.mock.calls.map((call) => call[0]);
+      expect(commands).toContain('git');
+      expect(commands).toContain('codepac');
+      expect(mockRm).toHaveBeenCalledWith(
+        expect.stringMatching(/\/tmp\/tanmi-dock-\d+-[a-z0-9]+\/libtest$/),
+        { recursive: true, force: true }
+      );
+      expect(onProgress).toHaveBeenCalledWith(expect.stringContaining('Git 轻量下载失败，切换 codepac 下载'));
+    });
+
     it('should create temp directory with correct naming pattern', async () => {
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);
@@ -736,6 +1432,39 @@ describe('codepac', () => {
       expect(result.platformDirs).toEqual(['macOS']);
       expect(result.cleanedPlatforms).toEqual(['macOS-asan']);
       expect(result.sharedFiles).toEqual(['README.md']);
+    });
+
+    it('should not report empty platform directories as downloaded platforms', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+
+      mockReaddir.mockImplementation(async (targetPath: string) => {
+        if (targetPath.endsWith('/libtest')) {
+          return [
+            { name: 'macOS', isDirectory: () => true, isFile: () => false },
+            { name: 'README.md', isDirectory: () => false, isFile: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/libtest/macOS')) {
+          return [];
+        }
+        return [];
+      });
+
+      mockSpawn.mockReturnValue(createMockProcess(0));
+
+      const result = await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: 'abc123',
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      expect(result.allPlatformDirs).toEqual([]);
+      expect(result.platformDirs).toEqual([]);
+      expect(result.sharedFiles).toContain('macOS');
     });
 
     it('should pass multiple platforms to codepac with -p flag', async () => {

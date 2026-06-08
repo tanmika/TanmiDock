@@ -120,6 +120,7 @@ td config set <key> <value>  # 设置配置
 | `maxStoreSize` | 最大存储大小（兼容旧配置） | - |
 | `autoDownload` | 自动下载缺失库 | `true` |
 | `sharedSymlinkFolders` | `_shared` 一级目录优先使用符号链接 | `true` |
+| `gitLightweightDownload` | Git 非完整拉取，可有效降低空间消耗 | `true` |
 | `concurrency` | 并发下载数 | `3` |
 | `logLevel` | 日志级别 | `info` |
 | `proxy` | 代理设置 | - |
@@ -154,6 +155,8 @@ td config set <key> <value>  # 设置配置
 - **_shared**: 共享内容会展开到项目根；一级目录默认优先使用符号链接，普通文件保持复制
 
 `sharedSymlinkFolders` 默认值为 `true`。如需排查构建工具对符号链接目录的兼容性，可通过 `td config set sharedSymlinkFolders false` 临时切回复制模式。
+
+`gitLightweightDownload` 默认值为 `true`。开启后下载阶段优先使用 Git 非完整拉取，只获取指定平台和必要共享内容，可有效降低临时下载空间消耗。
 
 ## 常见问题
 

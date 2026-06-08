@@ -11,7 +11,10 @@ import {
   isPlatformDir,
   normalizePlatformValue,
   getBaseKeyForCodepac,
+  platformValueToKey,
   collectRequestedPlatformTargets,
+  getRequestedPlatformTargets,
+  resolveSparseConfig,
 } from './platform.js';
 import type { ProxyConfig } from '../types/index.js';
 import * as logger from '../utils/logger.js';
@@ -59,6 +62,7 @@ function getEnvWithProxy(): NodeJS.ProcessEnv {
  * codepac 命令名称
  */
 const CODEPAC_CMD = 'codepac';
+const GIT_CMD = 'git';
 
 /**
  * 检查 codepac 是否已安装
@@ -333,6 +337,8 @@ export interface DownloadOptions {
   sparse?: object | string;
   /** codepac 变量定义（用于解析 sparse 中的变量引用） */
   vars?: Record<string, string>;
+  /** 是否使用 Git 非完整拉取以降低下载空间消耗，默认开启 */
+  useGitLightweightDownload?: boolean;
   /** 进度回调 */
   onProgress?: (msg: string) => void;
   /** 长时间静默时的保活回调 */
@@ -359,6 +365,23 @@ export interface DownloadResult {
   cleanedPlatforms: string[];
 }
 
+interface CommandResult {
+  stdout: string;
+  stderr: string;
+}
+
+interface CommandRunOptions {
+  env?: NodeJS.ProcessEnv;
+  onProgress?: (msg: string) => void;
+  onHeartbeat?: (msg: string) => void;
+  forwardStdout?: boolean;
+}
+
+interface DownloadedLibraryEntries {
+  downloadedPlatforms: string[];
+  sharedFiles: string[];
+}
+
 /**
  * 生成唯一临时目录名
  */
@@ -378,12 +401,19 @@ function generateTempDirName(): string {
  * @deprecated installSingle 已被本函数替代
  */
 export async function downloadToTemp(options: DownloadOptions): Promise<DownloadResult> {
-  const { url, commit, branch, libName, platforms, sparse, vars, onProgress, onHeartbeat, onTempDirCreated } = options;
-
-  // 检查 codepac 是否安装
-  if (!(await isCodepacInstalled())) {
-    throw new Error('codepac 未安装，请先安装 codepac 工具');
-  }
+  const {
+    url,
+    commit,
+    branch,
+    libName,
+    platforms,
+    sparse,
+    vars,
+    useGitLightweightDownload = true,
+    onProgress,
+    onHeartbeat,
+    onTempDirCreated,
+  } = options;
 
   // 创建唯一临时目录
   const tempDirName = generateTempDirName();
@@ -423,62 +453,37 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
 
     await fs.writeFile(configPath, JSON.stringify(tempConfig, null, 2), 'utf-8');
 
-    // 构建 codepac 命令参数
-    // 关键: codepac -p 需要基础 CLI key (mac/ios/android)
-    // 无论用户请求 macOS 还是 macOS-asan，都传 mac 给 codepac
-    // codepac 会下载所有变体，之后我们做清理
-    const baseKeys = [...new Set(platforms.map(getBaseKeyForCodepac))];
-    const args = ['install', '-cf', configPath, '-td', tempDir, '-p', ...baseKeys];
-
-    // 调用 codepac
-    await spawnCodepac(args, tempDir, onProgress, onHeartbeat);
-
-    // 分析下载结果，区分平台目录和共享文件
-    const entries = await fs.readdir(libDir, { withFileTypes: true });
-
-    const downloadedPlatforms: string[] = [];
-    const sharedFiles: string[] = [];
-
-    for (const entry of entries) {
-      const name = entry.name;
-      if (isPlatformDir(name)) {
-        // 标准化平台目录名（例如 "macos" -> "macOS"）
-        downloadedPlatforms.push(normalizePlatformValue(name));
-      } else {
-        sharedFiles.push(name);
-      }
-    }
-
-    // 后处理：清理用户未请求的平台目录
-    // 例如用户只请求 macOS，但 codepac 下载了 macOS 和 macOS-asan
-    const requestedTargets = new Set(collectRequestedPlatformTargets(platforms, sparse, vars));
-    const platformDirs: string[] = [];
-    const cleanedPlatforms: string[] = [];
-
-    for (const platform of downloadedPlatforms) {
-      if (requestedTargets.has(platform)) {
-        // 请求平台直接命中，或通过 sparse 映射命中承载目录时保留
-        platformDirs.push(platform);
-      } else {
-        // 用户未请求的平台，删除
-        const platformPath = path.join(libDir, platform);
+    const gitDownloaded = useGitLightweightDownload
+      ? await tryDownloadWithGit(options, tempDir, libDir).catch(async (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        onProgress?.(`Git 轻量下载失败，切换 codepac 下载: ${message}`);
         try {
-          await fs.rm(platformPath, { recursive: true, force: true });
-          cleanedPlatforms.push(platform);
-        } catch (err) {
-          logger.warn(`清理平台目录 ${platform} 失败: ${(err as Error).message}`);
+          await fs.rm(libDir, { recursive: true, force: true });
+        } catch {
+          // 忽略回退前的清理错误，后续 codepac 仍会在临时目录中重新下载。
         }
+        return false;
+      })
+      : false;
+
+    if (!gitDownloaded) {
+      // 检查 codepac 是否安装
+      if (!(await isCodepacInstalled())) {
+        throw new Error('codepac 未安装，请先安装 codepac 工具');
       }
+
+      // 构建 codepac 命令参数
+      // 关键: codepac -p 需要基础 CLI key (mac/ios/android)
+      // 无论用户请求 macOS 还是 macOS-asan，都传 mac 给 codepac
+      // codepac 会下载所有变体，之后我们做清理
+      const baseKeys = [...new Set(platforms.map(getBaseKeyForCodepac))];
+      const args = ['install', '-cf', configPath, '-td', tempDir, '-p', ...baseKeys];
+
+      // 调用 codepac
+      await spawnCodepac(args, tempDir, onProgress, onHeartbeat);
     }
 
-    return {
-      tempDir,
-      libDir,
-      allPlatformDirs: downloadedPlatforms,
-      platformDirs,
-      sharedFiles,
-      cleanedPlatforms,
-    };
+    return analyzeDownloadedLibrary({ tempDir, libDir, platforms, sparse, vars });
   } catch (error) {
     // 清理临时目录
     try {
@@ -493,6 +498,440 @@ export async function downloadToTemp(options: DownloadOptions): Promise<Download
   }
 }
 
+async function tryDownloadWithGit(options: DownloadOptions, tempDir: string, libDir: string): Promise<boolean> {
+  const { url, commit, branch, platforms, sparse, vars, onProgress, onHeartbeat } = options;
+
+  if (platforms.length === 0 || !isCommitHash(commit)) {
+    return false;
+  }
+
+  const sparseConfig = resolveSparseConfig(sparse, vars);
+  if (sparse && !sparseConfig) {
+    return false;
+  }
+
+  onProgress?.('尝试使用 Git 轻量下载');
+
+  await spawnGit(['--version'], tempDir, onProgress, onHeartbeat);
+  await spawnGit(['lfs', 'version'], tempDir, onProgress, onHeartbeat);
+
+  await spawnGit(
+    [
+      'clone',
+      '--filter=blob:none',
+      '--depth',
+      '1',
+      '--single-branch',
+      '--no-checkout',
+      '--branch',
+      branch,
+      url,
+      libDir,
+    ],
+    tempDir,
+    onProgress,
+    onHeartbeat,
+    { GIT_LFS_SKIP_SMUDGE: '1' }
+  );
+
+  const partialCloneFilter = await spawnGit(
+    ['-C', libDir, 'config', '--get', 'remote.origin.partialclonefilter'],
+    tempDir,
+    undefined,
+    onHeartbeat,
+    undefined,
+    false
+  );
+  if (partialCloneFilter.stdout.trim() !== 'blob:none') {
+    throw new Error('远端未启用 blob:none 轻量克隆');
+  }
+
+  const sparseCheckoutPaths = sparseConfig
+    ? buildSparseCheckoutPaths(platforms, sparseConfig)
+    : await buildRepositorySparseCheckoutPaths(libDir, platforms, sparse, vars, tempDir, onHeartbeat);
+
+  if (sparseCheckoutPaths.length === 0) {
+    throw new Error('无法推导 Git sparse checkout 路径');
+  }
+  await spawnGit(['-C', libDir, 'sparse-checkout', 'init', '--no-cone'], tempDir, onProgress, onHeartbeat);
+  await spawnGit(
+    ['-C', libDir, 'sparse-checkout', 'set', '--no-cone', ...sparseCheckoutPaths],
+    tempDir,
+    onProgress,
+    onHeartbeat
+  );
+
+  try {
+    await checkoutGitCommit(libDir, commit, tempDir, onProgress, onHeartbeat);
+  } catch {
+    await spawnGit(['-C', libDir, 'fetch', '--depth', '1', 'origin', commit], tempDir, onProgress, onHeartbeat, {
+      GIT_LFS_SKIP_SMUDGE: '1',
+    });
+    await checkoutGitCommit(libDir, commit, tempDir, onProgress, onHeartbeat);
+  }
+
+  const includePaths = sparseConfig
+    ? buildSparseGitLfsIncludePaths(platforms, sparseConfig)
+    : await buildGitLfsIncludePathsFromRepository(libDir, platforms, sparse, vars, tempDir, onHeartbeat);
+  const expectedLfsPaths = sparseConfig
+    ? await buildGitLfsFilePathsForIncludes(libDir, includePaths, tempDir, onHeartbeat)
+    : includePaths;
+
+  if (includePaths.length > 0) {
+    await spawnGit(
+      ['-C', libDir, 'lfs', 'pull', '--include', includePaths.join(','), '--exclude', ''],
+      tempDir,
+      onProgress,
+      onHeartbeat
+    );
+  }
+
+  await verifyGitDownloadResult({ libDir, platforms, sparse, vars, expectedLfsPaths });
+
+  onProgress?.('Git 轻量下载完成');
+  return true;
+}
+
+function isCommitHash(commit: string): boolean {
+  return /^[0-9a-f]{7,40}$/i.test(commit);
+}
+
+function buildSparseGitLfsIncludePaths(platforms: string[], sparseConfig: Record<string, unknown[]>): string[] {
+  return expandGitLfsIncludeRoots(buildSparseCheckoutPaths(platforms, sparseConfig));
+}
+
+function buildSparseCheckoutPaths(platforms: string[], sparseConfig: Record<string, unknown[]>): string[] {
+  const includeRoots: string[] = [];
+  const commonItems = sparseConfig.common;
+
+  if (Array.isArray(commonItems)) {
+    includeRoots.push(...commonItems.filter((item): item is string => typeof item === 'string'));
+  }
+
+  for (const platform of platforms) {
+    const rawItems = getSparseItemsForPlatform(platform, sparseConfig);
+    if (Array.isArray(rawItems)) {
+      includeRoots.push(...rawItems.filter((item): item is string => typeof item === 'string'));
+    } else {
+      includeRoots.push(...getRequestedPlatformTargets(platform, sparseConfig));
+    }
+  }
+
+  return [...new Set(includeRoots.map((item) => normalizeGitPath(item)).filter((item): item is string => Boolean(item)))];
+}
+
+function getSparseItemsForPlatform(platform: string, sparseConfig: Record<string, unknown[]>): unknown[] | undefined {
+  const candidateKeys = [
+    platform,
+    platformValueToKey(platform),
+    normalizePlatformValue(platform),
+    getBaseKeyForCodepac(platform),
+  ];
+
+  for (const key of new Set(candidateKeys)) {
+    const items = sparseConfig[key];
+    if (Array.isArray(items)) {
+      return items;
+    }
+  }
+
+  return undefined;
+}
+
+async function buildGitLfsIncludePathsFromRepository(
+  libDir: string,
+  platforms: string[],
+  sparse: object | string | undefined,
+  vars: Record<string, string> | undefined,
+  cwd: string,
+  onHeartbeat?: (msg: string) => void
+): Promise<string[]> {
+  const requestedTargets = new Set(collectRequestedPlatformTargets(platforms, sparse, vars));
+  const lfsPaths = await listGitLfsFilePaths(libDir, cwd, onHeartbeat);
+  const selectedPaths = lfsPaths.filter((line) => {
+    const [topLevel] = line.split('/');
+    if (!topLevel || !isPlatformDir(topLevel)) {
+      return true;
+    }
+    return requestedTargets.has(normalizePlatformValue(topLevel));
+  });
+
+  return [...new Set(selectedPaths)];
+}
+
+async function buildGitLfsFilePathsForIncludes(
+  libDir: string,
+  includePaths: string[],
+  cwd: string,
+  onHeartbeat?: (msg: string) => void
+): Promise<string[]> {
+  const includeRoots = includePaths
+    .map((item) => normalizeGitPath(item.replace(/\/\*\*$/g, '')))
+    .filter((item): item is string => Boolean(item));
+  const uniqueIncludeRoots = [...new Set(includeRoots)];
+
+  if (uniqueIncludeRoots.length === 0) {
+    return [];
+  }
+
+  const lfsPaths = await listGitLfsFilePaths(libDir, cwd, onHeartbeat);
+  return lfsPaths.filter((lfsPath) => uniqueIncludeRoots.some((root) => lfsPath === root || lfsPath.startsWith(`${root}/`)));
+}
+
+async function listGitLfsFilePaths(
+  libDir: string,
+  cwd: string,
+  onHeartbeat?: (msg: string) => void
+): Promise<string[]> {
+  const result = await spawnGit(
+    ['-C', libDir, 'lfs', 'ls-files', '--all', '--name-only'],
+    cwd,
+    undefined,
+    onHeartbeat,
+    undefined,
+    false
+  );
+
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => normalizeGitPath(line))
+    .filter((line): line is string => Boolean(line));
+}
+
+async function buildRepositorySparseCheckoutPaths(
+  libDir: string,
+  platforms: string[],
+  sparse: object | string | undefined,
+  vars: Record<string, string> | undefined,
+  cwd: string,
+  onHeartbeat?: (msg: string) => void
+): Promise<string[]> {
+  const requestedTargets = new Set(collectRequestedPlatformTargets(platforms, sparse, vars));
+  const result = await spawnGit(['-C', libDir, 'ls-tree', '--name-only', 'HEAD'], cwd, undefined, onHeartbeat, undefined, false);
+  const topLevelEntries = result.stdout
+    .split(/\r?\n/)
+    .map((line) => normalizeGitPath(line))
+    .filter((line): line is string => Boolean(line));
+  const hasRequestedPlatform = topLevelEntries.some((entry) => (
+    isPlatformDir(entry) && requestedTargets.has(normalizePlatformValue(entry))
+  ));
+
+  if (!hasRequestedPlatform) {
+    throw new Error('仓库顶层目录未包含请求平台');
+  }
+
+  const selectedEntries = topLevelEntries.filter((entry) => {
+    if (!isPlatformDir(entry)) {
+      return true;
+    }
+    return requestedTargets.has(normalizePlatformValue(entry));
+  });
+
+  return selectedEntries.flatMap((entry) => [entry, `${entry}/**`]);
+}
+
+function expandGitLfsIncludeRoots(paths: string[]): string[] {
+  const result: string[] = [];
+
+  for (const rawPath of paths) {
+    const normalized = normalizeGitPath(rawPath);
+    if (!normalized) continue;
+    result.push(normalized);
+    result.push(`${normalized}/**`);
+  }
+
+  return [...new Set(result)];
+}
+
+function normalizeGitPath(value: string): string | null {
+  const normalized = value
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/\/+$/g, '');
+
+  if (!normalized || normalized === '.' || normalized.startsWith('/')) {
+    return null;
+  }
+
+  if (normalized.split('/').some((part) => part === '..')) {
+    return null;
+  }
+
+  return normalized;
+}
+
+async function checkoutGitCommit(
+  libDir: string,
+  commit: string,
+  cwd: string,
+  onProgress?: (msg: string) => void,
+  onHeartbeat?: (msg: string) => void
+): Promise<void> {
+  await spawnGit(['-C', libDir, 'checkout', commit], cwd, onProgress, onHeartbeat, {
+    GIT_LFS_SKIP_SMUDGE: '1',
+  });
+}
+
+async function verifyGitDownloadResult(options: {
+  libDir: string;
+  platforms: string[];
+  sparse?: object | string;
+  vars?: Record<string, string>;
+  expectedLfsPaths: string[];
+}): Promise<void> {
+  const { libDir, platforms, sparse, vars, expectedLfsPaths } = options;
+  const result = await inspectDownloadedLibrary(libDir);
+  const requestedTargets = new Set(collectRequestedPlatformTargets(platforms, sparse, vars));
+  const missingTargets = [...requestedTargets].filter((platform) => !result.downloadedPlatforms.includes(platform));
+
+  if (missingTargets.length > 0) {
+    throw new Error(`Git 下载结果缺少请求平台目录: ${missingTargets.join(', ')}`);
+  }
+
+  const unresolvedPointer = await findFirstUnresolvedLfsPointer(libDir, expectedLfsPaths);
+  if (unresolvedPointer) {
+    throw new Error(`Git LFS 文件未完成下载: ${unresolvedPointer}`);
+  }
+}
+
+async function findFirstUnresolvedLfsPointer(libDir: string, relativePaths: string[]): Promise<string | null> {
+  for (const relativePath of relativePaths) {
+    const content = await readSmallTextFile(path.join(libDir, relativePath));
+    if (content?.startsWith('version https://git-lfs.github.com/spec/v1')) {
+      return relativePath;
+    }
+  }
+
+  return null;
+}
+
+async function readSmallTextFile(filePath: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile() || stat.size > 1024) {
+      return null;
+    }
+    return await fs.readFile(filePath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+async function analyzeDownloadedLibrary(options: {
+  tempDir: string;
+  libDir: string;
+  platforms: string[];
+  sparse?: object | string;
+  vars?: Record<string, string>;
+}): Promise<DownloadResult> {
+  const { tempDir, libDir, platforms, sparse, vars } = options;
+  const { downloadedPlatforms, sharedFiles } = await inspectDownloadedLibrary(libDir);
+
+  // 后处理：清理用户未请求的平台目录
+  // 例如用户只请求 macOS，但 codepac 下载了 macOS 和 macOS-asan
+  const requestedTargets = new Set(collectRequestedPlatformTargets(platforms, sparse, vars));
+  const platformDirs: string[] = [];
+  const cleanedPlatforms: string[] = [];
+
+  for (const platform of downloadedPlatforms) {
+    if (requestedTargets.has(platform)) {
+      // 请求平台直接命中，或通过 sparse 映射命中承载目录时保留
+      platformDirs.push(platform);
+    } else {
+      // 用户未请求的平台，删除
+      const platformPath = path.join(libDir, platform);
+      try {
+        await fs.rm(platformPath, { recursive: true, force: true });
+        cleanedPlatforms.push(platform);
+      } catch (err) {
+        logger.warn(`清理平台目录 ${platform} 失败: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  return {
+    tempDir,
+    libDir,
+    allPlatformDirs: downloadedPlatforms,
+    platformDirs,
+    sharedFiles,
+    cleanedPlatforms,
+  };
+}
+
+async function inspectDownloadedLibrary(libDir: string): Promise<DownloadedLibraryEntries> {
+  let entries: Array<string | { name: string; isDirectory: () => boolean }> = [];
+  try {
+    const dirEntries = await fs.readdir(libDir, { withFileTypes: true });
+    entries = Array.isArray(dirEntries)
+      ? dirEntries as Array<string | { name: string; isDirectory: () => boolean }>
+      : [];
+  } catch {
+    entries = [];
+  }
+
+  const downloadedPlatforms: string[] = [];
+  const sharedFiles: string[] = [];
+
+  for (const entry of entries) {
+    const name = typeof entry === 'string' ? entry : entry.name;
+    const isDirectory = typeof entry === 'string' ? false : entry.isDirectory();
+    if (isDirectory && isPlatformDir(name)) {
+      const platformPath = path.join(libDir, name);
+      const platformHasFiles = await directoryHasFiles(platformPath);
+      if (platformHasFiles) {
+        // 标准化平台目录名（例如 "macos" -> "macOS"）
+        downloadedPlatforms.push(normalizePlatformValue(name));
+      } else {
+        sharedFiles.push(name);
+      }
+    } else {
+      sharedFiles.push(name);
+    }
+  }
+
+  return { downloadedPlatforms, sharedFiles };
+}
+
+async function directoryHasFiles(dirPath: string, depth: number = 0): Promise<boolean> {
+  if (depth > 32) {
+    return true;
+  }
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const name = typeof entry === 'string' ? entry : entry.name;
+      if (name.startsWith('.')) continue;
+      if (typeof entry === 'string') return true;
+      if (typeof entry.isFile === 'function' && entry.isFile()) return true;
+      if (typeof entry.isSymbolicLink === 'function' && entry.isSymbolicLink()) return true;
+      if (entry.isDirectory() && await directoryHasFiles(path.join(dirPath, name), depth + 1)) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function spawnGit(
+  args: string[],
+  cwd: string,
+  onProgress?: (msg: string) => void,
+  onHeartbeat?: (msg: string) => void,
+  extraEnv?: NodeJS.ProcessEnv,
+  forwardStdout = true
+): Promise<CommandResult> {
+  return spawnCommand(GIT_CMD, args, cwd, {
+    onProgress,
+    onHeartbeat,
+    env: { ...getEnvWithProxy(), ...extraEnv },
+    forwardStdout,
+  });
+}
+
 /**
  * 内部辅助函数: 执行 codepac 命令
  */
@@ -502,13 +941,32 @@ function spawnCodepac(
   onProgress?: (msg: string) => void,
   onHeartbeat?: (msg: string) => void
 ): Promise<void> {
+  return spawnCommand(CODEPAC_CMD, args, cwd, {
+    onProgress,
+    onHeartbeat,
+    env: getEnvWithProxy(),
+  }).then(() => undefined);
+}
+
+function spawnCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  options: CommandRunOptions = {}
+): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(CODEPAC_CMD, args, {
+    const proc = spawn(command, args, {
       cwd,
       stdio: 'pipe',
-      env: getEnvWithProxy(),
+      env: options.env ?? getEnvWithProxy(),
     });
 
+    if (!proc) {
+      reject(new Error(`无法执行 ${command} 命令`));
+      return;
+    }
+
+    let stdout = '';
     let stderr = '';
     const heartbeatIntervalMs = 10000;
     let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
@@ -521,10 +979,10 @@ function spawnCodepac(
     };
 
     const resetHeartbeat = (): void => {
-      if (!onHeartbeat) return;
+      if (!options.onHeartbeat) return;
       clearHeartbeat();
       heartbeatTimer = setTimeout(() => {
-        onHeartbeat('仍在处理中，可能在同步大文件，期间无新日志');
+        options.onHeartbeat?.('仍在处理中，可能在同步大文件，期间无新日志');
         resetHeartbeat();
       }, heartbeatIntervalMs);
     };
@@ -534,9 +992,11 @@ function spawnCodepac(
     if (proc.stdout) {
       proc.stdout.on('data', (data: Buffer) => {
         resetHeartbeat();
-        const message = data.toString().trim();
-        if (message && onProgress) {
-          onProgress(message);
+        const chunk = data.toString();
+        stdout += chunk;
+        const message = chunk.trim();
+        if (message && options.onProgress && options.forwardStdout !== false) {
+          options.onProgress(message);
         }
       });
     }
@@ -550,15 +1010,15 @@ function spawnCodepac(
 
     proc.on('error', (err) => {
       clearHeartbeat();
-      reject(new Error(`无法执行 codepac 命令: ${err.message}`));
+      reject(new Error(`无法执行 ${command} 命令: ${err.message}`));
     });
 
     proc.on('close', (code) => {
       clearHeartbeat();
       if (code === 0) {
-        resolve();
+        resolve({ stdout, stderr });
       } else {
-        const errorMsg = stderr.trim() || `codepac 命令执行失败，退出码: ${code}`;
+        const errorMsg = stderr.trim() || `${command} 命令执行失败，退出码: ${code}`;
         reject(new Error(errorMsg));
       }
     });

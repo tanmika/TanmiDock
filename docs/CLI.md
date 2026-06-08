@@ -639,6 +639,7 @@ tanmi-dock config set <key> <value> # 设置配置项
 | `unreferencedThreshold` | string | 无引用容量阈值，格式如 `10GB` | 是 |
 | `maxStoreSize` | number | 最大存储大小，保留旧配置兼容 | 是 |
 | `autoDownload` | boolean | 自动下载 | 是 |
+| `gitLightweightDownload` | boolean | Git 非完整拉取，可有效降低空间消耗 | 是 |
 | `sharedSymlinkFolders` | boolean | `_shared` 一级目录是否优先使用符号链接 | 是 |
 | `concurrency` | number | 并发下载数 | 是 |
 | `logLevel` | string | 日志级别 | 是 |
@@ -666,12 +667,13 @@ $ tanmi-dock config
 
 ╭─ TanmiDock 配置: ─╮
 
-  version: 1.1.0
+  version: 1.2.0
   initialized: true
   storePath: ~/.tanmi-dock/store
   cleanStrategy: unreferenced
   unusedDays: 30
   autoDownload: true
+  Git 轻量下载: 是
   共享目录符号链接: 是
 
 配置文件: ~/.tanmi-dock/config.json
@@ -693,13 +695,19 @@ $ tanmi-dock config set sharedSymlinkFolders false
 [ok] 配置已更新: sharedSymlinkFolders = false
 ```
 
+```bash
+$ tanmi-dock config set gitLightweightDownload false
+
+[ok] 配置已更新: gitLightweightDownload = false
+```
+
 #### 4. 无效配置项
 
 ```bash
 $ tanmi-dock config get invalidKey
 
 [err] 无效的配置项: invalidKey
-[info] 有效的配置项: version, initialized, storePath, cleanStrategy, unusedDays, unreferencedThreshold, maxStoreSize, autoDownload, sharedSymlinkFolders, concurrency, logLevel, proxy, unverifiedLocalStrategy
+[info] 有效的配置项: version, initialized, storePath, cleanStrategy, unusedDays, unreferencedThreshold, maxStoreSize, autoDownload, gitLightweightDownload, sharedSymlinkFolders, concurrency, logLevel, proxy, unverifiedLocalStrategy
 ```
 
 ---
