@@ -10,7 +10,7 @@ import {
   parseCodepacDep,
   extractDependencies,
   extractActions,
-  parseActionCommand,
+  buildActionExecutionPlan,
   extractNestedDependencies,
   resolveProjectRootPath,
   findAllCodepacConfigs,
@@ -585,11 +585,12 @@ async function collectScopeStatusDependencies(
 
     await collectActionStatusDependencies({
       actions: extractActions(config, { platforms: codepacPlatforms, configPath: currentConfigPath }),
-      baseConfigDir: configDir,
+      parentConfigPath: currentConfigPath,
       targetRootDir: configDir,
       codepacPlatforms,
       dependencies,
       seen,
+      visitedActions: new Set([buildStatusActionVisitKey(currentConfigPath, configDir)]),
     });
   }
 
@@ -617,53 +618,68 @@ async function resolveSelectedOptionalConfigs(
 
 async function collectActionStatusDependencies(params: {
   actions: Array<{ command: string; dir?: string }>;
-  baseConfigDir: string;
+  parentConfigPath: string;
   targetRootDir: string;
   codepacPlatforms: string[];
   dependencies: StatusDependency[];
   seen: Set<string>;
+  visitedActions: Set<string>;
 }): Promise<void> {
-  const { actions, baseConfigDir, targetRootDir, codepacPlatforms, dependencies, seen } = params;
+  const { actions, parentConfigPath, targetRootDir, codepacPlatforms, dependencies, seen, visitedActions } = params;
 
   for (const action of actions) {
-    let parsedAction;
+    let plan;
     try {
-      parsedAction = parseActionCommand(action.command);
-    } catch {
-      continue;
-    }
-
-    const nestedConfigPath = path.resolve(baseConfigDir, parsedAction.configDir, 'codepac-dep.json');
-    let nested;
-    try {
-      nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries, {
-        platforms: codepacPlatforms,
-        configPath: nestedConfigPath,
+      plan = buildActionExecutionPlan(action, {
+        parentConfigPath,
+        parentTargetDir: targetRootDir,
+        inheritedCodepacPlatforms: codepacPlatforms,
       });
     } catch {
       continue;
     }
 
-    const nestedTargetDir = path.resolve(targetRootDir, parsedAction.targetDir);
+    const visitKey = buildStatusActionVisitKey(plan.nestedConfigPath, plan.nestedTargetDir);
+    if (visitedActions.has(visitKey)) {
+      warn(`跳过循环嵌套 action: config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}`);
+      continue;
+    }
+    visitedActions.add(visitKey);
+
+    let nested;
+    try {
+      nested = await extractNestedDependencies(plan.nestedConfigPath, plan.libraries, {
+        platforms: plan.effectiveCodepacPlatforms,
+        configPath: plan.nestedConfigPath,
+      });
+    } catch {
+      continue;
+    }
+
     for (const dependency of nested.dependencies) {
       addStatusDependency(dependencies, seen, {
         libName: dependency.libName,
         commit: dependency.commit,
-        localPath: path.join(nestedTargetDir, dependency.libName),
+        localPath: path.join(plan.nestedTargetDir, dependency.libName),
       });
     }
 
-    if (!parsedAction.disableAction && nested.nestedActions.length > 0) {
+    if (!plan.parsed.disableAction && nested.nestedActions.length > 0) {
       await collectActionStatusDependencies({
         actions: nested.nestedActions,
-        baseConfigDir: path.dirname(nestedConfigPath),
-        targetRootDir: nestedTargetDir,
-        codepacPlatforms,
+        parentConfigPath: plan.nestedConfigPath,
+        targetRootDir: plan.nestedTargetDir,
+        codepacPlatforms: plan.effectiveCodepacPlatforms,
         dependencies,
         seen,
+        visitedActions,
       });
     }
   }
+}
+
+function buildStatusActionVisitKey(configPath: string, targetDir: string): string {
+  return `${configPath}::${targetDir}`;
 }
 
 function addStatusDependency(

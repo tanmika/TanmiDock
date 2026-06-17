@@ -7,7 +7,7 @@ import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
 import { getRegistry } from '../core/registry.js';
 import { getStorePath } from '../core/config.js';
-import { findCodepacConfig, parseCodepacDep, extractDependencies, extractActions, parseActionCommand, extractNestedDependencies, resolveProjectRootPath } from '../core/parser.js';
+import { findCodepacConfig, parseCodepacDep, extractDependencies, extractActions, buildActionExecutionPlan, extractNestedDependencies, resolveProjectRootPath } from '../core/parser.js';
 import { getBaseKeyForCodepac, shrinkHome } from '../core/platform.js';
 import { isSymlink } from '../core/linker.js';
 import { withGlobalLock } from '../utils/global-lock.js';
@@ -183,15 +183,22 @@ async function collectTargetsFromConfigs(
 
   const targets: ResetTarget[] = [];
   const visited = new Set<string>();
-  const queue: string[] = [configPath];
+  const queue: Array<{ configPath: string; targetDir: string; codepacPlatforms: string[] }> = [
+    { configPath, targetDir: path.dirname(configPath), codepacPlatforms },
+  ];
 
   const submodules = await findSubmoduleConfigs(projectRoot, '', 0, codepacPlatforms);
   for (const submodule of submodules) {
-    queue.push(submodule.configPath);
+    queue.push({
+      configPath: submodule.configPath,
+      targetDir: path.dirname(submodule.configPath),
+      codepacPlatforms,
+    });
   }
 
   while (queue.length > 0) {
-    const currentConfig = queue.shift()!;
+    const current = queue.shift()!;
+    const currentConfig = current.configPath;
     if (visited.has(currentConfig)) continue;
     visited.add(currentConfig);
 
@@ -202,7 +209,7 @@ async function collectTargetsFromConfigs(
       continue;
     }
 
-    const extractOptions = { platforms: codepacPlatforms, configPath: currentConfig };
+    const extractOptions = { platforms: current.codepacPlatforms, configPath: currentConfig };
 
     for (const dep of extractDependencies(parsed, extractOptions)) {
       if (dep.libName === libName) {
@@ -211,24 +218,33 @@ async function collectTargetsFromConfigs(
     }
 
     for (const action of extractActions(parsed, extractOptions)) {
-      let parsedAction;
+      let plan;
       try {
-        parsedAction = parseActionCommand(action.command);
+        plan = buildActionExecutionPlan(action, {
+          parentConfigPath: currentConfig,
+          parentTargetDir: current.targetDir,
+          inheritedCodepacPlatforms: current.codepacPlatforms,
+        });
       } catch {
         continue;
       }
-      const nestedConfigPath = path.resolve(path.dirname(currentConfig), parsedAction.configDir, 'codepac-dep.json');
       try {
-        const nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries, {
-          platforms: codepacPlatforms,
-          configPath: nestedConfigPath,
+        const nested = await extractNestedDependencies(plan.nestedConfigPath, plan.libraries, {
+          platforms: plan.effectiveCodepacPlatforms,
+          configPath: plan.nestedConfigPath,
         });
         for (const dep of nested.dependencies) {
           if (dep.libName === libName) {
             targets.push({ libName: dep.libName, commit: dep.commit });
           }
         }
-        queue.push(nestedConfigPath);
+        if (!plan.parsed.disableAction) {
+          queue.push({
+            configPath: plan.nestedConfigPath,
+            targetDir: plan.nestedTargetDir,
+            codepacPlatforms: plan.effectiveCodepacPlatforms,
+          });
+        }
       } catch {
         continue;
       }

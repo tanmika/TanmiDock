@@ -5,6 +5,7 @@ import {
   getRelativeConfigPath,
   extractActions,
   parseActionCommand,
+  buildActionExecutionPlan,
 } from '../../src/core/parser.js';
 import type { CodepacDep } from '../../src/types/index.js';
 
@@ -801,10 +802,49 @@ describe('parseActionCommand', () => {
     expect(result.disableAction).toBe(true);
   });
 
+  it('should parse explicit action inheritance flags', () => {
+    const command = 'codepac install lib1 --configdir deps --platform mac ios --fullgit --unshallow --disable_sparse';
+
+    const result = parseActionCommand(command);
+
+    expect(result.libraries).toEqual(['lib1']);
+    expect(result.hasExplicitPlatform).toBe(true);
+    expect(result.platforms).toEqual(['mac', 'ios']);
+    expect(result.hasExplicitFullGit).toBe(true);
+    expect(result.hasExplicitUnshallow).toBe(true);
+    expect(result.hasExplicitDisableSparse).toBe(true);
+  });
+
+  it('should parse short platform option in action command', () => {
+    const command = 'codepac install lib1 -p mac --configdir deps';
+
+    const result = parseActionCommand(command);
+
+    expect(result.libraries).toEqual(['lib1']);
+    expect(result.hasExplicitPlatform).toBe(true);
+    expect(result.platforms).toEqual(['mac']);
+  });
+
+  it('should parse short action inheritance flags', () => {
+    const command = 'codepac install lib1 --configdir deps -fg -us -ds';
+
+    const result = parseActionCommand(command);
+
+    expect(result.hasExplicitFullGit).toBe(true);
+    expect(result.hasExplicitUnshallow).toBe(true);
+    expect(result.hasExplicitDisableSparse).toBe(true);
+  });
+
   it('should throw when action option value is missing', () => {
     const command = 'codepac install lib1 --configdir --targetdir out';
 
     expect(() => parseActionCommand(command)).toThrow('--configdir 缺少参数值');
+  });
+
+  it('should throw when platform option value is missing', () => {
+    const command = 'codepac install lib1 --platform --configdir deps';
+
+    expect(() => parseActionCommand(command)).toThrow('--platform 缺少参数值');
   });
 
   it('should use configDir as default targetDir when not specified', () => {
@@ -832,5 +872,43 @@ describe('parseActionCommand', () => {
 
     // When/Then: 抛出错误
     expect(() => parseActionCommand(command)).toThrow('缺少 --configdir 参数');
+  });
+});
+
+describe('buildActionExecutionPlan', () => {
+  it('should resolve configdir from parent config and targetdir from parent target', () => {
+    const plan = buildActionExecutionPlan(
+      {
+        name: 'installNested',
+        command: 'codepac install libNested --configdir childCfg --targetdir childTarget',
+      },
+      {
+        parentConfigPath: '/project/3rdparty/options/codepac-dep-inner.json',
+        parentTargetDir: '/project/3rdparty/runtime',
+        inheritedCodepacPlatforms: ['mac'],
+      }
+    );
+
+    expect(plan.actionName).toBe('installNested');
+    expect(plan.nestedConfigPath).toBe('/project/3rdparty/options/childCfg/codepac-dep.json');
+    expect(plan.nestedTargetDir).toBe('/project/3rdparty/runtime/childTarget');
+    expect(plan.effectiveCodepacPlatforms).toEqual(['mac']);
+    expect(plan.libraries).toEqual(['libNested']);
+  });
+
+  it('should use explicit action platforms instead of inherited platforms', () => {
+    const plan = buildActionExecutionPlan(
+      {
+        command: 'codepac install libNested --configdir childCfg --platform ios ios',
+      },
+      {
+        parentConfigPath: '/project/3rdparty/codepac-dep.json',
+        parentTargetDir: '/project/3rdparty',
+        inheritedCodepacPlatforms: ['mac'],
+      }
+    );
+
+    expect(plan.inheritedPlatforms).toEqual(['mac']);
+    expect(plan.effectiveCodepacPlatforms).toEqual(['ios']);
   });
 });

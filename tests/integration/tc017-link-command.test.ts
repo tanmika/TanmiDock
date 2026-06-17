@@ -847,6 +847,309 @@ describe('TC-017: link 命令测试', () => {
   });
 
   describe('S-2.2.5: action 嵌套依赖损坏 Store', () => {
+    it('should skip nested action by action name', async () => {
+      env = await createTestEnv();
+
+      const nestedLib = { libName: 'libSkipActionNested', commit: 'skipactionnested1' };
+      await createMockStoreDataV2(env, {
+        ...nestedLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await fs.mkdir(path.join(thirdPartyDir, 'NestedSkipConfig'), { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: { common: [] },
+          actions: {
+            common: [
+              {
+                name: 'prepareNested',
+                command: 'codepac install libSkipActionNested --configdir NestedSkipConfig --targetdir .',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'NestedSkipConfig', 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${nestedLib.libName}.git`,
+                commit: nestedLib.commit,
+                branch: 'main',
+                dir: nestedLib.libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      await runCommand(
+        'link',
+        { platform: ['macOS'], yes: true, skipAction: ['prepareNested'] },
+        env,
+        env.projectDir
+      );
+
+      await expect(fs.lstat(path.join(thirdPartyDir, nestedLib.libName))).rejects.toThrow();
+    });
+
+    it('should not skip nested action by command text or unnamed action', async () => {
+      env = await createTestEnv();
+
+      const commandMatchedLib = { libName: 'libCommandTextAction', commit: 'cmdtextaction1' };
+      const unnamedLib = { libName: 'libUnnamedAction', commit: 'unnamedaction1' };
+      await createMockStoreDataV2(env, {
+        ...commandMatchedLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+      await createMockStoreDataV2(env, {
+        ...unnamedLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await fs.mkdir(path.join(thirdPartyDir, 'CommandTextConfig'), { recursive: true });
+      await fs.mkdir(path.join(thirdPartyDir, 'UnnamedConfig'), { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: { common: [] },
+          actions: {
+            common: [
+              {
+                name: 'realActionName',
+                command: 'codepac install libCommandTextAction --configdir CommandTextConfig --targetdir .',
+              },
+              {
+                command: 'codepac install libUnnamedAction --configdir UnnamedConfig --targetdir .',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'CommandTextConfig', 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${commandMatchedLib.libName}.git`,
+                commit: commandMatchedLib.commit,
+                branch: 'main',
+                dir: commandMatchedLib.libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'UnnamedConfig', 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${unnamedLib.libName}.git`,
+                commit: unnamedLib.commit,
+                branch: 'main',
+                dir: unnamedLib.libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      await runCommand(
+        'link',
+        { platform: ['macOS'], yes: true, skipAction: ['libCommandTextAction', 'libUnnamedAction'] },
+        env,
+        env.projectDir
+      );
+
+      await verifySymlink(
+        path.join(thirdPartyDir, commandMatchedLib.libName, 'macOS'),
+        path.join(env.storeDir, commandMatchedLib.libName, commandMatchedLib.commit, 'macOS')
+      );
+      await verifySymlink(
+        path.join(thirdPartyDir, unnamedLib.libName, 'macOS'),
+        path.join(env.storeDir, unnamedLib.libName, unnamedLib.commit, 'macOS')
+      );
+    });
+
+    it('should link nested action dependencies into non-dot targetdir', async () => {
+      env = await createTestEnv();
+
+      const nestedLib = { libName: 'libNestedTargetDir', commit: 'nestedtargetdir1' };
+      await createMockStoreDataV2(env, {
+        ...nestedLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await fs.mkdir(path.join(thirdPartyDir, 'NestedTargetConfig'), { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: { common: [] },
+          actions: {
+            common: [
+              {
+                name: 'installTargeted',
+                command: 'codepac install libNestedTargetDir --configdir NestedTargetConfig --targetdir Generated',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'NestedTargetConfig', 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${nestedLib.libName}.git`,
+                commit: nestedLib.commit,
+                branch: 'main',
+                dir: nestedLib.libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      await verifySymlink(
+        path.join(thirdPartyDir, 'Generated', nestedLib.libName, 'macOS'),
+        path.join(env.storeDir, nestedLib.libName, nestedLib.commit, 'macOS')
+      );
+      await expect(fs.access(path.join(thirdPartyDir, 'NestedTargetConfig', '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+    });
+
+    it('should resolve multi-level action configdir and targetdir from each parent', async () => {
+      env = await createTestEnv();
+
+      const firstLib = { libName: 'libFirstNestedAction', commit: 'firstnestedact1' };
+      const secondLib = { libName: 'libSecondNestedAction', commit: 'secondnestedact' };
+      await createMockStoreDataV2(env, {
+        ...firstLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+      await createMockStoreDataV2(env, {
+        ...secondLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await fs.mkdir(path.join(thirdPartyDir, 'NestedLevelOne'), { recursive: true });
+      await fs.mkdir(path.join(thirdPartyDir, 'NestedLevelOne', 'NestedLevelTwo'), { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: { common: [] },
+          actions: {
+            common: [
+              {
+                name: 'levelOne',
+                command: 'codepac install libFirstNestedAction --configdir NestedLevelOne --targetdir Generated',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'NestedLevelOne', 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${firstLib.libName}.git`,
+                commit: firstLib.commit,
+                branch: 'main',
+                dir: firstLib.libName,
+              },
+            ],
+          },
+          actions: {
+            common: [
+              {
+                name: 'levelTwo',
+                command: 'codepac install libSecondNestedAction --configdir NestedLevelTwo --targetdir SecondGenerated',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'NestedLevelOne', 'NestedLevelTwo', 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${secondLib.libName}.git`,
+                commit: secondLib.commit,
+                branch: 'main',
+                dir: secondLib.libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      await verifySymlink(
+        path.join(thirdPartyDir, 'Generated', firstLib.libName, 'macOS'),
+        path.join(env.storeDir, firstLib.libName, firstLib.commit, 'macOS')
+      );
+      await verifySymlink(
+        path.join(thirdPartyDir, 'Generated', 'SecondGenerated', secondLib.libName, 'macOS'),
+        path.join(env.storeDir, secondLib.libName, secondLib.commit, 'macOS')
+      );
+      await expect(fs.access(path.join(thirdPartyDir, 'NestedLevelOne', '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(thirdPartyDir, 'NestedLevelOne', 'NestedLevelTwo', '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+    });
+
     it('should not relink nested action dependency when target Store platform is empty', async () => {
       env = await createTestEnv();
 

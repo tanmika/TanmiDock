@@ -90,6 +90,77 @@ describe('TC-026: unavailable 命令测试', () => {
     expect(registry.manualUnavailablePlatforms.librocksdb).toEqual(['wasm']);
   });
 
+  it('should not expand child actions after disable_action', async () => {
+    env = await createTestEnv();
+
+    const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+    await fs.mkdir(path.join(thirdPartyDir, 'DisabledActionConfig', 'ChildActionConfig'), { recursive: true });
+    await fs.writeFile(
+      path.join(thirdPartyDir, 'codepac-dep.json'),
+      JSON.stringify({
+        version: '1.0.0',
+        vars: {},
+        repos: { common: [] },
+        actions: {
+          common: [
+            {
+              command: 'codepac install libDisabledParent --configdir DisabledActionConfig --targetdir . --disable_action',
+            },
+          ],
+        },
+      }, null, 2),
+      'utf-8'
+    );
+    await fs.writeFile(
+      path.join(thirdPartyDir, 'DisabledActionConfig', 'codepac-dep.json'),
+      JSON.stringify({
+        version: '1.0.0',
+        vars: {},
+        repos: {
+          common: [
+            {
+              url: 'https://github.com/test/libDisabledParent.git',
+              commit: 'disabledparent1',
+              branch: 'main',
+              dir: 'libDisabledParent',
+            },
+          ],
+        },
+        actions: {
+          common: [
+            {
+              command: 'codepac install libDisabledChild --configdir ChildActionConfig --targetdir .',
+            },
+          ],
+        },
+      }, null, 2),
+      'utf-8'
+    );
+    await fs.writeFile(
+      path.join(thirdPartyDir, 'DisabledActionConfig', 'ChildActionConfig', 'codepac-dep.json'),
+      JSON.stringify({
+        version: '1.0.0',
+        vars: {},
+        repos: {
+          common: [
+            {
+              url: 'https://github.com/test/libDisabledChild.git',
+              commit: 'disabledchild12',
+              branch: 'main',
+              dir: 'libDisabledChild',
+            },
+          ],
+        },
+      }, null, 2),
+      'utf-8'
+    );
+
+    const dependencies = await collectProjectDependencyGraph(env.projectDir);
+
+    expect(dependencies.some((item) => item.libName === 'libDisabledParent')).toBe(true);
+    expect(dependencies.some((item) => item.libName === 'libDisabledChild')).toBe(false);
+  });
+
   it('should remove a manual unavailable rule', async () => {
     env = await createTestEnv();
     await createProjectWithNestedDependencies(env);

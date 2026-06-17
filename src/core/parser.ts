@@ -13,6 +13,7 @@ import type {
   RepoConfig,
   CodepacPlatformGroups,
   RepoConfigSource,
+  ActionExecutionPlan,
 } from '../types/index.js';
 
 /**
@@ -53,6 +54,15 @@ export interface CodepacExtractOptions {
   platforms?: string[];
   /** 日志中展示的配置来源 */
   configPath?: string;
+}
+
+export interface BuildActionExecutionPlanOptions {
+  /** action 所在配置文件路径 */
+  parentConfigPath: string;
+  /** 父级目标目录，targetdir 相对该目录解析 */
+  parentTargetDir: string;
+  /** 父级传入的 codepac 平台 key */
+  inheritedCodepacPlatforms?: string[];
 }
 
 interface PlatformFilterResult<T> {
@@ -461,12 +471,40 @@ export function parseActionCommand(command: string): ParsedAction {
   let configDir: string | undefined;
   let targetDir: string | undefined;
   let disableAction = false;
+  let hasExplicitPlatform = false;
+  const platforms: string[] = [];
+  let hasExplicitFullGit = false;
+  let hasExplicitUnshallow = false;
+  let hasExplicitDisableSparse = false;
 
   for (let index = 2; index < tokens.length; index++) {
     const token = tokens[index];
 
     if (token === '--disable_action' || token === '-dc') {
       disableAction = true;
+      continue;
+    }
+
+    if (token === '--platform' || token === '-p') {
+      hasExplicitPlatform = true;
+      const { values, nextIndex } = readActionVariadicOptionValues(tokens, index, token, command);
+      platforms.push(...values);
+      index = nextIndex;
+      continue;
+    }
+
+    if (token === '--fullgit' || token === '-fg') {
+      hasExplicitFullGit = true;
+      continue;
+    }
+
+    if (token === '--unshallow' || token === '-us') {
+      hasExplicitUnshallow = true;
+      continue;
+    }
+
+    if (token === '--disable_sparse' || token === '-ds') {
+      hasExplicitDisableSparse = true;
       continue;
     }
 
@@ -504,6 +542,11 @@ export function parseActionCommand(command: string): ParsedAction {
     configDir,
     targetDir: targetDir ?? configDir,
     disableAction,
+    hasExplicitPlatform,
+    platforms,
+    hasExplicitFullGit,
+    hasExplicitUnshallow,
+    hasExplicitDisableSparse,
   };
 }
 
@@ -513,6 +556,29 @@ function readActionOptionValue(tokens: string[], index: number, option: string, 
     throw new Error(`无法解析 action 命令，${option} 缺少参数值: ${command}`);
   }
   return value;
+}
+
+function readActionVariadicOptionValues(
+  tokens: string[],
+  index: number,
+  option: string,
+  command: string
+): { values: string[]; nextIndex: number } {
+  const values: string[] = [];
+  let nextIndex = index;
+
+  for (let valueIndex = index + 1; valueIndex < tokens.length; valueIndex++) {
+    const value = tokens[valueIndex];
+    if (!value || value.startsWith('-')) break;
+    values.push(value);
+    nextIndex = valueIndex;
+  }
+
+  if (values.length === 0) {
+    throw new Error(`无法解析 action 命令，${option} 缺少参数值: ${command}`);
+  }
+
+  return { values, nextIndex };
 }
 
 function tokenizeActionCommand(command: string): string[] {
@@ -563,6 +629,37 @@ function tokenizeActionCommand(command: string): string[] {
   }
 
   return tokens;
+}
+
+/**
+ * 生成 action 递归执行计划
+ * configdir 相对父配置目录解析，targetdir 相对父目标目录解析。
+ */
+export function buildActionExecutionPlan(
+  action: ActionConfig,
+  options: BuildActionExecutionPlanOptions
+): ActionExecutionPlan {
+  const parsed = parseActionCommand(action.command);
+  const parentConfigDir = path.dirname(options.parentConfigPath);
+  const inheritedPlatforms = options.inheritedCodepacPlatforms ?? [];
+  const effectiveCodepacPlatforms = parsed.hasExplicitPlatform
+    ? [...new Set(parsed.platforms)]
+    : inheritedPlatforms;
+  const nestedConfigDir = path.resolve(parentConfigDir, parsed.configDir);
+  const nestedTargetDir = path.resolve(options.parentTargetDir, parsed.targetDir);
+
+  return {
+    actionName: action.name,
+    command: action.command,
+    parsed,
+    configDir: parsed.configDir,
+    targetDir: parsed.targetDir,
+    nestedConfigPath: path.join(nestedConfigDir, CONFIG_FILENAME),
+    nestedTargetDir,
+    inheritedPlatforms,
+    effectiveCodepacPlatforms,
+    libraries: parsed.libraries,
+  };
 }
 
 /**
@@ -717,6 +814,7 @@ export default {
   extractDependencies,
   extractActions,
   parseActionCommand,
+  buildActionExecutionPlan,
   extractNestedDependencies,
   parseProjectDependencies,
   getRelativeConfigPath,

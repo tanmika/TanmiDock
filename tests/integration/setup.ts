@@ -422,6 +422,7 @@ export interface LinkOptions {
   download?: boolean;
   dryRun?: boolean;
   config?: string[];
+  skipAction?: string[];
   submodules?: boolean;
 }
 
@@ -548,6 +549,7 @@ export async function runCommand(
         download: linkOpts.download ?? false,
         dryRun: linkOpts.dryRun ?? false,
         config: linkOpts.config,
+        skipAction: linkOpts.skipAction,
         submodules: linkOpts.submodules ?? true,
       });
       break;

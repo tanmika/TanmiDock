@@ -405,6 +405,37 @@ describe('TC-019: status 命令测试', () => {
       expect(await isSymlink(path.join(env.projectDir, '3rdparty', 'libNestedAction', 'macOS'))).toBe(true);
     });
 
+    it('should resolve action targetdir from parent target directory in project status', async () => {
+      env = await createTestEnv();
+
+      await createMockStoreDataV2(env, {
+        libName: 'libStatusTargetDir',
+        commit: 'statustargetdir1',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      await writeConfig(
+        path.join(env.projectDir, '3rdparty', 'codepac-dep.json'),
+        [],
+        [{ command: 'codepac install libStatusTargetDir --configdir statusNestedCfg --targetdir GeneratedStatus' }]
+      );
+      await writeConfig(
+        path.join(env.projectDir, '3rdparty', 'statusNestedCfg', 'codepac-dep.json'),
+        [{ libName: 'libStatusTargetDir', commit: 'statustargetdir1' }]
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const jsonOutput = (await runStatusAndGetJson(env)) as {
+        dependencies: { total: number; linked: number };
+      };
+
+      expect(jsonOutput.dependencies.total).toBe(1);
+      expect(jsonOutput.dependencies.linked).toBe(1);
+      expect(await isSymlink(path.join(env.projectDir, '3rdparty', 'GeneratedStatus', 'libStatusTargetDir', 'macOS'))).toBe(true);
+    });
+
     it('should include actions from remembered optional configs', async () => {
       env = await createTestEnv();
 

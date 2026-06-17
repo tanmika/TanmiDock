@@ -298,6 +298,33 @@ export interface ParsedAction {
   targetDir: string;
   /** 是否禁用嵌套 actions 的递归处理 */
   disableAction: boolean;
+  /** action 命令是否显式传入 platform 参数 */
+  hasExplicitPlatform: boolean;
+  /** action 命令显式传入的 codepac 平台列表 */
+  platforms: string[];
+  /** action 命令是否显式传入 fullgit 参数 */
+  hasExplicitFullGit: boolean;
+  /** action 命令是否显式传入 unshallow 参数 */
+  hasExplicitUnshallow: boolean;
+  /** action 命令是否显式传入 disable_sparse 参数 */
+  hasExplicitDisableSparse: boolean;
+}
+
+/**
+ * action 递归执行计划
+ * 统一描述 action 命令解析后的配置路径、目标路径和继承平台。
+ */
+export interface ActionExecutionPlan {
+  actionName?: string;
+  command: string;
+  parsed: ParsedAction;
+  configDir: string;
+  targetDir: string;
+  nestedConfigPath: string;
+  nestedTargetDir: string;
+  inheritedPlatforms: string[];
+  effectiveCodepacPlatforms: string[];
+  libraries: string[];
 }
 
 /**
@@ -306,7 +333,7 @@ export interface ParsedAction {
 export interface NestedContext {
   /** 嵌套深度（用于日志缩进和循环检测） */
   depth: number;
-  /** 已处理的配置路径集合（防止循环依赖） */
+  /** 已处理的配置与目标目录组合（防止 action 循环依赖） */
   processedConfigs: Set<string>;
   /** 平台列表 */
   platforms: string[];

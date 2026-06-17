@@ -12,7 +12,7 @@ import {
   getRelativeConfigPath,
   parseCodepacDep,
   extractActions,
-  parseActionCommand,
+  buildActionExecutionPlan,
   extractNestedDependencies,
   findAllCodepacConfigs,
   extractDependencies,
@@ -44,7 +44,7 @@ import { success, warn, error, info, hint, blank, separator, debug } from '../ut
 import { verifyLocalCommit, findSubmoduleConfigs } from '../utils/git.js';
 import type { SubmoduleConfig } from '../utils/git.js';
 import { DependencyStatus } from '../types/index.js';
-import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext, StoreEntry } from '../types/index.js';
+import type { ParsedDependency, ClassifiedDependency, ActionConfig, NestedContext, StoreEntry, ActionExecutionPlan } from '../types/index.js';
 import { withGlobalLock } from '../utils/global-lock.js';
 import { selectPlatforms, parsePlatformArgs, selectOption, selectOptionalConfigs, PROMPT_CANCELLED } from '../utils/prompt.js';
 import type { SelectOptionalConfigsOptions } from '../utils/prompt.js';
@@ -63,6 +63,7 @@ export function createLinkCommand(): Command {
     .option('--no-download', '不自动下载缺失库')
     .option('--dry-run', '只显示将要执行的操作')
     .option('--config <configs...>', '指定可选配置文件 (如 codepac-dep-inner.json)')
+    .option('--skip-action, --skip_action, -sa <names...>', '按 action.name 跳过指定嵌套 action')
     .option('--no-submodules', '不检测 git submodule 依赖')
     .addHelpText(
       'after',
@@ -76,6 +77,7 @@ export function createLinkCommand(): Command {
   td link --dry-run             预览操作，不实际执行
   td link -y                    跳过确认，自动执行
   td link --config codepac-dep-inner.json   使用指定的可选配置
+  td link --skip-action prepareNested       跳过指定 action.name
   td link --no-submodules       跳过 git submodule 检测`
     )
     .action(async (projectPath: string, options) => {
@@ -98,6 +100,7 @@ interface LinkOptions {
   download: boolean;
   dryRun: boolean;
   config?: string[];
+  skipAction?: string[];
   submodules: boolean; // commander --no-xxx 自动为 boolean，默认 true
 }
 
@@ -121,6 +124,7 @@ interface LinkScopeParams {
   gitLightweightDownload: boolean;
   optionalConfigs?: OptionalConfigInfo[];
   scope?: string;
+  skipActions?: string[];
 }
 
 interface LinkScopeResult {
@@ -470,13 +474,25 @@ export async function collectProjectDependencyGraph(
   const results: ProjectDependencyCandidate[] = [];
   const seenDeps = new Set<string>();
   const visitedConfigs = new Set<string>();
-  const queue: Array<{ configPath: string; scope?: string; source: 'direct' | 'nested' | 'submodule' }> = [
-    { configPath, source: 'direct' },
+  const queue: Array<{
+    configPath: string;
+    targetDir: string;
+    codepacPlatforms: string[];
+    scope?: string;
+    source: 'direct' | 'nested' | 'submodule';
+  }> = [
+    { configPath, targetDir: path.dirname(configPath), codepacPlatforms, source: 'direct' },
   ];
 
   const submodules = await findSubmoduleConfigs(normalizedPath, '', 0, codepacPlatforms);
   for (const submodule of submodules) {
-    queue.push({ configPath: submodule.configPath, scope: submodule.relativePath, source: 'submodule' });
+    queue.push({
+      configPath: submodule.configPath,
+      targetDir: path.dirname(submodule.configPath),
+      codepacPlatforms,
+      scope: submodule.relativePath,
+      source: 'submodule',
+    });
   }
 
   while (queue.length > 0) {
@@ -491,7 +507,7 @@ export async function collectProjectDependencyGraph(
       continue;
     }
 
-    const extractOptions = { platforms: codepacPlatforms, configPath: current.configPath };
+    const extractOptions = { platforms: current.codepacPlatforms, configPath: current.configPath };
 
     for (const dependency of extractDependencies(parsedConfig, extractOptions)) {
       const key = `${dependency.libName}:${dependency.commit}:${current.scope ?? ''}`;
@@ -502,24 +518,22 @@ export async function collectProjectDependencyGraph(
     }
 
     for (const action of extractActions(parsedConfig, extractOptions)) {
-      let parsedAction;
+      let plan;
       try {
-        parsedAction = parseActionCommand(action.command);
+        plan = buildActionExecutionPlan(action, {
+          parentConfigPath: current.configPath,
+          parentTargetDir: current.targetDir,
+          inheritedCodepacPlatforms: current.codepacPlatforms,
+        });
       } catch {
         continue;
       }
 
-      const nestedConfigPath = path.resolve(
-        path.dirname(current.configPath),
-        parsedAction.configDir,
-        'codepac-dep.json'
-      );
-
       let nested;
       try {
-        nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries, {
-          platforms: codepacPlatforms,
-          configPath: nestedConfigPath,
+        nested = await extractNestedDependencies(plan.nestedConfigPath, plan.libraries, {
+          platforms: plan.effectiveCodepacPlatforms,
+          configPath: plan.nestedConfigPath,
         });
       } catch {
         continue;
@@ -533,7 +547,15 @@ export async function collectProjectDependencyGraph(
         }
       }
 
-      queue.push({ configPath: nestedConfigPath, scope: current.scope, source: 'nested' });
+      if (!plan.parsed.disableAction) {
+        queue.push({
+          configPath: plan.nestedConfigPath,
+          targetDir: plan.nestedTargetDir,
+          codepacPlatforms: plan.effectiveCodepacPlatforms,
+          scope: current.scope,
+          source: 'nested',
+        });
+      }
     }
   }
 
@@ -1595,7 +1617,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
       const nestedContext: NestedContext = {
         depth: 0,
-        processedConfigs: new Set([configPath]),
+        processedConfigs: new Set([buildActionVisitKey(configPath, path.dirname(configPath))]),
         platforms,
         codepacPlatforms,
         vars: configVars,
@@ -1603,9 +1625,10 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
       const thirdPartyDir = path.dirname(configPath);
 
       for (const action of actions) {
-        await processAction(action, nestedContext, thirdPartyDir, {
+        await processAction(action, nestedContext, configPath, thirdPartyDir, {
           tx, registry, projectHash, projectRoot, dryRun, download, yes,
-          gitLightweightDownload, generalLibs, downloadedLibs, nestedLinkedDeps,
+          gitLightweightDownload, skipActions: new Set(params.skipActions ?? []),
+          generalLibs, downloadedLibs, nestedLinkedDeps,
         });
       }
     }
@@ -1837,6 +1860,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
       concurrency,
       gitLightweightDownload,
       optionalConfigs: selectedOptionalConfigs,
+      skipActions: options.skipAction ?? [],
     });
 
     const finalLinkPlatforms = mainResult.finalLinkPlatforms;
@@ -1864,6 +1888,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
           gitLightweightDownload,
           optionalConfigs: sub.selectedOptionalConfigs,
           scope: sub.relativePath,
+          skipActions: options.skipAction ?? [],
         });
       }
       return;
@@ -1891,6 +1916,7 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
         gitLightweightDownload,
         optionalConfigs: sub.selectedOptionalConfigs,
         scope: sub.relativePath,
+        skipActions: options.skipAction ?? [],
       });
       subResults.push(subResult);
     }
@@ -2823,6 +2849,7 @@ interface ProcessActionOptions {
   download: boolean;
   yes: boolean;
   gitLightweightDownload: boolean;
+  skipActions: Set<string>;
   generalLibs: Set<string>;
   downloadedLibs: string[];
   nestedLinkedDeps: NestedLinkedDep[];
@@ -2838,95 +2865,117 @@ interface ProcessActionOptions {
 async function processAction(
   action: ActionConfig,
   context: NestedContext,
-  thirdPartyDir: string,
+  parentConfigPath: string,
+  parentTargetDir: string,
   options: ProcessActionOptions
 ): Promise<void> {
   const indent = '  '.repeat(context.depth);
 
-  // 1. 解析 action 命令
-  let parsed;
-  try {
-    parsed = parseActionCommand(action.command);
-  } catch (err) {
-    warn(`${indent}无法解析 action: ${(err as Error).message}`);
+  if (action.name && options.skipActions.has(action.name)) {
+    info(`${indent}跳过嵌套 action: name=${action.name}, 原因=skip-action`);
+    debug(
+      `${indent}CodePac action 跳过: name=${action.name}, command=${action.command}, skipActions=${Array.from(options.skipActions).join(',')}`
+    );
     return;
   }
 
-  const libsDisplay = parsed.libraries.length > 0 ? parsed.libraries.join(', ') : '全部依赖';
-  info(`${indent}处理嵌套依赖: ${parsed.configDir} → [${libsDisplay}]`);
-
-  // 2. 构建嵌套配置路径
-  const nestedConfigPath = path.join(thirdPartyDir, parsed.configDir, 'codepac-dep.json');
-
-  // 3. 循环检测
-  if (context.processedConfigs.has(nestedConfigPath)) {
-    warn(`${indent}  检测到循环依赖，跳过: ${parsed.configDir}`);
-    return;
-  }
-  context.processedConfigs.add(nestedConfigPath);
-
-  // 4. 检查配置文件是否存在
+  // 1. 解析 action 命令和执行计划
+  let plan: ActionExecutionPlan;
   try {
-    await fs.access(nestedConfigPath);
-  } catch {
-    warn(`${indent}  嵌套配置文件不存在: ${nestedConfigPath}`);
-    hint(`${indent}  请确保 ${parsed.configDir} 库已被下载`);
-    return;
-  }
-
-  // 5. 提取指定库的依赖
-  let nestedResult;
-  try {
-    nestedResult = await extractNestedDependencies(nestedConfigPath, parsed.libraries, {
-      platforms: context.codepacPlatforms ?? context.platforms,
-      configPath: nestedConfigPath,
+    plan = buildActionExecutionPlan(action, {
+      parentConfigPath,
+      parentTargetDir,
+      inheritedCodepacPlatforms: context.codepacPlatforms ?? context.platforms,
     });
   } catch (err) {
-    warn(`${indent}  解析嵌套配置失败: ${(err as Error).message}`);
+    warn(`${indent}跳过嵌套 action: name=${action.name ?? '(未命名)'}, 原因=无法解析命令, message=${(err as Error).message}`);
+    debug(`${indent}CodePac action 解析失败: command=${action.command}`);
+    return;
+  }
+
+  const libsDisplay = plan.libraries.length > 0 ? plan.libraries.join(', ') : '全部依赖';
+  info(`${indent}处理嵌套 action: name=${plan.actionName ?? '(未命名)'}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}, libs=[${libsDisplay}]`);
+  debug(
+    `${indent}CodePac action 执行计划: command=${plan.command}, parentConfig=${parentConfigPath}, parentTarget=${parentTargetDir}, inheritedPlatforms=${formatActionPlatforms(plan.inheritedPlatforms)}, effectivePlatforms=${formatActionPlatforms(plan.effectiveCodepacPlatforms)}, explicitPlatform=${plan.parsed.hasExplicitPlatform}, fullgit=${plan.parsed.hasExplicitFullGit}, unshallow=${plan.parsed.hasExplicitUnshallow}, disable_sparse=${plan.parsed.hasExplicitDisableSparse}`
+  );
+
+  // 2. 循环检测
+  const visitKey = buildActionVisitKey(plan.nestedConfigPath, plan.nestedTargetDir);
+  if (context.processedConfigs.has(visitKey)) {
+    warn(`${indent}  跳过嵌套 action: name=${plan.actionName ?? '(未命名)'}, 原因=循环配置, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}`);
+    return;
+  }
+  context.processedConfigs.add(visitKey);
+
+  // 3. 检查配置文件是否存在
+  try {
+    await fs.access(plan.nestedConfigPath);
+  } catch {
+    warn(`${indent}  跳过嵌套 action: name=${plan.actionName ?? '(未命名)'}, 原因=配置不存在, config=${plan.nestedConfigPath}`);
+    hint(`${indent}  请确保 ${plan.configDir} 库已被下载`);
+    return;
+  }
+
+  // 4. 提取指定库的依赖
+  let nestedResult;
+  try {
+    nestedResult = await extractNestedDependencies(plan.nestedConfigPath, plan.libraries, {
+      platforms: plan.effectiveCodepacPlatforms,
+      configPath: plan.nestedConfigPath,
+    });
+  } catch (err) {
+    warn(`${indent}  跳过嵌套 action: name=${plan.actionName ?? '(未命名)'}, 原因=解析配置失败, message=${(err as Error).message}`);
     return;
   }
 
   const { dependencies, vars, nestedActions } = nestedResult;
 
   if (dependencies.length === 0) {
-    warn(`${indent}  在 ${parsed.configDir} 中未找到指定的库`);
+    warn(`${indent}  跳过嵌套 action: name=${plan.actionName ?? '(未命名)'}, 原因=未找到依赖, libs=[${libsDisplay}], config=${plan.nestedConfigPath}`);
     return;
   }
 
-  info(`${indent}  找到 ${dependencies.length} 个嵌套依赖`);
+  info(`${indent}  嵌套 action 命中 ${dependencies.length} 个依赖，继承平台: ${formatActionPlatforms(plan.inheritedPlatforms)}, 生效平台: ${formatActionPlatforms(plan.effectiveCodepacPlatforms)}`);
 
-  // 6. 合并变量
+  // 5. 合并变量
   const mergedVars = { ...context.vars, ...vars };
 
-  // 7. 处理这些依赖（targetDir 指定嵌套依赖的目标目录）
+  // 6. 处理这些依赖（targetDir 指定嵌套依赖的目标目录）
   await linkNestedDependencies(dependencies, {
-    thirdPartyDir,
-    targetDir: parsed.targetDir,
-    nestedConfigPath,
-    context: { ...context, vars: mergedVars },
+    targetDir: plan.nestedTargetDir,
+    nestedConfigPath: plan.nestedConfigPath,
+    context: { ...context, codepacPlatforms: plan.effectiveCodepacPlatforms, vars: mergedVars },
     options,
     indent,
   });
 
   // 同步嵌套配置文件的 cache（兼容 checkValid.js 检测）
-  await syncCacheFile(nestedConfigPath);
+  await syncCacheFile(plan.nestedConfigPath);
 
-  // 8. 递归处理嵌套 actions（如果没有 disable_action）
-  // 注意：递归时 thirdPartyDir 应该更新为当前嵌套依赖的目标目录
-  if (!parsed.disableAction && nestedActions.length > 0) {
+  // 7. 递归处理嵌套 actions（如果没有 disable_action）
+  if (!plan.parsed.disableAction && nestedActions.length > 0) {
     const nestedContext: NestedContext = {
       depth: context.depth + 1,
       processedConfigs: context.processedConfigs,
       platforms: context.platforms,
-      codepacPlatforms: context.codepacPlatforms,
+      codepacPlatforms: plan.effectiveCodepacPlatforms,
       vars: mergedVars,
     };
-    const nestedThirdPartyDir = path.join(thirdPartyDir, parsed.targetDir);
 
     for (const nestedAction of nestedActions) {
-      await processAction(nestedAction, nestedContext, nestedThirdPartyDir, options);
+      await processAction(nestedAction, nestedContext, plan.nestedConfigPath, plan.nestedTargetDir, options);
     }
+  } else if (plan.parsed.disableAction && nestedActions.length > 0) {
+    info(`${indent}  跳过后续嵌套 action: name=${plan.actionName ?? '(未命名)'}, 原因=disable_action`);
   }
+}
+
+function formatActionPlatforms(platforms: string[] | undefined): string {
+  return platforms && platforms.length > 0 ? platforms.join(',') : 'all';
+}
+
+function buildActionVisitKey(configPath: string, targetDir: string): string {
+  return `${configPath}::${targetDir}`;
 }
 
 /**
@@ -3012,7 +3061,6 @@ async function resolveLocalAndAbsorb(
 async function linkNestedDependencies(
   dependencies: ParsedDependency[],
   params: {
-    thirdPartyDir: string;
     targetDir: string;
     nestedConfigPath: string;
     context: NestedContext;
@@ -3020,9 +3068,7 @@ async function linkNestedDependencies(
     indent: string;
   }
 ): Promise<void> {
-  const { thirdPartyDir, targetDir, context, options, indent } = params;
-  // 计算嵌套依赖的实际目标目录
-  const nestedTargetDir = path.join(thirdPartyDir, targetDir);
+  const { targetDir: nestedTargetDir, context, options, indent } = params;
   const { tx, registry, projectHash, projectRoot, dryRun, download, generalLibs, downloadedLibs, nestedLinkedDeps } = options;
   const { platforms, vars } = context;
 
