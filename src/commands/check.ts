@@ -4,7 +4,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { Command } from 'commander';
-import { isCodepacInstalled } from '../core/codepac.js';
+import { checkCodepacEnvironment } from '../core/codepac.js';
+import type { CodepacEnvironmentCheck } from '../core/codepac.js';
 import { getDiskInfo, formatSize } from '../utils/disk.js';
 import * as config from '../core/config.js';
 import { getRegistry } from '../core/registry.js';
@@ -32,7 +33,7 @@ import {
 // ============ 类型定义 ============
 
 interface EnvironmentCheck {
-  codepac: { ok: boolean; message: string };
+  codepac: { ok: boolean; message: string; details: CodepacEnvironmentCheck };
   config: { ok: boolean; message: string };
   store: { ok: boolean; path: string; message: string };
   disk: { ok: boolean; free: number; warn: boolean; message: string };
@@ -156,7 +157,12 @@ async function collectAllIssues(options?: { integrity?: boolean }): Promise<Chec
   // 计算汇总
   // 错误：检查项失败（ok === false），排除仅作为警告的项
   // 警告：目前只有 disk 有 warn 字段（空间 < 5GB 但不影响功能）
-  const envErrors = Object.values(environment).filter((c) => !c.ok).length;
+  const envErrors = [
+    environment.codepac,
+    environment.config,
+    environment.store,
+    environment.disk,
+  ].filter((c) => !c.ok).length;
   const envWarnings = environment.disk.warn ? 1 : 0;
 
   const integrityIssues =
@@ -185,18 +191,23 @@ async function collectAllIssues(options?: { integrity?: boolean }): Promise<Chec
 }
 
 async function checkEnvironment(): Promise<EnvironmentCheck> {
+  const codepacEnvironment = await checkCodepacEnvironment();
   const result: EnvironmentCheck = {
-    codepac: { ok: false, message: '' },
+    codepac: { ok: false, message: '', details: codepacEnvironment },
     config: { ok: false, message: '' },
     store: { ok: false, path: '', message: '' },
     disk: { ok: false, free: 0, warn: false, message: '' },
   };
 
-  // 1. codepac
-  const hasCodepac = await isCodepacInstalled();
+  debug(
+    `[check] 环境检测开始: cwd=${process.cwd()}, codepac=${codepacEnvironment.codepacCommand.ok}, git=${codepacEnvironment.git.ok}, gitLfs=${codepacEnvironment.gitLfs.ok}, version=${codepacEnvironment.codepacVersion.ok}`
+  );
+
+  // 1. codepac / Git / Git LFS
   result.codepac = {
-    ok: hasCodepac,
-    message: hasCodepac ? '已安装' : '未安装，无法下载库',
+    ok: codepacEnvironment.ok,
+    message: formatCodepacEnvironmentMessage(codepacEnvironment),
+    details: codepacEnvironment,
   };
 
   // 2. 配置
@@ -251,6 +262,10 @@ async function checkEnvironment(): Promise<EnvironmentCheck> {
       message: '无法获取磁盘信息',
     };
   }
+
+  debug(
+    `[check] 环境检测完成: codepacOk=${result.codepac.ok}, configOk=${result.config.ok}, storeOk=${result.store.ok}, diskOk=${result.disk.ok}, diskWarn=${result.disk.warn}`
+  );
 
   return result;
 }
@@ -503,6 +518,7 @@ function renderReport(result: CheckResult): void {
 
   const env = result.environment;
   renderCheck('codepac', env.codepac.ok, env.codepac.message, false);
+  renderCodepacEnvironmentDetails(env.codepac.details);
   renderCheck('配置文件', env.config.ok, env.config.message, false);
   renderCheck('Store 目录', env.store.ok, env.store.message, false);
   renderCheck('磁盘空间', env.disk.ok, env.disk.message, env.disk.warn);
@@ -579,6 +595,56 @@ function renderReport(result: CheckResult): void {
     if (reclaimableSize > 0) parts.push(`可回收 ${formatSize(reclaimableSize)}`);
 
     warn(`发现问题: ${parts.join(', ')}`);
+  }
+}
+
+function formatCodepacEnvironmentMessage(environment: CodepacEnvironmentCheck): string {
+  if (environment.ok) {
+    return environment.codepacVersion.version || 'CodePac、Git、Git LFS 可用';
+  }
+
+  const failures: string[] = [];
+  if (!environment.codepacCommand.ok) {
+    failures.push('CodePac 命令缺失');
+  }
+  if (!environment.git.ok) {
+    failures.push(environment.git.version
+      ? `Git 版本不足(${environment.git.version} < ${environment.git.minimumVersion})`
+      : 'Git 不可用');
+  }
+  if (!environment.gitLfs.ok) {
+    failures.push('Git LFS 不可用');
+  }
+  if (environment.codepacCommand.ok && !environment.codepacVersion.ok) {
+    failures.push('codepac --version 执行失败');
+  }
+
+  return failures.join('；') || 'CodePac 环境不可用';
+}
+
+function renderCodepacEnvironmentDetails(environment: CodepacEnvironmentCheck): void {
+  debug(
+    `[check] CodePac 环境详情: commandOk=${environment.codepacCommand.ok}, gitVersion=${environment.git.version ?? 'unknown'}, gitOk=${environment.git.ok}, gitLfsOk=${environment.gitLfs.ok}, versionOk=${environment.codepacVersion.ok}`
+  );
+
+  if (environment.ok) {
+    return;
+  }
+
+  if (!environment.codepacCommand.ok) {
+    warn(`  - CodePac 命令: ${environment.codepacCommand.message}`);
+  }
+  if (!environment.git.ok) {
+    warn(`  - Git: ${environment.git.message}`);
+  }
+  if (!environment.gitLfs.ok) {
+    warn(`  - Git LFS: ${environment.gitLfs.message}`);
+  }
+  if (environment.codepacCommand.ok && !environment.codepacVersion.ok) {
+    warn(`  - CodePac 版本命令: ${environment.codepacVersion.message}`);
+    if (environment.codepacVersion.error) {
+      debug(`[check] codepac --version 错误: ${environment.codepacVersion.error}`);
+    }
   }
 }
 
@@ -994,6 +1060,10 @@ async function detectSharedPlatformConflict(commitPath: string): Promise<string[
 export async function verifyIntegrity(): Promise<void> {
   const result = await collectAllIssues();
   renderReport(result);
+}
+
+export async function collectCheckResultForTest(options?: { integrity?: boolean }): Promise<CheckResult> {
+  return collectAllIssues(options);
 }
 
 /**

@@ -63,6 +63,51 @@ function getEnvWithProxy(): NodeJS.ProcessEnv {
  */
 const CODEPAC_CMD = 'codepac';
 const GIT_CMD = 'git';
+const MIN_GIT_VERSION = '2.22.0';
+
+export interface CommandProbeResult {
+  ok: boolean;
+  command: string;
+  stdout: string;
+  stderr: string;
+  error?: string;
+}
+
+export interface CodepacEnvironmentCheck {
+  ok: boolean;
+  codepacCommand: {
+    ok: boolean;
+    command: string;
+    path?: string;
+    message: string;
+    error?: string;
+  };
+  git: {
+    ok: boolean;
+    command: string;
+    minimumVersion: string;
+    version?: string;
+    raw?: string;
+    message: string;
+    error?: string;
+  };
+  gitLfs: {
+    ok: boolean;
+    commands: {
+      gitLfsVersion: CommandProbeResult;
+      gitLfsSubcommand: CommandProbeResult;
+    };
+    message: string;
+  };
+  codepacVersion: {
+    ok: boolean;
+    command: string;
+    version?: string;
+    raw?: string;
+    message: string;
+    error?: string;
+  };
+}
 
 /**
  * 检查 codepac 是否已安装
@@ -76,6 +121,83 @@ export async function isCodepacInstalled(): Promise<boolean> {
   }
 }
 
+export async function checkCodepacEnvironment(): Promise<CodepacEnvironmentCheck> {
+  const commandProbe = await runShellProbe(`command -v ${CODEPAC_CMD}`);
+  logger.debug(
+    `[codepac-env] CodePac 命令检测: command="${commandProbe.command}", ok=${commandProbe.ok}, stdout="${summarizeProbeText(commandProbe.stdout)}", stderr="${summarizeProbeText(commandProbe.stderr)}", error="${commandProbe.error ?? ''}"`
+  );
+
+  const gitProbe = await runShellProbe(`${GIT_CMD} --version`);
+  const gitRaw = gitProbe.stdout.trim() || gitProbe.stderr.trim();
+  const gitVersion = extractVersion(gitRaw);
+  const gitOk = gitProbe.ok && !!gitVersion && compareVersions(gitVersion, MIN_GIT_VERSION) >= 0;
+  logger.debug(
+    `[codepac-env] Git 版本检测: command="${gitProbe.command}", ok=${gitProbe.ok}, raw="${summarizeProbeText(gitRaw)}", parsed="${gitVersion ?? ''}", minimum="${MIN_GIT_VERSION}", pass=${gitOk}, error="${gitProbe.error ?? ''}"`
+  );
+
+  const gitLfsVersion = await runShellProbe('git-lfs --version');
+  const gitLfsSubcommand = await runShellProbe(`${GIT_CMD} lfs --version`);
+  const gitLfsOk = gitLfsVersion.ok && gitLfsSubcommand.ok;
+  logger.debug(
+    `[codepac-env] Git LFS 检测: git-lfs ok=${gitLfsVersion.ok}, stdout="${summarizeProbeText(gitLfsVersion.stdout)}", stderr="${summarizeProbeText(gitLfsVersion.stderr)}", error="${gitLfsVersion.error ?? ''}"; git lfs ok=${gitLfsSubcommand.ok}, stdout="${summarizeProbeText(gitLfsSubcommand.stdout)}", stderr="${summarizeProbeText(gitLfsSubcommand.stderr)}", error="${gitLfsSubcommand.error ?? ''}"`
+  );
+
+  const versionProbe = await runShellProbe(`${CODEPAC_CMD} --version`);
+  const versionRaw = versionProbe.stdout.trim() || versionProbe.stderr.trim();
+  logger.debug(
+    `[codepac-env] CodePac 版本检测: command="${versionProbe.command}", ok=${versionProbe.ok}, stdout="${summarizeProbeText(versionProbe.stdout)}", stderr="${summarizeProbeText(versionProbe.stderr)}", error="${versionProbe.error ?? ''}"`
+  );
+
+  const codepacCommand = {
+    ok: commandProbe.ok,
+    command: commandProbe.command,
+    path: commandProbe.ok ? commandProbe.stdout.trim() : undefined,
+    message: commandProbe.ok ? `已找到: ${commandProbe.stdout.trim()}` : '未找到 codepac 命令',
+    error: commandProbe.error || commandProbe.stderr.trim() || undefined,
+  };
+  const git = {
+    ok: gitOk,
+    command: gitProbe.command,
+    minimumVersion: MIN_GIT_VERSION,
+    version: gitVersion ?? undefined,
+    raw: gitRaw || undefined,
+    message: gitOk
+      ? `${gitVersion} 可用`
+      : gitProbe.ok
+        ? `Git 版本需不低于 ${MIN_GIT_VERSION}${gitVersion ? `，当前 ${gitVersion}` : ''}`
+        : '无法执行 git --version',
+    error: gitProbe.error || gitProbe.stderr.trim() || undefined,
+  };
+  const gitLfs = {
+    ok: gitLfsOk,
+    commands: {
+      gitLfsVersion,
+      gitLfsSubcommand,
+    },
+    message: gitLfsOk ? '已安装' : 'Git LFS 不可用',
+  };
+  const codepacVersion = {
+    ok: versionProbe.ok,
+    command: versionProbe.command,
+    version: versionProbe.ok ? versionRaw : undefined,
+    raw: versionRaw || undefined,
+    message: versionProbe.ok ? versionRaw || '可执行' : 'codepac --version 执行失败',
+    error: versionProbe.error || versionProbe.stderr.trim() || undefined,
+  };
+
+  const result = {
+    ok: codepacCommand.ok && git.ok && gitLfs.ok && codepacVersion.ok,
+    codepacCommand,
+    git,
+    gitLfs,
+    codepacVersion,
+  };
+  logger.debug(
+    `[codepac-env] 环境检测结果: ok=${result.ok}, codepac=${result.codepacCommand.ok}, git=${result.git.ok}, gitLfs=${result.gitLfs.ok}, version=${result.codepacVersion.ok}`
+  );
+  return result;
+}
+
 /**
  * 获取 codepac 版本
  */
@@ -86,6 +208,59 @@ export async function getVersion(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function runShellProbe(command: string): Promise<CommandProbeResult> {
+  try {
+    const output = await execAsync(command, { encoding: 'utf8' });
+    const { stdout, stderr } = normalizeExecOutput(output);
+    return { ok: true, command, stdout: stdout ?? '', stderr: stderr ?? '' };
+  } catch (err) {
+    const execError = err as Error & { stdout?: string; stderr?: string };
+    return {
+      ok: false,
+      command,
+      stdout: execError.stdout ?? '',
+      stderr: execError.stderr ?? '',
+      error: execError.message,
+    };
+  }
+}
+
+function normalizeExecOutput(output: unknown): { stdout: string; stderr: string } {
+  if (typeof output === 'string') {
+    return { stdout: output, stderr: '' };
+  }
+  if (output && typeof output === 'object') {
+    const value = output as { stdout?: unknown; stderr?: unknown };
+    return {
+      stdout: typeof value.stdout === 'string' ? value.stdout : '',
+      stderr: typeof value.stderr === 'string' ? value.stderr : '',
+    };
+  }
+  return { stdout: '', stderr: '' };
+}
+
+function extractVersion(text: string): string | null {
+  const match = text.match(/(\d+\.\d+\.\d+)/);
+  return match ? match[1] : null;
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = left.split('.').map((part) => Number.parseInt(part, 10));
+  const rightParts = right.split('.').map((part) => Number.parseInt(part, 10));
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index++) {
+    const leftValue = leftParts[index] ?? 0;
+    const rightValue = rightParts[index] ?? 0;
+    if (leftValue > rightValue) return 1;
+    if (leftValue < rightValue) return -1;
+  }
+  return 0;
+}
+
+function summarizeProbeText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, 240);
 }
 
 /**
@@ -1184,6 +1359,7 @@ function spawnCommand(
 
 export default {
   isCodepacInstalled,
+  checkCodepacEnvironment,
   getVersion,
   install,
   installSingle,

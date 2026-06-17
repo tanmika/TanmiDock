@@ -17,11 +17,29 @@ const MIN_COMMIT_LENGTH = 7;
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 
 export type VerifyReason = 'match' | 'mismatch' | 'no_git';
+export type LocalCommitSource = 'commit_hash' | 'git_rev_parse' | 'none';
+export type GitPathKind = 'directory' | 'file' | 'missing' | 'invalid';
 
 export interface CommitVerifyResult {
   verified: boolean;
   actualCommit?: string;
   reason: VerifyReason;
+}
+
+export interface LocalGitStatusResult {
+  hasGitMarker: boolean;
+  gitPath: string;
+  gitPathKind: GitPathKind;
+  commitSource: LocalCommitSource;
+  actualCommit?: string;
+  commitHashPath: string;
+  commitHashExists: boolean;
+  commitHashValid: boolean;
+  usedRevParse: boolean;
+  isFullGit?: boolean;
+  isShallow?: boolean;
+  shallowFileExists?: boolean;
+  reason?: string;
 }
 
 /**
@@ -78,6 +96,198 @@ export async function detectLocalCommit(localPath: string): Promise<string | nul
       `detectLocalCommit: git rev-parse 失败 - ${error instanceof Error ? error.message : String(error)}`
     );
     return null;
+  }
+}
+
+export async function inspectLocalGitStatus(localPath: string): Promise<LocalGitStatusResult> {
+  const gitPath = path.join(localPath, '.git');
+  const commitHashPath = path.join(gitPath, 'commit_hash');
+  let gitPathKind: GitPathKind = 'missing';
+
+  logger.debug(`[git-status] 开始检测本地库: path=${localPath}`);
+
+  // Step 1: 检查 .git 是否存在（可以是目录或文件，支持 worktree）
+  try {
+    const stat = await fs.stat(gitPath);
+    if (!stat.isDirectory() && !stat.isFile()) {
+      logger.debug(`[git-status] .git 既不是目录也不是文件: path=${localPath}, gitPath=${gitPath}`);
+      return {
+        hasGitMarker: false,
+        gitPath,
+        gitPathKind: 'invalid',
+        commitSource: 'none',
+        commitHashPath,
+        commitHashExists: false,
+        commitHashValid: false,
+        usedRevParse: false,
+        reason: '.git 既不是目录也不是文件',
+      };
+    }
+    gitPathKind = stat.isDirectory() ? 'directory' : 'file';
+  } catch {
+    logger.debug(`[git-status] 未发现 .git: path=${localPath}, gitPath=${gitPath}`);
+    return {
+      hasGitMarker: false,
+      gitPath,
+      gitPathKind: 'missing',
+      commitSource: 'none',
+      commitHashPath,
+      commitHashExists: false,
+      commitHashValid: false,
+      usedRevParse: false,
+      reason: '未发现 .git',
+    };
+  }
+
+  // Step 2: 优先检查 .git/commit_hash 文件
+  let commitHashExists = false;
+  let commitHashValid = false;
+  try {
+    const content = await fs.readFile(commitHashPath, 'utf-8');
+    commitHashExists = true;
+    const hash = content.trim();
+    if (hash && COMMIT_HASH_PATTERN.test(hash)) {
+      commitHashValid = true;
+      const shape = await inspectGitShape(localPath, gitPathKind, gitPath);
+      logger.debug(
+        `[git-status] 从 commit_hash 获取 commit: path=${localPath}, commit=${hash}, gitPathKind=${gitPathKind}, isFullGit=${shape.isFullGit ?? 'unknown'}, isShallow=${shape.isShallow ?? 'unknown'}`
+      );
+      return {
+        hasGitMarker: true,
+        gitPath,
+        gitPathKind,
+        commitSource: 'commit_hash',
+        actualCommit: hash,
+        commitHashPath,
+        commitHashExists,
+        commitHashValid,
+        usedRevParse: false,
+        ...shape,
+      };
+    }
+    logger.debug(`[git-status] commit_hash 内容无效，准备回退 git rev-parse: path=${localPath}, content="${hash.slice(0, 80)}"`);
+  } catch {
+    logger.debug(`[git-status] commit_hash 不存在或读取失败，准备回退 git rev-parse: path=${localPath}, commitHashPath=${commitHashPath}`);
+  }
+
+  // Step 3: 回退到 git rev-parse HEAD
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', localPath, 'rev-parse', 'HEAD'], {
+      timeout: 5000,
+    });
+    const hash = stdout.trim();
+    if (hash && COMMIT_HASH_PATTERN.test(hash)) {
+      const shape = await inspectGitShape(localPath, gitPathKind, gitPath);
+      logger.debug(
+        `[git-status] 从 git rev-parse 获取 commit: path=${localPath}, commit=${hash}, commitHashExists=${commitHashExists}, gitPathKind=${gitPathKind}, isFullGit=${shape.isFullGit ?? 'unknown'}, isShallow=${shape.isShallow ?? 'unknown'}`
+      );
+      return {
+        hasGitMarker: true,
+        gitPath,
+        gitPathKind,
+        commitSource: 'git_rev_parse',
+        actualCommit: hash,
+        commitHashPath,
+        commitHashExists,
+        commitHashValid,
+        usedRevParse: true,
+        ...shape,
+      };
+    }
+    logger.debug(`[git-status] git rev-parse 返回无效 hash: path=${localPath}, hash=${hash}`);
+    return {
+      hasGitMarker: true,
+      gitPath,
+      gitPathKind,
+      commitSource: 'none',
+      commitHashPath,
+      commitHashExists,
+      commitHashValid,
+      usedRevParse: true,
+      reason: `git rev-parse 返回无效 hash: ${hash}`,
+      ...(await inspectGitShape(localPath, gitPathKind, gitPath)),
+    };
+  } catch (error) {
+    logger.debug(
+      `[git-status] git rev-parse 失败: path=${localPath}, error=${error instanceof Error ? error.message : String(error)}`
+    );
+    return {
+      hasGitMarker: true,
+      gitPath,
+      gitPathKind,
+      commitSource: 'none',
+      commitHashPath,
+      commitHashExists,
+      commitHashValid,
+      usedRevParse: true,
+      reason: error instanceof Error ? error.message : String(error),
+      ...(await inspectGitShape(localPath, gitPathKind, gitPath)),
+    };
+  }
+}
+
+async function inspectGitShape(
+  localPath: string,
+  gitPathKind: GitPathKind,
+  gitPath: string
+): Promise<Pick<LocalGitStatusResult, 'isFullGit' | 'isShallow' | 'shallowFileExists'>> {
+  if (gitPathKind !== 'directory') {
+    return {};
+  }
+
+  const objectsPath = path.join(gitPath, 'objects');
+  const shallowPath = path.join(gitPath, 'shallow');
+  const [isFullGit, shallowFileExists, isShallow] = await Promise.all([
+    pathExists(objectsPath),
+    pathExists(shallowPath),
+    withTimeout(detectShallowRepository(localPath), 500, undefined),
+  ]);
+
+  return {
+    isFullGit,
+    shallowFileExists,
+    isShallow,
+  };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        clearTimeout(timer);
+        resolve(fallback);
+      });
+  });
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.stat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function detectShallowRepository(localPath: string): Promise<boolean | undefined> {
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', localPath, 'rev-parse', '--is-shallow-repository'], {
+      timeout: 5000,
+    });
+    const value = stdout.trim();
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return undefined;
+  } catch (error) {
+    logger.debug(
+      `[git-status] shallow 状态检测失败: path=${localPath}, error=${error instanceof Error ? error.message : String(error)}`
+    );
+    return undefined;
   }
 }
 
@@ -312,6 +522,7 @@ export async function findSubmoduleConfigs(
 
 export default {
   detectLocalCommit,
+  inspectLocalGitStatus,
   verifyLocalCommit,
   parseGitmodules,
   findSubmoduleConfigs,

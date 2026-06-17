@@ -60,6 +60,7 @@ describe('git', () => {
       const result = await detectLocalCommit('/path/to/lib');
 
       expect(result).toBe('abc1234def5678');
+      expect(mockExecFile).not.toHaveBeenCalled();
     });
 
     it('should fall back to git rev-parse when commit_hash is invalid', async () => {
@@ -124,6 +125,84 @@ describe('git', () => {
       const result = await detectLocalCommit('/path/to/lib');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('inspectLocalGitStatus', () => {
+    it('should report commit_hash as commit source', async () => {
+      fsMock.stat.mockImplementation(async (targetPath: string) => {
+        if (targetPath.endsWith('/.git')) {
+          return { isDirectory: () => true, isFile: () => false };
+        }
+        if (targetPath.endsWith('/.git/objects')) {
+          return { isDirectory: () => true, isFile: () => false };
+        }
+        throw new Error('ENOENT');
+      });
+      fsMock.readFile.mockResolvedValue('abc1234def5678\n');
+      mockExecFile.mockImplementation((_cmd: string, args: string[], _opts: unknown, callback?: Function) => {
+        if (args.includes('--is-shallow-repository')) {
+          if (typeof _opts === 'function') {
+            _opts(null, { stdout: 'false\n', stderr: '' });
+          } else if (callback) {
+            callback(null, { stdout: 'false\n', stderr: '' });
+          }
+        }
+        return {};
+      });
+
+      const { inspectLocalGitStatus } = await import('../../src/utils/git.js');
+      const result = await inspectLocalGitStatus('/path/to/lib');
+
+      expect(result.commitSource).toBe('commit_hash');
+      expect(result.actualCommit).toBe('abc1234def5678');
+      expect(result.commitHashExists).toBe(true);
+      expect(result.commitHashValid).toBe(true);
+      expect(result.isFullGit).toBe(true);
+      expect(result.isShallow).toBe(false);
+    });
+
+    it('should report git_rev_parse as fallback source', async () => {
+      fsMock.stat.mockImplementation(async (targetPath: string) => {
+        if (targetPath.endsWith('/.git')) {
+          return { isDirectory: () => true, isFile: () => false };
+        }
+        throw new Error('ENOENT');
+      });
+      fsMock.readFile.mockRejectedValue(new Error('ENOENT'));
+      mockExecFile.mockImplementation((_cmd: string, args: string[], _opts: unknown, callback?: Function) => {
+        const payload = args.includes('--is-shallow-repository')
+          ? { stdout: 'true\n', stderr: '' }
+          : { stdout: 'deadbeef1234567\n', stderr: '' };
+        if (typeof _opts === 'function') {
+          _opts(null, payload);
+        } else if (callback) {
+          callback(null, payload);
+        }
+        return {};
+      });
+
+      const { inspectLocalGitStatus } = await import('../../src/utils/git.js');
+      const result = await inspectLocalGitStatus('/path/to/lib');
+
+      expect(result.commitSource).toBe('git_rev_parse');
+      expect(result.actualCommit).toBe('deadbeef1234567');
+      expect(result.commitHashExists).toBe(false);
+      expect(result.usedRevParse).toBe(true);
+      expect(result.isFullGit).toBe(false);
+      expect(result.isShallow).toBe(true);
+    });
+
+    it('should report missing git marker without running git commands', async () => {
+      fsMock.stat.mockRejectedValue(new Error('ENOENT'));
+
+      const { inspectLocalGitStatus } = await import('../../src/utils/git.js');
+      const result = await inspectLocalGitStatus('/path/to/lib');
+
+      expect(result.hasGitMarker).toBe(false);
+      expect(result.gitPathKind).toBe('missing');
+      expect(result.commitSource).toBe('none');
+      expect(mockExecFile).not.toHaveBeenCalled();
     });
   });
 

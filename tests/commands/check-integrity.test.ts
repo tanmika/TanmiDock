@@ -14,6 +14,20 @@ vi.mock('fs/promises', () => ({
 }));
 vi.mock('../../src/core/codepac.js', () => ({
   isCodepacInstalled: vi.fn().mockResolvedValue(true),
+  checkCodepacEnvironment: vi.fn().mockResolvedValue({
+    ok: true,
+    codepacCommand: { ok: true, command: 'command -v codepac', path: '/usr/local/bin/codepac', message: '已找到: /usr/local/bin/codepac' },
+    git: { ok: true, command: 'git --version', minimumVersion: '2.22.0', version: '2.40.0', raw: 'git version 2.40.0', message: '2.40.0 可用' },
+    gitLfs: {
+      ok: true,
+      commands: {
+        gitLfsVersion: { ok: true, command: 'git-lfs --version', stdout: 'git-lfs/3.0.0', stderr: '' },
+        gitLfsSubcommand: { ok: true, command: 'git lfs --version', stdout: 'git-lfs/3.0.0', stderr: '' },
+      },
+      message: '已安装',
+    },
+    codepacVersion: { ok: true, command: 'codepac --version', version: 'Version 2.0.56', raw: 'Version 2.0.56', message: 'Version 2.0.56' },
+  }),
 }));
 vi.mock('../../src/utils/disk.js', () => ({
   getDiskInfo: vi.fn().mockResolvedValue([{ path: '/', total: 1e12, free: 1e11, isSystem: true }]),

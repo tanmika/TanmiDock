@@ -10,18 +10,45 @@ const mockSpawn = vi.fn();
 
 // Mock exec - 可配置返回值
 let mockExecShouldFail = false;
+let mockExecResponses: Record<string, { error?: Error; stdout?: string; stderr?: string }> = {};
+
+function resolveExecMock(
+  command: string,
+  callback?: (...args: unknown[]) => void
+): { stdout: string; stderr: string } {
+  const response = mockExecResponses[command];
+  if (response) {
+    if (response.error) {
+      callback?.(response.error, response.stdout ?? '', response.stderr ?? '');
+      throw response.error;
+    }
+    callback?.(null, response.stdout ?? '', response.stderr ?? '');
+    return { stdout: response.stdout ?? '', stderr: response.stderr ?? '' };
+  }
+  if (mockExecShouldFail) {
+    const error = new Error('command not found');
+    callback?.(error, '', 'codepac: command not found');
+    throw error;
+  }
+  const stdout = command === 'git --version' ? 'git version 2.40.0' : 'Version 2.0.56';
+  callback?.(null, stdout, '');
+  return { stdout, stderr: '' };
+}
 
 // Mock child_process
 vi.mock('child_process', () => ({
   exec: vi.fn((_cmd: string, _opts: unknown, callback?: (...args: unknown[]) => void) => {
-    if (callback) {
-      if (mockExecShouldFail) {
-        callback(new Error('command not found'), '', 'codepac: command not found');
-      } else {
-        callback(null, 'Version 2.0.56', '');
+    const command = String(_cmd);
+    const actualCallback = typeof _opts === 'function' ? _opts as (...args: unknown[]) => void : callback;
+    if (actualCallback) {
+      try {
+        resolveExecMock(command, actualCallback);
+      } catch {
+        // callback has already received the error
       }
+      return { stdout: '', stderr: '' };
     }
-    return { stdout: '', stderr: '' };
+    return Promise.resolve(resolveExecMock(command));
   }),
   spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
@@ -100,6 +127,7 @@ describe('codepac', () => {
     mockStat.mockReset();
     mockReadFile.mockReset();
     mockExecShouldFail = false;
+    mockExecResponses = {};
   });
 
   describe('isCodepacInstalled', () => {
@@ -126,6 +154,79 @@ describe('codepac', () => {
       mockExecShouldFail = true;
       const result = await codepac.getVersion();
       expect(result).toBe(null);
+    });
+  });
+
+  describe('checkCodepacEnvironment', () => {
+    it('should report available environment when codepac git and lfs are available', async () => {
+      mockExecResponses = {
+        'command -v codepac': { stdout: '/usr/local/bin/codepac\n' },
+        'git --version': { stdout: 'git version 2.40.0\n' },
+        'git-lfs --version': { stdout: 'git-lfs/3.4.0\n' },
+        'git lfs --version': { stdout: 'git-lfs/3.4.0\n' },
+        'codepac --version': { stdout: 'Version 2.0.56\n' },
+      };
+
+      const result = await codepac.checkCodepacEnvironment();
+
+      expect(result.ok).toBe(true);
+      expect(result.codepacCommand.ok).toBe(true);
+      expect(result.git.version).toBe('2.40.0');
+      expect(result.gitLfs.ok).toBe(true);
+      expect(result.codepacVersion.version).toBe('Version 2.0.56');
+    });
+
+    it('should report git version below CodePac requirement', async () => {
+      mockExecResponses = {
+        'command -v codepac': { stdout: '/usr/local/bin/codepac\n' },
+        'git --version': { stdout: 'git version 2.21.0\n' },
+        'git-lfs --version': { stdout: 'git-lfs/3.4.0\n' },
+        'git lfs --version': { stdout: 'git-lfs/3.4.0\n' },
+        'codepac --version': { stdout: 'Version 2.0.56\n' },
+      };
+
+      const result = await codepac.checkCodepacEnvironment();
+
+      expect(result.ok).toBe(false);
+      expect(result.git.ok).toBe(false);
+      expect(result.git.minimumVersion).toBe('2.22.0');
+      expect(result.git.message).toContain('2.22.0');
+    });
+
+    it('should report missing Git LFS separately from codepac command', async () => {
+      mockExecResponses = {
+        'command -v codepac': { stdout: '/usr/local/bin/codepac\n' },
+        'git --version': { stdout: 'git version 2.40.0\n' },
+        'git-lfs --version': { error: new Error('not found'), stderr: 'git-lfs: command not found' },
+        'git lfs --version': { error: new Error('not found'), stderr: 'git: lfs is not a git command' },
+        'codepac --version': { stdout: 'Version 2.0.56\n' },
+      };
+
+      const result = await codepac.checkCodepacEnvironment();
+
+      expect(result.ok).toBe(false);
+      expect(result.codepacCommand.ok).toBe(true);
+      expect(result.git.ok).toBe(true);
+      expect(result.gitLfs.ok).toBe(false);
+      expect(result.gitLfs.commands.gitLfsVersion.ok).toBe(false);
+      expect(result.gitLfs.commands.gitLfsSubcommand.ok).toBe(false);
+    });
+
+    it('should report codepac version command failure separately', async () => {
+      mockExecResponses = {
+        'command -v codepac': { stdout: '/usr/local/bin/codepac\n' },
+        'git --version': { stdout: 'git version 2.40.0\n' },
+        'git-lfs --version': { stdout: 'git-lfs/3.4.0\n' },
+        'git lfs --version': { stdout: 'git-lfs/3.4.0\n' },
+        'codepac --version': { error: new Error('lfs missing'), stderr: 'git lfs missing' },
+      };
+
+      const result = await codepac.checkCodepacEnvironment();
+
+      expect(result.ok).toBe(false);
+      expect(result.codepacCommand.ok).toBe(true);
+      expect(result.codepacVersion.ok).toBe(false);
+      expect(result.codepacVersion.message).toContain('失败');
     });
   });
 
