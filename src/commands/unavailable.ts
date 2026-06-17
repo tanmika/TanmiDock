@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { ensureInitialized } from '../core/guard.js';
-import { KNOWN_PLATFORM_VALUES } from '../core/platform.js';
+import { getBaseKeyForCodepac, KNOWN_PLATFORM_VALUES } from '../core/platform.js';
 import { getRegistry } from '../core/registry.js';
 import { resolveProjectRootPath } from '../core/parser.js';
 import { collectProjectDependencyGraph } from './link.js';
@@ -39,7 +39,12 @@ async function resolveProjectRootOrThrow(): Promise<string> {
 }
 
 async function collectProjectDependencyChoices(projectRoot: string) {
-  const dependencies = await collectProjectDependencyGraph(projectRoot);
+  const registry = getRegistry();
+  const projectInfo = registry.getProject(registry.hashPath(projectRoot));
+  const codepacPlatforms = [
+    ...new Set((projectInfo?.platforms ?? []).map((platform) => getBaseKeyForCodepac(platform))),
+  ];
+  const dependencies = await collectProjectDependencyGraph(projectRoot, codepacPlatforms);
   return dependencies
     .sort((a, b) => {
       const nameCompare = a.libName.localeCompare(b.libName);

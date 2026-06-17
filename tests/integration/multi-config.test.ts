@@ -133,6 +133,46 @@ describe('TC-025: 多配置文件支持集成测试', () => {
       const mainCachePath = path.join(env.projectDir, '3rdparty', '.cache', 'codepac-dep.json');
       await expect(fs.access(mainCachePath)).resolves.toBeUndefined();
     });
+
+    it('should link platform-specific repos when using normalized link platform values', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libMacOnly';
+      const commit = 'maconly123456';
+      await createMockStoreDataV2(env, {
+        libName,
+        commit,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await fs.mkdir(thirdPartyDir, { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          repos: {
+            common: [],
+            mac: [
+              {
+                url: `https://github.com/test/${libName}.git`,
+                commit,
+                branch: 'main',
+                dir: libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const localPath = path.join(thirdPartyDir, libName, 'macOS');
+      const storeTarget = path.join(env.storeDir, libName, commit, 'macOS');
+      await verifySymlink(localPath, storeTarget);
+    });
   });
 
   describe('S-2.2: 多配置场景 - 主配置 + 可选配置', () => {

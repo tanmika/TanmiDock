@@ -34,6 +34,7 @@ import {
   KNOWN_PLATFORM_VALUES,
   getRequestedPlatformTargets,
   resolveSparseConfig,
+  getBaseKeyForCodepac,
 } from '../core/platform.js';
 import { Transaction } from '../core/transaction.js';
 import { formatSize, checkDiskSpace } from '../utils/disk.js';
@@ -457,7 +458,10 @@ export interface ProjectDependencyCandidate {
   source: 'direct' | 'nested' | 'submodule';
 }
 
-export async function collectProjectDependencyGraph(projectRoot: string): Promise<ProjectDependencyCandidate[]> {
+export async function collectProjectDependencyGraph(
+  projectRoot: string,
+  codepacPlatforms: string[] = []
+): Promise<ProjectDependencyCandidate[]> {
   const { normalizedPath, configPath } = await resolveProjectRootPath(projectRoot);
   if (!configPath) {
     throw new Error('只能在项目目录下使用');
@@ -470,7 +474,7 @@ export async function collectProjectDependencyGraph(projectRoot: string): Promis
     { configPath, source: 'direct' },
   ];
 
-  const submodules = await findSubmoduleConfigs(normalizedPath);
+  const submodules = await findSubmoduleConfigs(normalizedPath, '', 0, codepacPlatforms);
   for (const submodule of submodules) {
     queue.push({ configPath: submodule.configPath, scope: submodule.relativePath, source: 'submodule' });
   }
@@ -487,7 +491,9 @@ export async function collectProjectDependencyGraph(projectRoot: string): Promis
       continue;
     }
 
-    for (const dependency of extractDependencies(parsedConfig)) {
+    const extractOptions = { platforms: codepacPlatforms, configPath: current.configPath };
+
+    for (const dependency of extractDependencies(parsedConfig, extractOptions)) {
       const key = `${dependency.libName}:${dependency.commit}:${current.scope ?? ''}`;
       if (!seenDeps.has(key)) {
         seenDeps.add(key);
@@ -495,7 +501,7 @@ export async function collectProjectDependencyGraph(projectRoot: string): Promis
       }
     }
 
-    for (const action of extractActions(parsedConfig)) {
+    for (const action of extractActions(parsedConfig, extractOptions)) {
       let parsedAction;
       try {
         parsedAction = parseActionCommand(action.command);
@@ -511,7 +517,10 @@ export async function collectProjectDependencyGraph(projectRoot: string): Promis
 
       let nested;
       try {
-        nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries);
+        nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries, {
+          platforms: codepacPlatforms,
+          configPath: nestedConfigPath,
+        });
       } catch {
         continue;
       }
@@ -620,6 +629,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
   } = params;
 
   let finalLinkPlatforms = [...params.finalLinkPlatforms];
+  const codepacPlatforms = [...new Set(platforms.map((platform) => getBaseKeyForCodepac(platform)))];
 
   // 记录 General 类型库
   const generalLibs = new Set<string>();
@@ -634,21 +644,29 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
   const cacheConfigPaths = [configPath];
 
   try {
-    const result = await parseProjectDependencies(path.dirname(path.dirname(configPath)));
+    const result = await parseProjectDependencies(path.dirname(path.dirname(configPath)), {
+      platforms: codepacPlatforms,
+    });
     dependencies = result.dependencies;
     configVars = result.vars;
     const topLevelConfig = await parseCodepacDep(configPath);
-    selectedActions.push(...extractActions(topLevelConfig));
+    selectedActions.push(...extractActions(topLevelConfig, { platforms: codepacPlatforms, configPath }));
 
     // 合并可选配置依赖
     if (optionalConfigs && optionalConfigs.length > 0) {
       for (const optionalConfig of optionalConfigs) {
         try {
           const optionalResult = await parseCodepacDep(optionalConfig.path);
-          const optionalDeps = extractDependencies(optionalResult);
+          const optionalDeps = extractDependencies(optionalResult, {
+            platforms: codepacPlatforms,
+            configPath: optionalConfig.path,
+          });
           dependencies = mergeDepLists(dependencies, optionalDeps);
           configVars = { ...configVars, ...optionalResult.vars };
-          selectedActions.push(...extractActions(optionalResult));
+          selectedActions.push(...extractActions(optionalResult, {
+            platforms: codepacPlatforms,
+            configPath: optionalConfig.path,
+          }));
           cacheConfigPaths.push(optionalConfig.path);
           info(`  + ${optionalConfig.name}: ${optionalDeps.length} 个依赖`);
         } catch (optErr) {
@@ -1576,7 +1594,11 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
       info(`发现 ${actions.length} 个嵌套依赖配置`);
 
       const nestedContext: NestedContext = {
-        depth: 0, processedConfigs: new Set([configPath]), platforms, vars: configVars,
+        depth: 0,
+        processedConfigs: new Set([configPath]),
+        platforms,
+        codepacPlatforms,
+        vars: configVars,
       };
       const thirdPartyDir = path.dirname(configPath);
 
@@ -1723,7 +1745,8 @@ export async function linkProject(projectPath: string, options: LinkOptions): Pr
   // === 阶段 2: Submodule 检测 ===
   let selectedSubmodules: SubmoduleConfigWithSelection[] = [];
   if (options.submodules !== false) {
-    const submoduleConfigs = await findSubmoduleConfigs(normalizedPath);
+    const codepacPlatforms = [...new Set(platforms.map((platform) => getBaseKeyForCodepac(platform)))];
+    const submoduleConfigs = await findSubmoduleConfigs(normalizedPath, '', 0, codepacPlatforms);
     if (submoduleConfigs.length > 0) {
       selectedSubmodules = await selectSubmodules(submoduleConfigs, options, existingProject?.submodules);
 
@@ -2854,7 +2877,10 @@ async function processAction(
   // 5. 提取指定库的依赖
   let nestedResult;
   try {
-    nestedResult = await extractNestedDependencies(nestedConfigPath, parsed.libraries);
+    nestedResult = await extractNestedDependencies(nestedConfigPath, parsed.libraries, {
+      platforms: context.codepacPlatforms ?? context.platforms,
+      configPath: nestedConfigPath,
+    });
   } catch (err) {
     warn(`${indent}  解析嵌套配置失败: ${(err as Error).message}`);
     return;
@@ -2892,6 +2918,7 @@ async function processAction(
       depth: context.depth + 1,
       processedConfigs: context.processedConfigs,
       platforms: context.platforms,
+      codepacPlatforms: context.codepacPlatforms,
       vars: mergedVars,
     };
     const nestedThirdPartyDir = path.join(thirdPartyDir, parsed.targetDir);

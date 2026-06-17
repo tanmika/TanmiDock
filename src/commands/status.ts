@@ -18,7 +18,7 @@ import {
 import type { OptionalConfigInfo } from '../core/parser.js';
 import { getRegistry } from '../core/registry.js';
 import * as linker from '../core/linker.js';
-import { resolvePath, shrinkHome } from '../core/platform.js';
+import { getBaseKeyForCodepac, resolvePath, shrinkHome } from '../core/platform.js';
 import { formatSize } from '../utils/disk.js';
 import { info, warn, success, hint, blank, separator, title, colorize, tree as printTree } from '../utils/logger.js';
 import { selectWithCancel, PROMPT_CANCELLED } from '../utils/prompt.js';
@@ -245,7 +245,8 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
   }
 
   // 检测 submodule 依赖
-  const submoduleConfigs = await findSubmoduleConfigs(absolutePath);
+  const statusCodepacPlatforms = (projectInfo?.platforms ?? []).map((platform) => getBaseKeyForCodepac(platform));
+  const submoduleConfigs = await findSubmoduleConfigs(absolutePath, '', 0, statusCodepacPlatforms);
   interface SubmoduleStatus {
     name: string;
     path: string;
@@ -277,6 +278,7 @@ export async function showStatus(projectPath: string, options: StatusOptions): P
       try {
         const subDeps = await collectScopeStatusDependencies(
           sub.configPath,
+          projectInfo?.platforms ?? [],
           projectInfo?.submoduleOptionalConfigs?.[sub.relativePath] ?? []
         );
 
@@ -529,13 +531,18 @@ async function collectStatusDependencies(params: {
   includeSubmodules: boolean;
 }): Promise<StatusDependency[]> {
   const { projectRoot, configPath, projectInfo, includeSubmodules } = params;
-  const dependencies = await collectScopeStatusDependencies(configPath, projectInfo?.optionalConfigs ?? []);
+  const platforms = projectInfo?.platforms ?? [];
+  const dependencies = await collectScopeStatusDependencies(
+    configPath,
+    platforms,
+    projectInfo?.optionalConfigs ?? []
+  );
 
   if (!includeSubmodules || !projectInfo?.submodules || projectInfo.submodules.length === 0) {
     return dependencies;
   }
 
-  const submoduleConfigs = await findSubmoduleConfigs(projectRoot);
+  const submoduleConfigs = await findSubmoduleConfigs(projectRoot, '', 0, platforms.map((platform) => getBaseKeyForCodepac(platform)));
   const selectedSubmodules = submoduleConfigs.filter((submodule) =>
     projectInfo.submodules?.includes(submodule.relativePath)
   );
@@ -543,6 +550,7 @@ async function collectStatusDependencies(params: {
   for (const submodule of selectedSubmodules) {
     dependencies.push(...await collectScopeStatusDependencies(
       submodule.configPath,
+      platforms,
       projectInfo.submoduleOptionalConfigs?.[submodule.relativePath] ?? []
     ));
   }
@@ -552,11 +560,13 @@ async function collectStatusDependencies(params: {
 
 async function collectScopeStatusDependencies(
   configPath: string,
+  platforms: string[],
   selectedOptionalConfigNames: string[]
 ): Promise<StatusDependency[]> {
   const dependencies: StatusDependency[] = [];
   const seen = new Set<string>();
   const visitedConfigs = new Set<string>();
+  const codepacPlatforms = [...new Set(platforms.map((platform) => getBaseKeyForCodepac(platform)))];
 
   async function addConfigDependencies(currentConfigPath: string): Promise<void> {
     if (visitedConfigs.has(currentConfigPath)) return;
@@ -565,7 +575,7 @@ async function collectScopeStatusDependencies(
     const config = await parseCodepacDep(currentConfigPath);
     const configDir = path.dirname(currentConfigPath);
 
-    for (const dependency of extractDependencies(config)) {
+    for (const dependency of extractDependencies(config, { platforms: codepacPlatforms, configPath: currentConfigPath })) {
       addStatusDependency(dependencies, seen, {
         libName: dependency.libName,
         commit: dependency.commit,
@@ -574,9 +584,10 @@ async function collectScopeStatusDependencies(
     }
 
     await collectActionStatusDependencies({
-      actions: extractActions(config),
+      actions: extractActions(config, { platforms: codepacPlatforms, configPath: currentConfigPath }),
       baseConfigDir: configDir,
       targetRootDir: configDir,
+      codepacPlatforms,
       dependencies,
       seen,
     });
@@ -608,10 +619,11 @@ async function collectActionStatusDependencies(params: {
   actions: Array<{ command: string; dir?: string }>;
   baseConfigDir: string;
   targetRootDir: string;
+  codepacPlatforms: string[];
   dependencies: StatusDependency[];
   seen: Set<string>;
 }): Promise<void> {
-  const { actions, baseConfigDir, targetRootDir, dependencies, seen } = params;
+  const { actions, baseConfigDir, targetRootDir, codepacPlatforms, dependencies, seen } = params;
 
   for (const action of actions) {
     let parsedAction;
@@ -624,7 +636,10 @@ async function collectActionStatusDependencies(params: {
     const nestedConfigPath = path.resolve(baseConfigDir, parsedAction.configDir, 'codepac-dep.json');
     let nested;
     try {
-      nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries);
+      nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries, {
+        platforms: codepacPlatforms,
+        configPath: nestedConfigPath,
+      });
     } catch {
       continue;
     }
@@ -643,6 +658,7 @@ async function collectActionStatusDependencies(params: {
         actions: nested.nestedActions,
         baseConfigDir: path.dirname(nestedConfigPath),
         targetRootDir: nestedTargetDir,
+        codepacPlatforms,
         dependencies,
         seen,
       });

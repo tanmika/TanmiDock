@@ -162,13 +162,19 @@ export const EMPTY_REGISTRY: Registry = {
 export interface CodepacDep {
   version: string;
   vars?: Record<string, string>;
-  repos: {
-    common: RepoConfig[];
-  };
-  actions?: {
-    common: ActionConfig[];
-  };
+  repos: CodepacPlatformGroups<RepoConfig>;
+  actions?: CodepacPlatformGroups<ActionConfig>;
 }
+
+/**
+ * codepac 按平台分组的配置集合
+ * common 始终参与筛选。tanmi-dock 额外支持配置 all 分组，便于显式声明所有平台共享配置。
+ */
+export type CodepacPlatformGroups<T> = {
+  common?: T[];
+  all?: T[];
+  [platform: string]: T[] | undefined;
+};
 
 /**
  * 仓库配置
@@ -178,6 +184,20 @@ export interface RepoConfig {
   commit: string;
   branch: string;
   dir: string;
+  name?: string;
+  source?: RepoConfigSource;
+  sparse?: object | string;
+}
+
+/**
+ * codepac 用于记录仓库原始配置的 source 字段
+ */
+export interface RepoConfigSource {
+  url?: string;
+  commit?: string;
+  branch?: string;
+  dir: string;
+  name?: string;
   sparse?: object | string;
 }
 
@@ -186,7 +206,8 @@ export interface RepoConfig {
  */
 export interface ActionConfig {
   command: string;
-  dir: string;
+  dir?: string;
+  name?: string;
 }
 
 /**
@@ -197,6 +218,9 @@ export interface ParsedDependency {
   commit: string;
   branch: string;
   url: string;
+  dir: string;
+  name: string;
+  source: RepoConfigSource;
   sparse?: object | string;
 }
 
@@ -286,6 +310,8 @@ export interface NestedContext {
   processedConfigs: Set<string>;
   /** 平台列表 */
   platforms: string[];
+  /** codepac 配置分组使用的平台 key */
+  codepacPlatforms?: string[];
   /** 配置变量 */
   vars?: Record<string, string>;
 }

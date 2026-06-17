@@ -5,7 +5,15 @@ import fs from 'fs/promises';
 import path from 'path';
 import { resolvePath } from './platform.js';
 import * as logger from '../utils/logger.js';
-import type { CodepacDep, ParsedDependency, ActionConfig, ParsedAction } from '../types/index.js';
+import type {
+  CodepacDep,
+  ParsedDependency,
+  ActionConfig,
+  ParsedAction,
+  RepoConfig,
+  CodepacPlatformGroups,
+  RepoConfigSource,
+} from '../types/index.js';
 
 /**
  * codepac 配置文件名
@@ -35,6 +43,21 @@ export interface ConfigDiscoveryResult {
   mainConfig: string;
   /** 可选配置文件列表（不含主配置），按名称排序 */
   optionalConfigs: OptionalConfigInfo[];
+}
+
+/**
+ * 依赖和 action 提取选项
+ */
+export interface CodepacExtractOptions {
+  /** codepac 平台 key，例如 mac、ios、android */
+  platforms?: string[];
+  /** 日志中展示的配置来源 */
+  configPath?: string;
+}
+
+interface PlatformFilterResult<T> {
+  items: T[];
+  matchedPlatforms: string[];
 }
 
 /**
@@ -142,51 +165,280 @@ function validateCodepacDep(config: unknown, configPath: string): asserts config
     throw new Error(`配置文件格式错误: 缺少 repos 字段 (${configPath})`);
   }
 
-  const repos = obj.repos as Record<string, unknown>;
-  if (!Array.isArray(repos.common)) {
-    throw new Error(`配置文件格式错误: repos.common 必须是数组 (${configPath})`);
-  }
+  validateRepoGroups(obj.repos as Record<string, unknown>, configPath);
 
-  // 验证每个 repo 配置
-  for (let i = 0; i < repos.common.length; i++) {
-    const repo = repos.common[i] as Record<string, unknown>;
-    if (!repo || typeof repo !== 'object') {
-      throw new Error(`配置文件格式错误: repos.common[${i}] 必须是对象 (${configPath})`);
+  if (obj.actions !== undefined) {
+    if (!obj.actions || typeof obj.actions !== 'object' || Array.isArray(obj.actions)) {
+      throw new Error(`配置文件格式错误: actions 必须是对象 (${configPath})`);
     }
-
-    const required = ['url', 'commit', 'branch', 'dir'];
-    for (const field of required) {
-      if (typeof repo[field] !== 'string') {
-        throw new Error(
-          `配置文件格式错误: repos.common[${i}].${field} 必须是字符串 (${configPath})`
-        );
-      }
-    }
+    validateActionGroups(obj.actions as Record<string, unknown>, configPath);
   }
 }
 
 /**
  * 从配置中提取依赖列表
  * @param config 配置对象
+ * @param options 平台筛选选项
  * @returns 依赖列表
  */
-export function extractDependencies(config: CodepacDep): ParsedDependency[] {
-  return config.repos.common.map((repo) => ({
-    libName: repo.dir,
-    commit: repo.commit,
-    branch: repo.branch,
-    url: repo.url,
-    sparse: repo.sparse,
-  }));
+export function extractDependencies(
+  config: CodepacDep,
+  options: CodepacExtractOptions = {}
+): ParsedDependency[] {
+  const result = filterByPlatform(config.repos, options.platforms);
+  const dependencies = result.items.map((repo) =>
+    normalizeRepoConfig(repo, config.vars, options.configPath)
+  );
+  assertUniqueDependencies(dependencies, options.configPath);
+  logger.debug(
+    `CodePac 配置解析: repos 配置=${formatConfigPathForLog(options.configPath)}, 请求平台=${formatPlatformsForLog(options.platforms)}, 命中分组=${formatPlatformsForLog(result.matchedPlatforms)}, 输出依赖=${dependencies.length}`
+  );
+  return dependencies;
 }
 
 /**
  * 从配置中提取 actions 列表
  * @param config 配置对象
+ * @param options 平台筛选选项
  * @returns actions 列表，如果没有则返回空数组
  */
-export function extractActions(config: CodepacDep): ActionConfig[] {
-  return config.actions?.common ?? [];
+export function extractActions(
+  config: CodepacDep,
+  options: CodepacExtractOptions = {}
+): ActionConfig[] {
+  const result = filterByPlatform(config.actions, options.platforms);
+  const actions = result.items.map((action) => ({
+    ...action,
+    command: interpolateCodepacVars(action.command, config.vars),
+    dir: action.dir ? interpolateCodepacVars(action.dir, config.vars) : action.dir,
+    name: action.name ? interpolateCodepacVars(action.name, config.vars) : action.name,
+  }));
+  logger.debug(
+    `CodePac 配置解析: actions 配置=${formatConfigPathForLog(options.configPath)}, 请求平台=${formatPlatformsForLog(options.platforms)}, 命中分组=${formatPlatformsForLog(result.matchedPlatforms)}, 输出动作=${actions.length}`
+  );
+  return actions;
+}
+
+function validateRepoGroups(repos: Record<string, unknown>, configPath: string): void {
+  for (const [platform, items] of Object.entries(repos)) {
+    if (!Array.isArray(items)) {
+      throw new Error(`配置文件格式错误: repos.${platform} 必须是数组 (${configPath})`);
+    }
+
+    items.forEach((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error(`配置文件格式错误: repos.${platform}[${index}] 必须是对象 (${configPath})`);
+      }
+
+      const repo = item as Record<string, unknown>;
+      const required = ['url', 'commit', 'branch', 'dir'];
+      for (const field of required) {
+        if (typeof repo[field] !== 'string') {
+          throw new Error(
+            `配置文件格式错误: repos.${platform}[${index}].${field} 必须是字符串 (${configPath})`
+          );
+        }
+      }
+
+      if (repo.name !== undefined && typeof repo.name !== 'string') {
+        throw new Error(
+          `配置文件格式错误: repos.${platform}[${index}].name 必须是字符串 (${configPath})`
+        );
+      }
+      if (repo.source !== undefined && (!repo.source || typeof repo.source !== 'object' || Array.isArray(repo.source))) {
+        throw new Error(
+          `配置文件格式错误: repos.${platform}[${index}].source 必须是对象 (${configPath})`
+        );
+      }
+    });
+  }
+}
+
+function validateActionGroups(actions: Record<string, unknown>, configPath: string): void {
+  for (const [platform, items] of Object.entries(actions)) {
+    if (!Array.isArray(items)) {
+      throw new Error(`配置文件格式错误: actions.${platform} 必须是数组 (${configPath})`);
+    }
+
+    items.forEach((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error(`配置文件格式错误: actions.${platform}[${index}] 必须是对象 (${configPath})`);
+      }
+
+      const action = item as Record<string, unknown>;
+      if (typeof action.command !== 'string') {
+        throw new Error(
+          `配置文件格式错误: actions.${platform}[${index}].command 必须是字符串 (${configPath})`
+        );
+      }
+      if (action.dir !== undefined && typeof action.dir !== 'string') {
+        throw new Error(
+          `配置文件格式错误: actions.${platform}[${index}].dir 必须是字符串 (${configPath})`
+        );
+      }
+      if (action.name !== undefined && typeof action.name !== 'string') {
+        throw new Error(
+          `配置文件格式错误: actions.${platform}[${index}].name 必须是字符串 (${configPath})`
+        );
+      }
+    });
+  }
+}
+
+function filterByPlatform<T>(
+  groups: CodepacPlatformGroups<T> | undefined,
+  platforms?: string[]
+): PlatformFilterResult<T> {
+  if (!groups) return { items: [], matchedPlatforms: [] };
+
+  const requestedPlatforms = platforms ?? [];
+  const includeEveryPlatform = requestedPlatforms.includes('all');
+  const selected: T[] = [];
+  const matchedPlatforms: string[] = [];
+
+  for (const [platform, items] of Object.entries(groups)) {
+    if (!Array.isArray(items)) continue;
+
+    if (
+      requestedPlatforms.length === 0 ||
+      platform === 'common' ||
+      platform === 'all' ||
+      includeEveryPlatform ||
+      requestedPlatforms.includes(platform)
+    ) {
+      selected.push(...cloneConfigItems(items));
+      matchedPlatforms.push(platform);
+    }
+  }
+
+  return { items: selected, matchedPlatforms };
+}
+
+function cloneConfigItems<T>(items: T[]): T[] {
+  return items.map((item) => JSON.parse(JSON.stringify(item)) as T);
+}
+
+function normalizeRepoConfig(
+  repo: RepoConfig,
+  vars?: Record<string, string>,
+  configPath?: string
+): ParsedDependency {
+  const url = interpolateCodepacVars(repo.url, vars);
+  const commit = interpolateCodepacVars(repo.commit, vars);
+  const branch = interpolateCodepacVars(repo.branch, vars);
+  const dir = interpolateCodepacVars(repo.dir, vars);
+  const source = normalizeRepoSource(repo, { url, commit, branch, dir }, vars, configPath);
+  const name = repo.name
+    ? interpolateCodepacVars(repo.name, vars)
+    : source.dir || dir;
+
+  return {
+    libName: name,
+    name,
+    dir,
+    commit,
+    branch,
+    url,
+    source: {
+      ...source,
+      name: source.name ? interpolateCodepacVars(source.name, vars) : name,
+    },
+    sparse: interpolateSparse(repo.sparse, vars, configPath),
+  };
+}
+
+function normalizeRepoSource(
+  repo: RepoConfig,
+  resolved: Pick<ParsedDependency, 'url' | 'commit' | 'branch' | 'dir'>,
+  vars?: Record<string, string>,
+  configPath?: string
+): RepoConfigSource {
+  if (!repo.source) {
+    return {
+      url: resolved.url,
+      commit: resolved.commit,
+      branch: resolved.branch,
+      dir: resolved.dir,
+      name: repo.name ? interpolateCodepacVars(repo.name, vars) : resolved.dir,
+      sparse: interpolateSparse(repo.sparse, vars, configPath),
+    };
+  }
+
+  return {
+    ...repo.source,
+    url: repo.source.url ? interpolateCodepacVars(repo.source.url, vars) : repo.source.url,
+    commit: repo.source.commit ? interpolateCodepacVars(repo.source.commit, vars) : repo.source.commit,
+    branch: repo.source.branch ? interpolateCodepacVars(repo.source.branch, vars) : repo.source.branch,
+    dir: interpolateCodepacVars(repo.source.dir, vars),
+    name: repo.source.name ? interpolateCodepacVars(repo.source.name, vars) : repo.source.name,
+    sparse: interpolateSparse(repo.source.sparse, vars, configPath),
+  };
+}
+
+function interpolateSparse(
+  sparse: object | string | undefined,
+  vars?: Record<string, string>,
+  configPath?: string
+): object | undefined {
+  if (typeof sparse === 'string') {
+    const resolved = interpolateCodepacVars(sparse, vars);
+    try {
+      const parsed = JSON.parse(resolved);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('sparse 必须解析为对象');
+      }
+      return parsed as object;
+    } catch (err) {
+      const source = configPath ? ` (${configPath})` : '';
+      throw new Error(
+        `配置文件格式错误: sparse 字符串必须是可解析的 JSON 对象${source}: ${(err as Error).message}`
+      );
+    }
+  }
+  return sparse;
+}
+
+function interpolateCodepacVars(text: string, vars?: Record<string, string>): string {
+  if (!vars) return text;
+
+  return text.replace(/\$\{([^}]+)\}/g, (_match, key: string) => vars[key] ?? `\${${key}}`);
+}
+
+function assertUniqueDependencies(dependencies: ParsedDependency[], configPath?: string): void {
+  const names = new Set<string>();
+  const dirs = new Set<string>();
+  const duplicateNames = new Set<string>();
+  const duplicateDirs = new Set<string>();
+
+  for (const dependency of dependencies) {
+    if (names.has(dependency.name)) {
+      duplicateNames.add(dependency.name);
+    } else {
+      names.add(dependency.name);
+    }
+
+    if (dirs.has(dependency.dir)) {
+      duplicateDirs.add(dependency.dir);
+    } else {
+      dirs.add(dependency.dir);
+    }
+  }
+
+  if (duplicateNames.size > 0 || duplicateDirs.size > 0) {
+    const source = configPath ? ` (${configPath})` : '';
+    const parts: string[] = [];
+    if (duplicateDirs.size > 0) parts.push(`重复 dir: ${Array.from(duplicateDirs).join(', ')}`);
+    if (duplicateNames.size > 0) parts.push(`重复 name: ${Array.from(duplicateNames).join(', ')}`);
+    throw new Error(`配置文件格式错误: ${parts.join('；')}${source}`);
+  }
+}
+
+function formatPlatformsForLog(platforms?: string[]): string {
+  return platforms && platforms.length > 0 ? platforms.join(',') : 'common';
+}
+
+function formatConfigPathForLog(configPath?: string): string {
+  return configPath ?? 'unknown';
 }
 
 /**
@@ -321,7 +573,8 @@ function tokenizeActionCommand(command: string): string[] {
  */
 export async function extractNestedDependencies(
   nestedConfigPath: string,
-  libraries: string[]
+  libraries: string[],
+  options: CodepacExtractOptions = {}
 ): Promise<{
   dependencies: ParsedDependency[];
   vars?: Record<string, string>;
@@ -330,18 +583,19 @@ export async function extractNestedDependencies(
   const config = await parseCodepacDep(nestedConfigPath);
 
   // 提取库：如果指定了 libraries 则只提取指定的库，否则提取所有库（旧格式兼容）
-  const dependencies = config.repos.common
-    .filter(repo => libraries.length === 0 || libraries.includes(repo.dir))
-    .map(repo => ({
-      libName: repo.dir,
-      commit: repo.commit,
-      branch: repo.branch,
-      url: repo.url,
-      sparse: repo.sparse,
-    }));
+  const allDependencies = extractDependencies(config, {
+    ...options,
+    configPath: options.configPath ?? nestedConfigPath,
+  });
+  const dependencies = allDependencies.filter((repo) => {
+    return libraries.length === 0 || libraries.includes(repo.dir) || libraries.includes(repo.name);
+  });
 
   // 提取嵌套的 actions（用于递归处理）
-  const nestedActions = extractActions(config);
+  const nestedActions = extractActions(config, {
+    ...options,
+    configPath: options.configPath ?? nestedConfigPath,
+  });
 
   return {
     dependencies,
@@ -357,7 +611,8 @@ export async function extractNestedDependencies(
  * @throws 找不到配置文件或解析失败时抛出异常
  */
 export async function parseProjectDependencies(
-  projectPath: string
+  projectPath: string,
+  options: CodepacExtractOptions = {}
 ): Promise<{ dependencies: ParsedDependency[]; configPath: string; vars?: Record<string, string> }> {
   const configPath = await findCodepacConfig(projectPath);
 
@@ -366,7 +621,10 @@ export async function parseProjectDependencies(
   }
 
   const config = await parseCodepacDep(configPath);
-  const dependencies = extractDependencies(config);
+  const dependencies = extractDependencies(config, {
+    ...options,
+    configPath: options.configPath ?? configPath,
+  });
 
   return { dependencies, configPath, vars: config.vars };
 }

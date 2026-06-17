@@ -8,7 +8,7 @@ import { ensureInitialized } from '../core/guard.js';
 import { getRegistry } from '../core/registry.js';
 import { getStorePath } from '../core/config.js';
 import { findCodepacConfig, parseCodepacDep, extractDependencies, extractActions, parseActionCommand, extractNestedDependencies, resolveProjectRootPath } from '../core/parser.js';
-import { shrinkHome } from '../core/platform.js';
+import { getBaseKeyForCodepac, shrinkHome } from '../core/platform.js';
 import { isSymlink } from '../core/linker.js';
 import { withGlobalLock } from '../utils/global-lock.js';
 import { findSubmoduleConfigs } from '../utils/git.js';
@@ -160,23 +160,32 @@ async function collectProjectTargets(
   const projectHash = registry.hashPath(projectRoot);
   const project = registry.getProject(projectHash);
   if (project) {
-    return project.dependencies
+    const registryTargets = project.dependencies
       .filter((dep) => dep.libName === libName)
       .map((dep) => ({ libName: dep.libName, commit: dep.commit }));
+    if (registryTargets.length > 0) {
+      return registryTargets;
+    }
+    return collectTargetsFromConfigs(projectRoot, libName, project.platforms ?? []);
   }
 
   return collectTargetsFromConfigs(projectRoot, libName);
 }
 
-async function collectTargetsFromConfigs(projectRoot: string, libName: string): Promise<ResetTarget[]> {
+async function collectTargetsFromConfigs(
+  projectRoot: string,
+  libName: string,
+  platforms: string[] = []
+): Promise<ResetTarget[]> {
   const configPath = await findCodepacConfig(projectRoot);
   if (!configPath) return [];
+  const codepacPlatforms = [...new Set(platforms.map((platform) => getBaseKeyForCodepac(platform)))];
 
   const targets: ResetTarget[] = [];
   const visited = new Set<string>();
   const queue: string[] = [configPath];
 
-  const submodules = await findSubmoduleConfigs(projectRoot);
+  const submodules = await findSubmoduleConfigs(projectRoot, '', 0, codepacPlatforms);
   for (const submodule of submodules) {
     queue.push(submodule.configPath);
   }
@@ -193,13 +202,15 @@ async function collectTargetsFromConfigs(projectRoot: string, libName: string): 
       continue;
     }
 
-    for (const dep of extractDependencies(parsed)) {
+    const extractOptions = { platforms: codepacPlatforms, configPath: currentConfig };
+
+    for (const dep of extractDependencies(parsed, extractOptions)) {
       if (dep.libName === libName) {
         targets.push({ libName: dep.libName, commit: dep.commit });
       }
     }
 
-    for (const action of extractActions(parsed)) {
+    for (const action of extractActions(parsed, extractOptions)) {
       let parsedAction;
       try {
         parsedAction = parseActionCommand(action.command);
@@ -208,7 +219,10 @@ async function collectTargetsFromConfigs(projectRoot: string, libName: string): 
       }
       const nestedConfigPath = path.resolve(path.dirname(currentConfig), parsedAction.configDir, 'codepac-dep.json');
       try {
-        const nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries);
+        const nested = await extractNestedDependencies(nestedConfigPath, parsedAction.libraries, {
+          platforms: codepacPlatforms,
+          configPath: nestedConfigPath,
+        });
         for (const dep of nested.dependencies) {
           if (dep.libName === libName) {
             targets.push({ libName: dep.libName, commit: dep.commit });

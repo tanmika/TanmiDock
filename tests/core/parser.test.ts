@@ -45,16 +45,36 @@ describe('parser', () => {
       expect(deps).toHaveLength(2);
       expect(deps[0]).toEqual({
         libName: 'lib1',
+        name: 'lib1',
+        dir: 'lib1',
         commit: 'abc123',
         branch: 'main',
         url: 'https://github.com/example/lib1.git',
+        source: {
+          url: 'https://github.com/example/lib1.git',
+          commit: 'abc123',
+          branch: 'main',
+          dir: 'lib1',
+          name: 'lib1',
+          sparse: undefined,
+        },
         sparse: undefined,
       });
       expect(deps[1]).toEqual({
         libName: 'lib2',
+        name: 'lib2',
+        dir: 'lib2',
         commit: 'def456',
         branch: 'develop',
         url: 'https://github.com/example/lib2.git',
+        source: {
+          url: 'https://github.com/example/lib2.git',
+          commit: 'def456',
+          branch: 'develop',
+          dir: 'lib2',
+          name: 'lib2',
+          sparse: ['src'],
+        },
         sparse: ['src'],
       });
     });
@@ -69,6 +89,220 @@ describe('parser', () => {
 
       const deps = extractDependencies(config);
       expect(deps).toHaveLength(0);
+    });
+
+    it('should filter repos by common, requested platform and all', () => {
+      const config: CodepacDep = {
+        version: '1.0.0',
+        repos: {
+          common: [
+            { url: 'https://example.com/common.git', commit: 'aaa', branch: 'main', dir: 'common-lib' },
+          ],
+          mac: [
+            { url: 'https://example.com/mac.git', commit: 'bbb', branch: 'main', dir: 'mac-lib' },
+          ],
+          ios: [
+            { url: 'https://example.com/ios.git', commit: 'ccc', branch: 'main', dir: 'ios-lib' },
+          ],
+          all: [
+            { url: 'https://example.com/all.git', commit: 'ddd', branch: 'main', dir: 'all-lib' },
+          ],
+        },
+      };
+
+      const deps = extractDependencies(config, { platforms: ['mac'] });
+
+      expect(deps.map((dep) => dep.libName)).toEqual(['common-lib', 'mac-lib', 'all-lib']);
+    });
+
+    it('should read every repo group when no platform is provided', () => {
+      const config: CodepacDep = {
+        version: '1.0.0',
+        repos: {
+          common: [
+            { url: 'https://example.com/common.git', commit: 'aaa', branch: 'main', dir: 'common-lib' },
+          ],
+          mac: [
+            { url: 'https://example.com/mac.git', commit: 'bbb', branch: 'main', dir: 'mac-lib' },
+          ],
+          all: [
+            { url: 'https://example.com/all.git', commit: 'ccc', branch: 'main', dir: 'all-lib' },
+          ],
+        },
+      };
+
+      const deps = extractDependencies(config);
+
+      expect(deps.map((dep) => dep.libName)).toEqual(['common-lib', 'mac-lib', 'all-lib']);
+    });
+
+    it('should read every action group when no platform is provided', () => {
+      const config: CodepacDep = {
+        version: '1.0.0',
+        repos: { common: [] },
+        actions: {
+          common: [
+            { command: 'codepac install common --configdir deps-common', dir: '.' },
+          ],
+          mac: [
+            { command: 'codepac install mac --configdir deps-mac', dir: '.' },
+          ],
+          all: [
+            { command: 'codepac install all --configdir deps-all', dir: '.' },
+          ],
+        },
+      };
+
+      const actions = extractActions(config);
+
+      expect(actions.map((action) => action.command)).toEqual([
+        'codepac install common --configdir deps-common',
+        'codepac install mac --configdir deps-mac',
+        'codepac install all --configdir deps-all',
+      ]);
+    });
+
+    it('should include every platform group when platform all is requested', () => {
+      const config: CodepacDep = {
+        version: '1.0.0',
+        repos: {
+          common: [
+            { url: 'https://example.com/common.git', commit: 'aaa', branch: 'main', dir: 'common-lib' },
+          ],
+          mac: [
+            { url: 'https://example.com/mac.git', commit: 'bbb', branch: 'main', dir: 'mac-lib' },
+          ],
+          ios: [
+            { url: 'https://example.com/ios.git', commit: 'ccc', branch: 'main', dir: 'ios-lib' },
+          ],
+        },
+      };
+
+      const deps = extractDependencies(config, { platforms: ['all'] });
+
+      expect(deps.map((dep) => dep.libName)).toEqual(['common-lib', 'mac-lib', 'ios-lib']);
+    });
+
+    it('should replace vars in repo fields and sparse string', () => {
+      const config: CodepacDep = {
+        version: '1.0.0',
+        vars: {
+          HOST: 'https://example.com',
+          COMMIT: 'abc123',
+          BRANCH: 'main',
+          DIR: 'lib-var',
+          NAME: 'lib-name',
+          SPARSE: '{"common":["include"],"mac":["macOS"]}',
+        },
+        repos: {
+          common: [
+            {
+              url: '${HOST}/lib.git',
+              commit: '${COMMIT}',
+              branch: '${BRANCH}',
+              dir: '${DIR}',
+              name: '${NAME}',
+              sparse: '${SPARSE}',
+            },
+          ],
+        },
+      };
+
+      const deps = extractDependencies(config);
+
+      expect(deps[0]).toMatchObject({
+        libName: 'lib-name',
+        name: 'lib-name',
+        dir: 'lib-var',
+        commit: 'abc123',
+        branch: 'main',
+        url: 'https://example.com/lib.git',
+        sparse: { common: ['include'], mac: ['macOS'] },
+      });
+      expect(deps[0].source.dir).toBe('lib-var');
+    });
+
+    it('should report invalid sparse string after vars replacement', () => {
+      const config: CodepacDep = {
+        version: '1.0.0',
+        vars: {
+          BAD_SPARSE: 'not-json',
+        },
+        repos: {
+          common: [
+            {
+              url: 'https://example.com/lib.git',
+              commit: 'abc123',
+              branch: 'main',
+              dir: 'lib',
+              sparse: '${BAD_SPARSE}',
+            },
+          ],
+        },
+      };
+
+      expect(() => extractDependencies(config, { configPath: '/project/codepac-dep.json' }))
+        .toThrow('sparse 字符串必须是可解析的 JSON 对象');
+    });
+
+    it('should use repo.name before source.dir and dir for dependency identity', () => {
+      const config: CodepacDep = {
+        version: '1.0.0',
+        repos: {
+          common: [
+            {
+              url: 'https://example.com/with-name.git',
+              commit: 'aaa',
+              branch: 'main',
+              dir: 'actual-dir',
+              name: 'configured-name',
+              source: {
+                dir: 'source-dir',
+              },
+            },
+            {
+              url: 'https://example.com/with-source.git',
+              commit: 'bbb',
+              branch: 'main',
+              dir: 'actual-dir-2',
+              source: {
+                dir: 'source-name',
+              },
+            },
+            {
+              url: 'https://example.com/with-dir.git',
+              commit: 'ccc',
+              branch: 'main',
+              dir: 'dir-name',
+            },
+          ],
+        },
+      };
+
+      const deps = extractDependencies(config);
+
+      expect(deps.map((dep) => dep.libName)).toEqual([
+        'configured-name',
+        'source-name',
+        'dir-name',
+      ]);
+      expect(deps[0].dir).toBe('actual-dir');
+      expect(deps[1].source.dir).toBe('source-name');
+    });
+
+    it('should throw when selected repos contain duplicate name or dir', () => {
+      const config: CodepacDep = {
+        version: '1.0.0',
+        repos: {
+          common: [
+            { url: 'https://example.com/a.git', commit: 'aaa', branch: 'main', dir: 'same-dir', name: 'same-name' },
+            { url: 'https://example.com/b.git', commit: 'bbb', branch: 'main', dir: 'same-dir', name: 'same-name' },
+          ],
+        },
+      };
+
+      expect(() => extractDependencies(config, { configPath: '/project/codepac-dep.json' }))
+        .toThrow('重复 dir: same-dir；重复 name: same-name');
     });
   });
 
@@ -222,6 +456,30 @@ describe('parser with fs mock', () => {
       );
     });
 
+    it('should parse platform repo and action groups', async () => {
+      const validConfig = {
+        version: '1.0.0',
+        repos: {
+          common: [],
+          mac: [
+            { url: 'https://example.com/mac.git', commit: 'abc', branch: 'main', dir: 'mac-lib' },
+          ],
+        },
+        actions: {
+          mac: [
+            { command: 'codepac install lib --configdir deps', dir: '.' },
+          ],
+        },
+      };
+      fsMock.readFile.mockResolvedValue(JSON.stringify(validConfig));
+
+      const { parseCodepacDep } = await import('../../src/core/parser.js');
+      const result = await parseCodepacDep('/path/to/config.json');
+
+      expect(result.repos.mac).toHaveLength(1);
+      expect(result.actions?.mac).toHaveLength(1);
+    });
+
     it('should throw when repo item missing required fields', async () => {
       fsMock.readFile.mockResolvedValue(
         JSON.stringify({
@@ -310,6 +568,54 @@ describe('parser with fs mock', () => {
       expect(result.nestedActions).toHaveLength(1);
       expect(result.nestedActions[0].command).toContain('nestedLib');
     });
+
+    it('should filter nested dependencies by platform and match libraries by name', async () => {
+      const nestedConfig = {
+        version: '1.0.0',
+        repos: {
+          common: [],
+          mac: [
+            {
+              url: 'https://example.com/mac.git',
+              commit: 'mac123',
+              branch: 'main',
+              dir: 'actual-mac-dir',
+              name: 'named-mac-lib',
+            },
+          ],
+          ios: [
+            {
+              url: 'https://example.com/ios.git',
+              commit: 'ios123',
+              branch: 'main',
+              dir: 'actual-ios-dir',
+              name: 'named-ios-lib',
+            },
+          ],
+        },
+        actions: {
+          mac: [
+            { command: 'codepac install child --configdir deps' },
+          ],
+          ios: [
+            { command: 'codepac install ignored --configdir deps-ios' },
+          ],
+        },
+      };
+      fsMock.readFile.mockResolvedValue(JSON.stringify(nestedConfig));
+
+      const { extractNestedDependencies } = await import('../../src/core/parser.js');
+      const result = await extractNestedDependencies('/path/to/config.json', ['named-mac-lib'], {
+        platforms: ['mac'],
+      });
+
+      expect(result.dependencies).toHaveLength(1);
+      expect(result.dependencies[0].libName).toBe('named-mac-lib');
+      expect(result.dependencies[0].dir).toBe('actual-mac-dir');
+      expect(result.nestedActions.map((action) => action.command)).toEqual([
+        'codepac install child --configdir deps',
+      ]);
+    });
   });
 });
 
@@ -363,6 +669,64 @@ describe('extractActions', () => {
 
     // Then: 返回空数组
     expect(actions).toHaveLength(0);
+  });
+
+  it('should filter actions by common, requested platform and all', () => {
+    const config: CodepacDep = {
+      version: '1.0.0',
+      repos: { common: [] },
+      actions: {
+        common: [
+          { command: 'codepac install common --configdir deps-common', dir: '.' },
+        ],
+        mac: [
+          { command: 'codepac install mac --configdir deps-mac', dir: '.' },
+        ],
+        ios: [
+          { command: 'codepac install ios --configdir deps-ios', dir: '.' },
+        ],
+        all: [
+          { command: 'codepac install all --configdir deps-all', dir: '.' },
+        ],
+      },
+    };
+
+    const actions = extractActions(config, { platforms: ['mac'] });
+
+    expect(actions.map((action) => action.command)).toEqual([
+      'codepac install common --configdir deps-common',
+      'codepac install mac --configdir deps-mac',
+      'codepac install all --configdir deps-all',
+    ]);
+  });
+
+  it('should replace vars in action command, dir and name', () => {
+    const config: CodepacDep = {
+      version: '1.0.0',
+      vars: {
+        LIB: 'nested-lib',
+        DIR: 'deps',
+        ACTION: 'sync-nested',
+      },
+      repos: { common: [] },
+      actions: {
+        common: [
+          {
+            command: 'codepac install ${LIB} --configdir ${DIR}',
+            dir: '${DIR}',
+            name: '${ACTION}',
+          },
+        ],
+      },
+    };
+
+    const actions = extractActions(config);
+
+    expect(actions[0]).toEqual({
+      command: 'codepac install nested-lib --configdir deps',
+      dir: 'deps',
+      name: 'sync-nested',
+    });
   });
 });
 

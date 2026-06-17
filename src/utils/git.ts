@@ -225,7 +225,8 @@ const MAX_SUBMODULE_DEPTH = 5;
 export async function findSubmoduleConfigs(
   projectPath: string,
   relativePrefix: string = '',
-  depth: number = 0
+  depth: number = 0,
+  codepacPlatforms: string[] = []
 ): Promise<SubmoduleConfig[]> {
   if (depth >= MAX_SUBMODULE_DEPTH) {
     logger.debug(`findSubmoduleConfigs: 递归深度超限 (${depth}), 路径: ${projectPath}`);
@@ -268,7 +269,7 @@ export async function findSubmoduleConfigs(
     const configPath = await findCodepacConfig(absolutePath);
     if (!configPath) {
       // 无配置文件，但仍递归检查嵌套 submodule
-      const nested = await findSubmoduleConfigs(absolutePath, relativePath, depth + 1);
+      const nested = await findSubmoduleConfigs(absolutePath, relativePath, depth + 1, codepacPlatforms);
       results.push(...nested);
       continue;
     }
@@ -277,7 +278,7 @@ export async function findSubmoduleConfigs(
     let depCount = 0;
     try {
       const config = await parseCodepacDep(configPath);
-      const deps = extractDependencies(config);
+      const deps = extractDependencies(config, { platforms: codepacPlatforms, configPath });
       depCount = deps.length;
     } catch {
       logger.debug(`findSubmoduleConfigs: 解析配置失败: ${configPath}`);
@@ -302,7 +303,7 @@ export async function findSubmoduleConfigs(
     });
 
     // 递归检查嵌套 submodule
-    const nested = await findSubmoduleConfigs(absolutePath, relativePath, depth + 1);
+    const nested = await findSubmoduleConfigs(absolutePath, relativePath, depth + 1, codepacPlatforms);
     results.push(...nested);
   }
 
