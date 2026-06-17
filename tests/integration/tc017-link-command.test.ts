@@ -913,6 +913,15 @@ describe('TC-017: link 命令测试', () => {
 
       await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
 
+      const mainCachePath = path.join(thirdPartyDir, '.cache', 'codepac-dep.json');
+      const nestedCachePath = path.join(thirdPartyDir, 'libImageCodec', '.cache', 'codepac-dep.json');
+
+      await expect(fs.access(mainCachePath)).resolves.toBeUndefined();
+      await expect(fs.access(nestedCachePath)).resolves.toBeUndefined();
+
+      const nestedCacheConfig = JSON.parse(await fs.readFile(nestedCachePath, 'utf-8'));
+      expect(nestedCacheConfig.repos.common[0].dir).toBe(nestedLib.libName);
+
       const nestedLocalPath = path.join(thirdPartyDir, nestedLib.libName);
       await fs.rm(nestedLocalPath, { recursive: true, force: true });
       await fs.rm(path.join(env.storeDir, nestedLib.libName, nestedLib.commit, 'macOS'), { recursive: true, force: true });

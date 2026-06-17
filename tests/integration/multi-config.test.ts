@@ -129,6 +129,9 @@ describe('TC-025: 多配置文件支持集成测试', () => {
       const localPath = path.join(env.projectDir, '3rdparty', libName, 'macOS');
       const storeTarget = path.join(env.storeDir, libName, commit, 'macOS');
       await verifySymlink(localPath, storeTarget);
+
+      const mainCachePath = path.join(env.projectDir, '3rdparty', '.cache', 'codepac-dep.json');
+      await expect(fs.access(mainCachePath)).resolves.toBeUndefined();
     });
   });
 
@@ -198,6 +201,102 @@ describe('TC-025: 多配置文件支持集成测试', () => {
 
       await verifySymlink(mainLocalPath, path.join(env.storeDir, mainLib.libName, mainLib.commit, 'macOS'));
       await verifySymlink(innerLocalPath, path.join(env.storeDir, innerLib.libName, innerLib.commit, 'macOS'));
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      const mainCachePath = path.join(thirdPartyDir, '.cache', 'codepac-dep.json');
+      const optionalCachePath = path.join(thirdPartyDir, '.cache', 'codepac-dep-inner.json');
+
+      await expect(fs.access(mainCachePath)).resolves.toBeUndefined();
+      await expect(fs.access(optionalCachePath)).resolves.toBeUndefined();
+
+      const optionalConfig = JSON.parse(await fs.readFile(optionalCachePath, 'utf-8'));
+      expect(optionalConfig.repos.common[0].dir).toBe(innerLib.libName);
+    });
+
+    it('should sync cache for nested actions from selected optional configs', async () => {
+      env = await createTestEnv();
+
+      const mainLib = { libName: 'libMainWithOptionalAction', commit: 'mainoptaction12' };
+      const nestedLib = { libName: 'libOptionalActionNested', commit: 'nestedoptaction1' };
+
+      await createMockStoreDataV2(env, {
+        ...mainLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+      await createMockStoreDataV2(env, {
+        ...nestedLib,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await createMultiConfigProject(
+        env,
+        [mainLib],
+        [{ name: 'inner', deps: [] }]
+      );
+
+      const optionalConfigPath = path.join(thirdPartyDir, 'codepac-dep-inner.json');
+      const optionalConfig = {
+        version: '1.0.0',
+        vars: {},
+        repos: { common: [] },
+        actions: {
+          common: [
+            {
+              command: 'codepac install libOptionalActionNested --configdir optionalNested --targetdir .',
+              dir: '',
+            },
+          ],
+        },
+      };
+      await fs.writeFile(optionalConfigPath, JSON.stringify(optionalConfig, null, 2), 'utf-8');
+
+      const nestedConfig = {
+        version: '1.0.0',
+        vars: {},
+        repos: {
+          common: [
+            {
+              url: `https://github.com/test/${nestedLib.libName}.git`,
+              commit: nestedLib.commit,
+              branch: 'main',
+              dir: nestedLib.libName,
+            },
+          ],
+        },
+      };
+      const nestedConfigDir = path.join(thirdPartyDir, 'optionalNested');
+      await fs.mkdir(nestedConfigDir, { recursive: true });
+      await fs.writeFile(
+        path.join(nestedConfigDir, 'codepac-dep.json'),
+        JSON.stringify(nestedConfig, null, 2),
+        'utf-8'
+      );
+
+      await runCommand(
+        'link',
+        { platform: ['macOS'], yes: true, config: ['inner'] } as Parameters<typeof runCommand>[1],
+        env,
+        env.projectDir
+      );
+
+      await verifySymlink(
+        path.join(thirdPartyDir, nestedLib.libName, 'macOS'),
+        path.join(env.storeDir, nestedLib.libName, nestedLib.commit, 'macOS')
+      );
+
+      const mainCachePath = path.join(thirdPartyDir, '.cache', 'codepac-dep.json');
+      const optionalCachePath = path.join(thirdPartyDir, '.cache', 'codepac-dep-inner.json');
+      const nestedCachePath = path.join(nestedConfigDir, '.cache', 'codepac-dep.json');
+
+      await expect(fs.access(mainCachePath)).resolves.toBeUndefined();
+      await expect(fs.access(optionalCachePath)).resolves.toBeUndefined();
+      await expect(fs.access(nestedCachePath)).resolves.toBeUndefined();
+
+      const nestedCacheConfig = JSON.parse(await fs.readFile(nestedCachePath, 'utf-8'));
+      expect(nestedCacheConfig.repos.common[0].dir).toBe(nestedLib.libName);
     });
   });
 

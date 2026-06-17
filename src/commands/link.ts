@@ -631,6 +631,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
   let dependencies: ParsedDependency[];
   let configVars: Record<string, string> | undefined;
   const selectedActions: ActionConfig[] = [];
+  const cacheConfigPaths = [configPath];
 
   try {
     const result = await parseProjectDependencies(path.dirname(path.dirname(configPath)));
@@ -648,6 +649,7 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
           dependencies = mergeDepLists(dependencies, optionalDeps);
           configVars = { ...configVars, ...optionalResult.vars };
           selectedActions.push(...extractActions(optionalResult));
+          cacheConfigPaths.push(optionalConfig.path);
           info(`  + ${optionalConfig.name}: ${optionalDeps.length} 个依赖`);
         } catch (optErr) {
           warn(`无法解析可选配置 ${optionalConfig.name}: ${(optErr as Error).message}`);
@@ -1587,7 +1589,9 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
     }
 
     // 10. 同步 cache 文件
-    await syncCacheFile(configPath);
+    for (const cacheConfigPath of cacheConfigPaths) {
+      await syncCacheFile(cacheConfigPath);
+    }
 
     // 11. 构建返回结果
     const linkedDeps: LinkScopeResult['linkedDeps'] = [];
@@ -2753,7 +2757,8 @@ function getStatusKey(status: DependencyStatus): StatsKey {
 async function syncCacheFile(configPath: string): Promise<void> {
   const configDir = path.dirname(configPath);
   const cacheDir = path.join(configDir, '.cache');
-  const cachePath = path.join(cacheDir, 'codepac-dep.json');
+  const configFileName = path.basename(configPath);
+  const cachePath = path.join(cacheDir, configFileName);
 
   try {
     // 确保 .cache 目录存在
@@ -2763,11 +2768,11 @@ async function syncCacheFile(configPath: string): Promise<void> {
     await fs.copyFile(configPath, cachePath);
 
     if (process.env.VERBOSE) {
-      info(`已同步 cache: ${path.basename(configPath)}`);
+      info(`已同步 cache: ${configFileName} -> ${path.relative(configDir, cachePath)}`);
     }
   } catch (err) {
     // cache 同步失败不应阻塞主流程，仅警告
-    warn(`cache 同步失败: ${(err as Error).message}`);
+    warn(`cache 同步失败: ${configFileName} -> ${path.relative(configDir, cachePath)}: ${(err as Error).message}`);
   }
 }
 
