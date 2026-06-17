@@ -587,6 +587,7 @@ async function tryDownloadWithGit(options: DownloadOptions, tempDir: string, lib
   }
 
   await verifyGitDownloadResult({ libDir, platforms, sparse, vars, expectedLfsPaths });
+  await finalizeMinisizeGitDownload(libDir, tempDir, onProgress, onHeartbeat);
 
   onProgress?.('Git 轻量下载完成');
   return true;
@@ -793,6 +794,162 @@ async function verifyGitDownloadResult(options: {
   if (unresolvedPointer) {
     throw new Error(`Git LFS 文件未完成下载: ${unresolvedPointer}`);
   }
+}
+
+async function finalizeMinisizeGitDownload(
+  libDir: string,
+  cwd: string,
+  onProgress?: (msg: string) => void,
+  onHeartbeat?: (msg: string) => void
+): Promise<void> {
+  const gitDir = await resolveGitDir(libDir);
+  if (!gitDir) {
+    onProgress?.('Git minisize 收尾跳过: 未发现 .git 目录');
+    return;
+  }
+
+  const gitLog = await spawnGit(['-C', libDir, 'log', '-1'], cwd, undefined, onHeartbeat, undefined, false);
+  const head = await spawnGit(['-C', libDir, 'rev-parse', 'HEAD'], cwd, undefined, onHeartbeat, undefined, false);
+  const commit = head.stdout.trim();
+
+  onProgress?.(`Git minisize 收尾: gitdir=${gitDir}`);
+  const cleanupSummary = await cleanupRepoAndSubmoduleGitPayloads(libDir);
+  onProgress?.(
+    `Git minisize 收尾: 清理 .git/lfs 和 .git/objects，仓库数=${cleanupSummary.repoCount}, 目录数=${cleanupSummary.cleanedDirectoryCount}`
+  );
+  if (cleanupSummary.submodulePaths.length > 0) {
+    onProgress?.(`Git minisize 收尾: 已处理 submodule=${cleanupSummary.submodulePaths.join(',')}`);
+  }
+
+  const repoName = path.basename(libDir);
+  const commitMessagePath = path.join(gitDir, 'commit_message');
+  const commitHashPath = path.join(gitDir, 'commit_hash');
+  await fs.writeFile(
+    commitMessagePath,
+    `=============== ${repoName} ===============\n${gitLog.stdout}`,
+    'utf-8'
+  );
+  await fs.writeFile(commitHashPath, commit, 'utf-8');
+  onProgress?.(`Git minisize 收尾完成: commit_hash=${commit.slice(0, 12)}, marker=${commitHashPath}`);
+}
+
+async function cleanupRepoAndSubmoduleGitPayloads(repoDir: string): Promise<{
+  repoCount: number;
+  cleanedDirectoryCount: number;
+  submodulePaths: string[];
+}> {
+  let repoCount = 0;
+  let cleanedDirectoryCount = 0;
+
+  const rootCleaned = await cleanupGitPayload(repoDir);
+  repoCount += rootCleaned === null ? 0 : 1;
+  cleanedDirectoryCount += rootCleaned ?? 0;
+
+  const submodulePaths = await collectGitSubmodulePaths(repoDir);
+  for (const submodulePath of submodulePaths) {
+    const submoduleCleaned = await cleanupGitPayload(path.join(repoDir, submodulePath));
+    repoCount += submoduleCleaned === null ? 0 : 1;
+    cleanedDirectoryCount += submoduleCleaned ?? 0;
+  }
+
+  return { repoCount, cleanedDirectoryCount, submodulePaths };
+}
+
+async function cleanupGitPayload(repoDir: string): Promise<number | null> {
+  const gitDir = await resolveGitDir(repoDir);
+  if (!gitDir) return null;
+
+  return (
+    await cleanupGitPayloadDirectory(path.join(gitDir, 'lfs'))
+    + await cleanupGitPayloadDirectory(path.join(gitDir, 'objects'))
+  );
+}
+
+async function cleanupGitPayloadDirectory(payloadDir: string): Promise<number> {
+  let entries: Array<string | { name: string; isDirectory?: () => boolean }> = [];
+  try {
+    const dirEntries = await fs.readdir(payloadDir, { withFileTypes: true });
+    entries = Array.isArray(dirEntries)
+      ? dirEntries as Array<string | { name: string; isDirectory?: () => boolean }>
+      : [];
+  } catch {
+    return 0;
+  }
+
+  let cleanedCount = 0;
+  for (const entry of entries) {
+    const name = typeof entry === 'string' ? entry : entry.name;
+    const isDirectory = typeof entry === 'string' ? true : entry.isDirectory?.() ?? false;
+    if (!isDirectory) continue;
+
+    const entryPath = path.join(payloadDir, name);
+    await fs.rm(entryPath, { recursive: true, force: true });
+    await fs.mkdir(entryPath, { recursive: true });
+    cleanedCount++;
+  }
+
+  return cleanedCount;
+}
+
+async function resolveGitDir(repoDir: string): Promise<string | null> {
+  const gitPath = path.join(repoDir, '.git');
+  try {
+    const stat = await fs.stat(gitPath);
+    if (stat.isDirectory()) {
+      return gitPath;
+    }
+    if (!stat.isFile()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  try {
+    const content = await fs.readFile(gitPath, 'utf-8');
+    if (typeof content !== 'string') {
+      return null;
+    }
+    const match = content.match(/^gitdir:\s*(.+)$/m);
+    if (!match) {
+      return null;
+    }
+    return path.resolve(repoDir, match[1].trim());
+  } catch {
+    return null;
+  }
+}
+
+async function collectGitSubmodulePaths(repoDir: string): Promise<string[]> {
+  const gitmodulesPath = path.join(repoDir, '.gitmodules');
+  let content: string;
+  try {
+    content = await fs.readFile(gitmodulesPath, 'utf-8');
+  } catch {
+    return [];
+  }
+  if (typeof content !== 'string') {
+    return [];
+  }
+
+  const paths: string[] = [];
+  for (const rawLine of content.split(/\r?\n/)) {
+    const match = rawLine.trim().match(/^path\s*=\s*(.+)$/);
+    if (!match) continue;
+    const submodulePath = normalizeGitPath(match[1]);
+    if (submodulePath) {
+      paths.push(submodulePath);
+    }
+  }
+
+  const nestedPaths = await Promise.all(
+    paths.map(async (submodulePath) => {
+      const childPaths = await collectGitSubmodulePaths(path.join(repoDir, submodulePath));
+      return childPaths.map((childPath) => `${submodulePath}/${childPath}`);
+    })
+  );
+
+  return [...new Set([...paths, ...nestedPaths.flat()])];
 }
 
 async function findFirstUnresolvedLfsPointer(libDir: string, relativePaths: string[]): Promise<string | null> {

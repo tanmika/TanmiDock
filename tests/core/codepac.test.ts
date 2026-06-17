@@ -621,12 +621,24 @@ describe('codepac', () => {
       mockMkdir.mockResolvedValue(undefined);
       mockWriteFile.mockResolvedValue(undefined);
       mockRm.mockResolvedValue(undefined);
+      mockStat.mockImplementation(async (filePath: string) => ({
+        isFile: () => filePath.endsWith('/.git') || filePath.endsWith('/macOS/libtsa.a') || filePath.endsWith('/include/header.h'),
+        isDirectory: () => filePath.endsWith('/.git'),
+        size: 32,
+      }));
+      mockReadFile.mockResolvedValue(null);
       mockReaddir.mockResolvedValue([
         { name: 'macOS', isDirectory: () => true },
         { name: 'include', isDirectory: () => true },
       ]);
 
       mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('log')) {
+          return createMockProcess(0, '', 'commit abcdef\nmessage\n');
+        }
+        if (command === 'git' && args.includes('rev-parse')) {
+          return createMockProcess(0, '', `${fullCommit}\n`);
+        }
         if (command === 'git' && args.includes('config')) {
           return createMockProcess(0, '', 'blob:none\n');
         }
@@ -672,6 +684,417 @@ describe('codepac', () => {
       expect(commands).not.toContain('codepac');
       expect(result.platformDirs).toEqual(['macOS']);
       expect(result.sharedFiles).toEqual(['include']);
+      const writePaths = mockWriteFile.mock.calls.map((call) => call[0]);
+      expect(writePaths.some((item) => typeof item === 'string' && item.endsWith('/libtest/.git/commit_message'))).toBe(true);
+      expect(writePaths.at(-1)).toEqual(expect.stringMatching(/\/libtest\/\.git\/commit_hash$/));
+    });
+
+    it('should cleanup minisize git payloads and write commit_hash last after git lightweight download', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockStat.mockImplementation(async (filePath: string) => ({
+        isFile: () => false,
+        isDirectory: () => filePath.endsWith('/.git'),
+        size: 0,
+      }));
+      mockReadFile.mockImplementation(async (filePath: string) => (
+        filePath.endsWith('/libtest/.gitmodules')
+          ? [
+            '[submodule "SubLib"]',
+            '  path = deps/SubLib',
+            '  url = git@example.com:repo/sub.git',
+          ].join('\n')
+          : ''
+      ));
+      mockReaddir.mockImplementation(async (targetPath: string) => {
+        if (targetPath.endsWith('/libtest')) {
+          return [
+            { name: 'macOS', isDirectory: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/deps/SubLib/.git/objects') || targetPath.endsWith('/deps/SubLib/.git/lfs')) {
+          return [
+            { name: 'pack', isDirectory: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/.git/objects') || targetPath.endsWith('/.git/lfs')) {
+          return [
+            { name: 'pack', isDirectory: () => true },
+            { name: 'tmp', isDirectory: () => true },
+            { name: 'HEAD', isDirectory: () => false },
+          ];
+        }
+        if (targetPath.endsWith('/libtest/macOS')) {
+          return [{ name: 'lib.a', isDirectory: () => false, isFile: () => true }];
+        }
+        return [];
+      });
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', '');
+        }
+        if (command === 'git' && args.includes('log')) {
+          return createMockProcess(0, '', 'commit 123456\nmessage\n');
+        }
+        if (command === 'git' && args.includes('rev-parse')) {
+          return createMockProcess(0, '', `${fullCommit}\n`);
+        }
+        return createMockProcess(0);
+      });
+
+      const onProgress = vi.fn();
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+        onProgress,
+      });
+
+      expect(mockRm).toHaveBeenCalledWith(
+        expect.stringMatching(/\/libtest\/\.git\/objects\/pack$/),
+        { recursive: true, force: true }
+      );
+      expect(mockRm).toHaveBeenCalledWith(
+        expect.stringMatching(/\/libtest\/\.git\/lfs\/tmp$/),
+        { recursive: true, force: true }
+      );
+      expect(mockRm).toHaveBeenCalledWith(
+        expect.stringMatching(/\/libtest\/deps\/SubLib\/\.git\/objects\/pack$/),
+        { recursive: true, force: true }
+      );
+      expect(mockMkdir).toHaveBeenCalledWith(
+        expect.stringMatching(/\/libtest\/\.git\/objects\/pack$/),
+        { recursive: true }
+      );
+
+      const writeCalls = mockWriteFile.mock.calls;
+      const commitMessageCallIndex = writeCalls.findIndex((call) => typeof call[0] === 'string' && call[0].endsWith('/libtest/.git/commit_message'));
+      const commitHashCallIndex = writeCalls.findIndex((call) => typeof call[0] === 'string' && call[0].endsWith('/libtest/.git/commit_hash'));
+      expect(commitMessageCallIndex).toBeGreaterThan(-1);
+      expect(commitHashCallIndex).toBeGreaterThan(commitMessageCallIndex);
+      expect(writeCalls[commitHashCallIndex][1]).toBe(fullCommit);
+      expect(onProgress).toHaveBeenCalledWith(expect.stringContaining('Git minisize 收尾: gitdir='));
+      expect(onProgress).toHaveBeenCalledWith(expect.stringContaining('仓库数=2'));
+      expect(onProgress).toHaveBeenCalledWith(expect.stringContaining('marker='));
+    });
+
+    it('should resolve gitdir file before writing minisize commit markers', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockStat.mockImplementation(async (filePath: string) => ({
+        isFile: () => filePath.endsWith('/.git'),
+        isDirectory: () => false,
+        size: 24,
+      }));
+      mockReadFile.mockImplementation(async (filePath: string) => (
+        filePath.endsWith('/.git')
+          ? 'gitdir: ../.git/modules/libtest\n'
+          : ''
+      ));
+      mockReaddir.mockResolvedValue([
+        { name: 'macOS', isDirectory: () => true },
+      ]);
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', '');
+        }
+        if (command === 'git' && args.includes('log')) {
+          return createMockProcess(0, '', 'commit abcdef\nmessage\n');
+        }
+        if (command === 'git' && args.includes('rev-parse')) {
+          return createMockProcess(0, '', `${fullCommit}\n`);
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      expect(mockWriteFile).toHaveBeenCalledWith(
+        expect.stringMatching(/\/\.git\/modules\/libtest\/commit_hash$/),
+        fullCommit,
+        'utf-8'
+      );
+    });
+
+    it('should cleanup submodule real gitdir when submodule .git is a file', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockStat.mockImplementation(async (filePath: string) => ({
+        isFile: () => filePath.endsWith('/deps/SubLib/.git'),
+        isDirectory: () => filePath.endsWith('/libtest/.git'),
+        size: 24,
+      }));
+      mockReadFile.mockImplementation(async (filePath: string) => {
+        if (filePath.endsWith('/libtest/.gitmodules')) {
+          return [
+            '[submodule "SubLib"]',
+            '  path = deps/SubLib',
+            '  url = git@example.com:repo/sub.git',
+          ].join('\n');
+        }
+        if (filePath.endsWith('/deps/SubLib/.git')) {
+          return 'gitdir: ../../.git/modules/deps/SubLib\n';
+        }
+        return '';
+      });
+      mockReaddir.mockImplementation(async (targetPath: string) => {
+        if (targetPath.endsWith('/libtest')) {
+          return [
+            { name: 'macOS', isDirectory: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/libtest/macOS')) {
+          return [
+            { name: 'lib.a', isDirectory: () => false, isFile: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/.git/modules/deps/SubLib/objects')) {
+          return [
+            { name: 'pack', isDirectory: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/.git/modules/deps/SubLib/lfs')) {
+          return [
+            { name: 'objects', isDirectory: () => true },
+          ];
+        }
+        return [];
+      });
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', '');
+        }
+        if (command === 'git' && args.includes('log')) {
+          return createMockProcess(0, '', 'commit abcdef\nmessage\n');
+        }
+        if (command === 'git' && args.includes('rev-parse')) {
+          return createMockProcess(0, '', `${fullCommit}\n`);
+        }
+        return createMockProcess(0);
+      });
+
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+      });
+
+      expect(mockRm).toHaveBeenCalledWith(
+        expect.stringMatching(/\/libtest\/\.git\/modules\/deps\/SubLib\/objects\/pack$/),
+        { recursive: true, force: true }
+      );
+      expect(mockRm).toHaveBeenCalledWith(
+        expect.stringMatching(/\/libtest\/\.git\/modules\/deps\/SubLib\/lfs\/objects$/),
+        { recursive: true, force: true }
+      );
+    });
+
+    it('should cleanup nested submodule git payloads recursively', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockStat.mockImplementation(async (filePath: string) => ({
+        isFile: () => false,
+        isDirectory: () => filePath.endsWith('/.git'),
+        size: 0,
+      }));
+      mockReadFile.mockImplementation(async (filePath: string) => {
+        if (filePath.endsWith('/libtest/.gitmodules')) {
+          return [
+            '[submodule "SubLib"]',
+            '  path = deps/SubLib',
+            '  url = git@example.com:repo/sub.git',
+          ].join('\n');
+        }
+        if (filePath.endsWith('/deps/SubLib/.gitmodules')) {
+          return [
+            '[submodule "Nested"]',
+            '  path = vendor/Nested',
+            '  url = git@example.com:repo/nested.git',
+          ].join('\n');
+        }
+        return '';
+      });
+      mockReaddir.mockImplementation(async (targetPath: string) => {
+        if (targetPath.endsWith('/libtest')) {
+          return [
+            { name: 'macOS', isDirectory: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/libtest/macOS')) {
+          return [
+            { name: 'lib.a', isDirectory: () => false, isFile: () => true },
+          ];
+        }
+        if (
+          targetPath.endsWith('/deps/SubLib/.git/objects')
+          || targetPath.endsWith('/deps/SubLib/vendor/Nested/.git/objects')
+        ) {
+          return [
+            { name: 'pack', isDirectory: () => true },
+          ];
+        }
+        return [];
+      });
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', '');
+        }
+        if (command === 'git' && args.includes('log')) {
+          return createMockProcess(0, '', 'commit abcdef\nmessage\n');
+        }
+        if (command === 'git' && args.includes('rev-parse')) {
+          return createMockProcess(0, '', `${fullCommit}\n`);
+        }
+        return createMockProcess(0);
+      });
+
+      const onProgress = vi.fn();
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+        onProgress,
+      });
+
+      expect(mockRm).toHaveBeenCalledWith(
+        expect.stringMatching(/\/libtest\/deps\/SubLib\/\.git\/objects\/pack$/),
+        { recursive: true, force: true }
+      );
+      expect(mockRm).toHaveBeenCalledWith(
+        expect.stringMatching(/\/libtest\/deps\/SubLib\/vendor\/Nested\/\.git\/objects\/pack$/),
+        { recursive: true, force: true }
+      );
+      expect(onProgress).toHaveBeenCalledWith(expect.stringContaining('submodule=deps/SubLib,deps/SubLib/vendor/Nested'));
+    });
+
+    it('should ignore unsafe submodule paths while cleaning minisize git payloads', async () => {
+      mockMkdir.mockResolvedValue(undefined);
+      mockWriteFile.mockResolvedValue(undefined);
+      mockRm.mockResolvedValue(undefined);
+      mockStat.mockImplementation(async (filePath: string) => ({
+        isFile: () => false,
+        isDirectory: () => filePath.endsWith('/.git'),
+        size: 0,
+      }));
+      mockReadFile.mockImplementation(async (filePath: string) => (
+        filePath.endsWith('/libtest/.gitmodules')
+          ? [
+            '[submodule "UnsafeAbs"]',
+            '  path = /tmp/unsafe',
+            '  url = git@example.com:repo/unsafe.git',
+            '[submodule "UnsafeParent"]',
+            '  path = ../outside',
+            '  url = git@example.com:repo/outside.git',
+            '[submodule "Safe"]',
+            '  path = deps/Safe',
+            '  url = git@example.com:repo/safe.git',
+          ].join('\n')
+          : ''
+      ));
+      mockReaddir.mockImplementation(async (targetPath: string) => {
+        if (targetPath.endsWith('/libtest')) {
+          return [
+            { name: 'macOS', isDirectory: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/libtest/macOS')) {
+          return [
+            { name: 'lib.a', isDirectory: () => false, isFile: () => true },
+          ];
+        }
+        if (targetPath.endsWith('/deps/Safe/.git/objects')) {
+          return [
+            { name: 'pack', isDirectory: () => true },
+          ];
+        }
+        if (targetPath.includes('/unsafe') || targetPath.includes('/outside')) {
+          return [
+            { name: 'pack', isDirectory: () => true },
+          ];
+        }
+        return [];
+      });
+
+      mockSpawn.mockImplementation((command: string, args: string[]) => {
+        if (command === 'git' && args.includes('config')) {
+          return createMockProcess(0, '', 'blob:none\n');
+        }
+        if (command === 'git' && args.includes('ls-tree')) {
+          return createMockProcess(0, '', 'macOS\n');
+        }
+        if (command === 'git' && args.includes('ls-files')) {
+          return createMockProcess(0, '', '');
+        }
+        if (command === 'git' && args.includes('log')) {
+          return createMockProcess(0, '', 'commit abcdef\nmessage\n');
+        }
+        if (command === 'git' && args.includes('rev-parse')) {
+          return createMockProcess(0, '', `${fullCommit}\n`);
+        }
+        return createMockProcess(0);
+      });
+
+      const onProgress = vi.fn();
+      await codepac.downloadToTemp({
+        url: 'git@example.com:repo/lib.git',
+        commit: fullCommit,
+        branch: 'main',
+        libName: 'libtest',
+        platforms: ['macOS'],
+        onProgress,
+      });
+
+      const removedPaths = mockRm.mock.calls
+        .map((call) => call[0])
+        .filter((item): item is string => typeof item === 'string');
+      expect(removedPaths.some((item) => item.includes('/deps/Safe/.git/objects/pack'))).toBe(true);
+      expect(removedPaths.some((item) => item.includes('/unsafe'))).toBe(false);
+      expect(removedPaths.some((item) => item.includes('/outside'))).toBe(false);
+      expect(onProgress).toHaveBeenCalledWith(expect.stringContaining('submodule=deps/Safe'));
     });
 
     it('should use codepac directly when git lightweight download is disabled', async () => {
