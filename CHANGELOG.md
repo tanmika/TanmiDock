@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-18
+
 ### Changed
 
 - 同步 CodePac 源码适配文档，README 和 CLI 文档更新为当前 `td check` 命令体系。
 - 补充 Git 非完整拉取与 CodePac minisize 行为说明，明确 `.git/commit_hash` 是 CodePac 完成标记。
 - 补充多配置与嵌套 action 的缓存说明，明确按 `.cache/<配置文件名>` 同步配置缓存。
+- 对齐 CodePac action 参数解析，兼容真实项目中空 `--targetdir` 回退到配置目录的行为。
 
 ## [0.10.0] - 2026-05-11
 
@@ -437,7 +440,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform support (macOS and Windows)
 - codepac integration for dependency download
 
-[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/tanmika/TanmiDock/compare/v0.10.0...v1.0.0
 [0.10.0]: https://github.com/tanmika/TanmiDock/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/tanmika/TanmiDock/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/tanmika/TanmiDock/compare/v0.9.1...v0.9.2
