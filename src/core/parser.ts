@@ -515,8 +515,11 @@ export function parseActionCommand(command: string): ParsedAction {
     }
 
     if (token === '--targetdir' || token === '-td') {
-      targetDir = readActionOptionValue(tokens, index, token, command);
-      index++;
+      const { value, consumed } = readOptionalActionOptionValue(tokens, index);
+      if (value !== undefined && value !== '') {
+        targetDir = value;
+      }
+      if (consumed) index++;
       continue;
     }
 
@@ -556,6 +559,14 @@ function readActionOptionValue(tokens: string[], index: number, option: string, 
     throw new Error(`无法解析 action 命令，${option} 缺少参数值: ${command}`);
   }
   return value;
+}
+
+function readOptionalActionOptionValue(tokens: string[], index: number): { value?: string; consumed: boolean } {
+  const value = tokens[index + 1];
+  if (!value || value.startsWith('-')) {
+    return { consumed: false };
+  }
+  return { value, consumed: true };
 }
 
 function readActionVariadicOptionValues(

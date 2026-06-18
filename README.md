@@ -70,14 +70,15 @@ td status
 | `td link` | 链接项目依赖 |
 | `td link -p mac ios` | 指定平台链接 |
 | `td status` | 查看当前项目状态 |
-| `td status -s` | 查看 Store 状态 |
 | `td projects` | 列出所有已链接项目 |
 | `td clean` | 清理无引用的库 |
 | `td unlink` | 解除链接，恢复为目录 |
 | `td config` | 交互式配置 |
-| `td doctor` | 环境诊断 |
-| `td verify` | 完整性验证 |
-| `td repair` | 修复问题 |
+| `td check` | 环境诊断和数据一致性检查 |
+| `td check --fix` | 修复检查发现的问题 |
+| `td check --dry-run` | 只显示问题，不执行修复 |
+| `td reset <lib>` | 重置指定库的 Store 缓存和登记信息 |
+| `td unavailable` | 管理手动平台缺失规则 |
 | `td update` | 更新到最新版本 |
 | `td migrate <path>` | 迁移 Store 位置 |
 
@@ -156,7 +157,9 @@ td config set <key> <value>  # 设置配置
 
 `sharedSymlinkFolders` 默认值为 `true`。如需排查构建工具对符号链接目录的兼容性，可通过 `td config set sharedSymlinkFolders false` 临时切回复制模式。
 
-`gitLightweightDownload` 默认值为 `true`。开启后下载阶段优先使用 Git 非完整拉取，只获取指定平台和必要共享内容，可有效降低临时下载空间消耗。
+TanmiDock 会按 CodePac 配置规则解析 `repos`、`actions`、`vars`、平台分组、`name`、`source` 和 `dir`，并把主配置、可选配置、嵌套 action 配置同步到各自的 `.cache/<配置文件名>`。本地 Git 库优先通过 `.git/commit_hash` 判断 commit，和 CodePac 的完成标记保持一致。
+
+`gitLightweightDownload` 默认值为 `true`。开启后下载阶段优先使用 Git 非完整拉取，只获取指定平台和必要共享内容，并在成功后保留 CodePac minisize 所需的 `commit_hash` 标记，可有效降低临时下载空间消耗。关闭该配置只表示不使用 TanmiDock 的 Git 非完整拉取；CodePac 自身默认也会倾向 minisize 下载。
 
 ## 常见问题
 

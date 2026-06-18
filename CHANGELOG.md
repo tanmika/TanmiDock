@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 同步 CodePac 源码适配文档，README 和 CLI 文档更新为当前 `td check` 命令体系。
+- 补充 Git 非完整拉取与 CodePac minisize 行为说明，明确 `.git/commit_hash` 是 CodePac 完成标记。
+- 补充多配置与嵌套 action 的缓存说明，明确按 `.cache/<配置文件名>` 同步配置缓存。
+
 ## [0.10.0] - 2026-05-11
 
 ### Added

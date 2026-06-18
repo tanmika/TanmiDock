@@ -196,14 +196,31 @@ flowchart TD
     F --> J["按配置名写 cache"]
 ```
 
-需要重点验证的链路：
+第六章不再扩大行为范围，只做发布前一致性与验证清单整理。已经实施的五类行为分别由以下自动化验证支撑：
 
-- 配置解析：`vars` 替换、平台分组、`all`、`name`、`source`、重复 `dir/name`。
-- action 递归：相对 `--configdir`、相对 `--targetdir`、平台继承、`skip_action`、非 `codepac install` action。
-- 缓存同步：主配置、可选配置、嵌套配置分别写入正确 `.cache` 文件名。
-- Git 下载：普通仓库、sparse 仓库、LFS 仓库、带 submodule 仓库、回退 CodePac。
-- 状态检查：CodePac 命令不存在、Git 版本不足、Git LFS 缺失、`.git/commit_hash` 缺失或不匹配。
-- 发布保护：保留 `gitLightweightDownload` 配置、命令入口、README、CHANGELOG、测试和配置迁移，不因对齐 CodePac 默认 minisize 行为而删除该能力。
+| 验证链路 | 覆盖内容 | 主要测试文件 |
+|----------|----------|--------------|
+| 配置解析 | `repos/actions` 平台分组、`all`、`vars` 替换、`name/source/dir` 身份规则、重复 `dir/name` 检测 | `tests/core/parser.test.ts` |
+| 多配置与缓存 | 主配置、可选配置、嵌套 action 配置分别同步 `.cache/<配置文件名>` | `tests/integration/multi-config.test.ts` |
+| action 递归 | 相对 `--configdir`、相对 `--targetdir`、平台继承、`--skip-action`、非 `codepac install` action 跳过 | `tests/integration/tc017-link-command.test.ts`、`tests/integration/tc019-status-command.test.ts`、`tests/integration/tc026-unavailable-command.test.ts` |
+| Git minisize | Git 非完整拉取成功后写 `commit_message` 和 `commit_hash`、清理 `.git/objects` 与 `.git/lfs`、递归处理 submodule Git 载荷、失败回退 CodePac | `tests/core/codepac.test.ts` |
+| 环境状态 | CodePac 命令、Git 版本、Git LFS、`codepac --version`、`.git/commit_hash` 读取 | `tests/commands/check-environment.test.ts`、`tests/utils/git.test.ts` |
+| Store 完整性 | 文件数量、大小、内容哈希、损坏 Store 修复、旧元数据回填 | `tests/commands/check-integrity.test.ts`、`tests/core/store.test.ts` |
+
+仍需保留为发布前重点复测的缺口：
+
+- `td reset` 对可选配置、嵌套 action 和 submodule 配置的命令级覆盖少于 `link/status/unavailable`，发布前需要人工用真实项目复测单库重置和全局重置。
+- 日志断言主要依赖人工观察，后续如果继续强化第六章，可以增加对 action 路径、缓存写入、环境检测失败原因的最小日志断言。
+- `td unavailable list` 的输出可见性测试少于 add/remove，发布前需要人工确认列表能展示嵌套依赖和手动平台缺失规则。
+- Git 非完整拉取和 CodePac fallback 已有单测覆盖，真实大型 LFS 与 submodule 仓库仍需要保留一轮手工复测。
+
+发布保护清单：
+
+- 保留 `gitLightweightDownload` 配置项、默认值、配置命令入口、README、CHANGELOG、测试和 `1.1.0` 到 `1.2.0` 的配置迁移。
+- 保持 `package.json`、`package-lock.json` 的软件包版本不变。
+- 保持 `CURRENT_CONFIG_VERSION`、`MIN_SUPPORTED_VERSION`、配置迁移函数不变。
+- 不因对齐 CodePac 默认 minisize 行为而删除 TanmiDock 的 Git 非完整拉取入口。
+- 第六章只同步 README、CLI、CHANGELOG 与本计划文档，不修改下载、Store、clean、reset 的实际行为。
 
 日志也需要随实现补齐。关键日志应覆盖配置文件路径、请求平台、平台筛选结果、变量替换结果、依赖身份生成、action 继承参数、嵌套配置路径、缓存写入路径、下载方式、外部命令返回、异常分支和最终链接结果。复测时应能仅凭日志判断断点位于解析、递归、下载、缓存、状态校验中的哪一段。
 

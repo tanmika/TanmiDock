@@ -858,6 +858,16 @@ describe('parseActionCommand', () => {
     expect(result.targetDir).toBe('myDeps');
   });
 
+  it('should use configDir as default targetDir when targetdir has no value', () => {
+    const command = 'codepac install libMemoryPool --configdir libTSCoreBase --targetdir ';
+
+    const result = parseActionCommand(command);
+
+    expect(result.libraries).toEqual(['libMemoryPool']);
+    expect(result.configDir).toBe('libTSCoreBase');
+    expect(result.targetDir).toBe('libTSCoreBase');
+  });
+
   it('should throw error when command does not start with codepac install', () => {
     // Given: 无效的命令开头
     const command = 'npm install lib1 --configdir deps';
@@ -894,6 +904,24 @@ describe('buildActionExecutionPlan', () => {
     expect(plan.nestedTargetDir).toBe('/project/3rdparty/runtime/childTarget');
     expect(plan.effectiveCodepacPlatforms).toEqual(['mac']);
     expect(plan.libraries).toEqual(['libNested']);
+  });
+
+  it('should resolve empty targetdir like CodePac default targetdir', () => {
+    const plan = buildActionExecutionPlan(
+      {
+        command: 'codepac install libMemoryPool --configdir libTSCoreBase --targetdir ',
+      },
+      {
+        parentConfigPath: '/project/3rdparty/codepac-dep.json',
+        parentTargetDir: '/project/3rdparty',
+        inheritedCodepacPlatforms: ['wasm'],
+      }
+    );
+
+    expect(plan.nestedConfigPath).toBe('/project/3rdparty/libTSCoreBase/codepac-dep.json');
+    expect(plan.nestedTargetDir).toBe('/project/3rdparty/libTSCoreBase');
+    expect(plan.effectiveCodepacPlatforms).toEqual(['wasm']);
+    expect(plan.libraries).toEqual(['libMemoryPool']);
   });
 
   it('should use explicit action platforms instead of inherited platforms', () => {

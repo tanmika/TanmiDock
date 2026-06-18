@@ -13,9 +13,7 @@
 - [unlink - 取消链接](#unlink---取消链接)
 - [config - 配置管理](#config---配置管理)
 - [migrate - 迁移 Store](#migrate---迁移-store)
-- [doctor - 环境诊断](#doctor---环境诊断)
-- [verify - 完整性验证](#verify---完整性验证)
-- [repair - 修复问题](#repair---修复问题)
+- [check - 健康检查](#check---健康检查)
 - [退出码](#退出码)
 
 ---
@@ -798,14 +796,14 @@ $ tanmi-dock migrate /new/path --force --keep-old
 
 ---
 
-## doctor - 环境诊断
+## check - 健康检查
 
-检测运行环境问题。
+合并环境诊断、数据一致性验证和修复能力。
 
 ### 语法
 
 ```bash
-tanmi-dock doctor [options]
+tanmi-dock check [options]
 ```
 
 ### 选项
@@ -813,148 +811,111 @@ tanmi-dock doctor [options]
 | 选项 | 说明 |
 |------|------|
 | `--json` | 输出 JSON 格式 |
+| `--fix` | 直接修复所有可修复问题 |
+| `--dry-run` | 只显示问题，不执行修复 |
+| `--force` | 跳过确认 |
+| `--integrity` | 校验 Store 文件完整性 |
 
 ### 检测项目
 
 | 项目 | 说明 |
 |------|------|
-| codepac | 检查 codepac 是否已安装 |
+| codepac | 检查 CodePac 命令、Git 版本、Git LFS、`codepac --version` |
 | 配置文件 | 检查配置是否存在 |
 | Store目录 | 检查 Store 目录是否可访问 |
 | 磁盘空间 | 检查可用空间是否充足 |
+| 项目记录 | 检查 Registry 中登记项目是否仍存在 |
+| 符号链接 | 检查项目依赖链接是否悬挂 |
+| 孤立库 | 检查 Store 中未登记的库 |
+| 缺失库 | 检查项目依赖对应 Store 内容是否缺失 |
+| 引用关系 | 检查 Store 与项目引用是否一致 |
+| Store 完整性 | 在 `--integrity` 下校验文件数量、大小和内容哈希 |
 
 ### 交互流程
 
 #### 1. 正常状态
 
 ```bash
-$ tanmi-dock doctor
+$ tanmi-dock check
 
-╭─ TanmiDock 环境诊断 ─╮
+TanmiDock 健康检查
 
-[ok] codepac: 已安装
-[ok] 配置文件: 已初始化
-[ok] Store目录: ~/.tanmi-dock/store
-[ok] 磁盘空间: 125.3 GB 可用
+环境状态
+────────────────────
+[✓] codepac    Version 2.0.56
+[✓] 配置文件      已初始化
+[✓] Store 目录    ~/.tanmi-dock/store
+[✓] 磁盘空间      125.3 GB 可用
 
-[ok] 环境正常
+数据一致性
+────────────────────
+[✓] 项目记录      完整
+[✓] 符号链接      完整
+[✓] 孤立库       无
+[✓] 缺失库       无
+[✓] 引用关系      一致
+[✓] Store 完整性  完整
+
+[ok] 系统健康，无问题
 ```
 
 #### 2. 有问题
 
 ```bash
-$ tanmi-dock doctor
+$ tanmi-dock check
 
-╭─ TanmiDock 环境诊断 ─╮
+TanmiDock 健康检查
 
-[err] codepac: 未安装，无法下载库
-[ok] 配置文件: 已初始化
-[ok] Store目录: ~/.tanmi-dock/store
-[warn] 磁盘空间: 3.2 GB 可用 (建议 > 5GB)
+环境状态
+────────────────────
+[✗] codepac    Git 版本不足(2.21.0 < 2.22.0)；Git LFS 不可用
+  - Git: Git 版本需不低于 2.22.0，当前 2.21.0
+  - Git LFS: Git LFS 不可用
+[✓] 配置文件      已初始化
+[✓] Store 目录    ~/.tanmi-dock/store
+[!] 磁盘空间      3.2 GB 可用 (建议 > 5GB)
 
-[err] 发现 1 个错误，1 个警告
+数据一致性
+────────────────────
+[✓] 项目记录      完整
+[✓] 符号链接      完整
+[✓] 孤立库       无
+[!] 缺失库       1 个 (需 td link 下载)
+[✓] 引用关系      一致
+[✓] Store 完整性  完整
+
+[warn] 发现问题: 1 个环境错误, 1 个警告, 1 个数据问题
 ```
 
 #### 3. JSON 输出
 
 ```bash
-$ tanmi-dock doctor --json
+$ tanmi-dock check --json
 
 {
-  "checks": [
-    { "name": "codepac", "status": "ok", "message": "已安装" },
-    { "name": "配置文件", "status": "ok", "message": "已初始化" },
-    { "name": "Store目录", "status": "ok", "message": "~/.tanmi-dock/store" },
-    { "name": "磁盘空间", "status": "ok", "message": "125.3 GB 可用" }
-  ],
-  "summary": { "total": 4, "errors": 0, "warnings": 0, "ok": 4 },
-  "healthy": true
+  "environment": {
+    "codepac": {
+      "ok": true,
+      "message": "Version 2.0.56",
+      "details": {
+        "codepacCommand": { "ok": true },
+        "git": { "ok": true, "version": "2.40.0", "minimumVersion": "2.22.0" },
+        "gitLfs": { "ok": true },
+        "codepacVersion": { "ok": true, "version": "Version 2.0.56" }
+      }
+    }
+  },
+  "integrity": {
+    "invalidProjects": [],
+    "danglingLinks": [],
+    "orphanLibraries": [],
+    "missingLibraries": [],
+    "staleReferences": [],
+    "corruptedStores": []
+  },
+  "summary": { "envErrors": 0, "envWarnings": 0, "integrityIssues": 0, "reclaimableSize": 0 }
 }
 ```
-
----
-
-## verify - 完整性验证
-
-验证 Store 和 Registry 的完整性。
-
-### 语法
-
-```bash
-tanmi-dock verify
-```
-
-### 检测项目
-
-| 项目 | 说明 |
-|------|------|
-| 悬挂链接 | 符号链接指向的目标不存在 |
-| 孤立库 | Store 中有但 Registry 未记录 |
-| 缺失库 | Registry 记录但 Store 中不存在 |
-| 无效项目 | 已注册但路径不存在的项目 |
-
-### 交互流程
-
-#### 1. 正常状态
-
-```bash
-$ tanmi-dock verify
-
-╭─ 验证 Store 完整性 ─╮
-
-[info] 检查项目引用...
-[info] 检查孤立库...
-
-────────────────────
-[ok] Registry 引用一致
-[ok] 符号链接完整
-[ok] 无孤立库
-
-[ok] Store 完整性验证通过
-```
-
-#### 2. 有问题
-
-```bash
-$ tanmi-dock verify
-
-╭─ 验证 Store 完整性 ─╮
-
-[info] 检查项目引用...
-[info] 检查孤立库...
-
-────────────────────
-[warn] 发现 1 个无效项目
-  - ~/deleted-project -> 路径不存在
-
-[warn] 发现 2 个悬挂链接
-  - ~/project-a/3rdparty/oldlib -> 目标不存在
-
-[warn] 发现 1 个孤立库 (120.5 MB)
-  - orphanlib/a1b2c3d (120.5 MB)
-
-[hint] 建议: 运行 tanmi-dock repair 修复问题
-```
-
----
-
-## repair - 修复问题
-
-修复 verify 检测到的问题。
-
-### 语法
-
-```bash
-tanmi-dock repair [options]
-```
-
-### 选项
-
-| 选项 | 说明 |
-|------|------|
-| `--dry-run` | 只显示将执行的操作 |
-| `--prune` | 删除孤立库（默认登记到 Registry） |
-| `--force` | 跳过确认提示 |
 
 ### 修复操作
 
@@ -962,93 +923,41 @@ tanmi-dock repair [options]
 |----------|----------|
 | 过期项目 | 从 Registry 中清理 |
 | 悬挂链接 | 移除符号链接，更新项目依赖 |
-| 孤立库 | 登记到 Registry 或删除（`--prune`） |
+| 孤立库 | 删除无引用 Store 内容 |
+| 失效引用 | 从 StoreEntry 中移除失效项目引用 |
+| 损坏 Store | 删除损坏平台目录或整个损坏 commit 缓存 |
 
-### 交互流程
-
-#### 1. Dry-run 模式
+#### 4. Dry-run 模式
 
 ```bash
-$ tanmi-dock repair --dry-run
+$ tanmi-dock check --dry-run
 
-╭─ 修复 Store 问题 ─╮
-
-[info] 扫描问题...
-
-[info] 发现 4 个问题:
-  - 1 个过期项目
-  - 2 个悬挂链接
-  - 1 个孤立库 (120.5 MB)
-
-────────────────────
-[dry-run] 将执行以下操作:
-
-  清理过期项目: ~/deleted-project
-  移除悬挂链接: ~/project-a/3rdparty/oldlib
-  移除悬挂链接: ~/project-a/3rdparty/another
-  登记孤立库: orphanlib/a1b2c3d
-
-[hint] 移除 --dry-run 选项以执行修复
+[warn] 发现问题: 2 个数据问题
+[hint] 运行 td check --fix 修复问题
 ```
 
-#### 2. 执行修复
+#### 5. 执行修复
 
 ```bash
-$ tanmi-dock repair
-
-╭─ 修复 Store 问题 ─╮
-
-[info] 扫描问题...
-
-[info] 发现 4 个问题:
-  - 1 个过期项目
-  - 2 个悬挂链接
-  - 1 个孤立库 (120.5 MB)
-
-? 确认修复以上 4 个问题? (y/N) y
+$ tanmi-dock check --fix
 
 ────────────────────
 [info] 正在修复...
 
 [ok] 清理过期项目: ~/deleted-project
 [ok] 移除悬挂链接: ~/project-a/3rdparty/oldlib
-[ok] 移除悬挂链接: ~/project-a/3rdparty/another
-[ok] 登记孤立库: orphanlib/a1b2c3d
+[ok] 清理孤立库: orphanlib/a1b2c3d
 
 ────────────────────
-[ok] 修复完成: 4 个问题已解决
+[ok] 修复完成: 3 个问题已解决
 ```
 
-#### 3. 删除孤立库
+#### 6. 无问题
 
 ```bash
-$ tanmi-dock repair --prune --force
+$ tanmi-dock check
 
-╭─ 修复 Store 问题 ─╮
-
-[info] 扫描问题...
-
-[info] 发现 1 个问题:
-  - 1 个孤立库 (120.5 MB)
-
-────────────────────
-[info] 正在修复...
-
-[ok] 删除孤立库: orphanlib/a1b2c3d
-
-────────────────────
-[ok] 修复完成: 1 个问题已解决
-```
-
-#### 4. 无问题
-
-```bash
-$ tanmi-dock repair
-
-╭─ 修复 Store 问题 ─╮
-
-[info] 扫描问题...
-[ok] 没有发现需要修复的问题
+[ok] 系统健康，无问题
 ```
 
 ---
