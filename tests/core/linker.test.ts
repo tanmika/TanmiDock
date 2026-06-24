@@ -167,6 +167,7 @@ describe('linker', () => {
         .mockResolvedValueOnce(undefined) // Win exists
         .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
       fsMock.symlink.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue(['macOS', 'Win']);
       copyDirMock.mockResolvedValue(undefined);
 
       await linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS', 'Win']);
@@ -244,6 +245,7 @@ describe('linker', () => {
         .mockRejectedValueOnce({ code: 'ENOENT' }) // Win doesn't exist
         .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
       fsMock.symlink.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue(['macOS']);
       copyDirMock.mockResolvedValue(undefined);
 
       // 不应该抛出错误
@@ -270,6 +272,7 @@ describe('linker', () => {
         .mockResolvedValueOnce(undefined) // macOS exists
         .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
       fsMock.symlink.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue(['macOS']);
       copyDirMock.mockResolvedValue(undefined);
 
       await linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS']);
@@ -287,6 +290,7 @@ describe('linker', () => {
         .mockResolvedValueOnce(undefined) // macOS exists
         .mockRejectedValueOnce({ code: 'ENOENT' }); // _shared doesn't exist
       fsMock.symlink.mockResolvedValue(undefined);
+      fsMock.readdir.mockResolvedValue(['macOS']);
       copyDirMock.mockResolvedValue(undefined);
 
       await linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS']);
@@ -297,6 +301,29 @@ describe('linker', () => {
         force: true,
       });
       expect(fsMock.mkdir).toHaveBeenCalledWith('/project/3rdParty/libtest', { recursive: true });
+    });
+
+    it('should cleanup and reject when all requested platform directories are missing from Store', async () => {
+      const { linkLib } = await import('../../src/core/linker.js');
+
+      fsMock.rm.mockResolvedValue(undefined);
+      fsMock.mkdir.mockResolvedValue(undefined);
+      fsMock.access
+        .mockRejectedValueOnce({ code: 'ENOENT' })
+        .mockRejectedValueOnce({ code: 'ENOENT' });
+      fsMock.symlink.mockResolvedValue(undefined);
+      copyDirMock.mockResolvedValue(undefined);
+
+      await expect(
+        linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', ['macOS', 'Win'])
+      ).rejects.toThrow('Store 中没有任何可链接的平台目录');
+
+      expect(fsMock.symlink).not.toHaveBeenCalled();
+      expect(fsMock.rm).toHaveBeenCalledTimes(2);
+      expect(fsMock.rm).toHaveBeenLastCalledWith('/project/3rdParty/libtest', {
+        recursive: true,
+        force: true,
+      });
     });
 
     it('should cleanup on symlink failure', async () => {
@@ -322,33 +349,75 @@ describe('linker', () => {
       });
     });
 
-    it('should handle empty platforms array', async () => {
+    it('should reject empty platforms array for platform library', async () => {
       const { linkLib } = await import('../../src/core/linker.js');
 
-      fsMock.rm.mockResolvedValue(undefined);
-      fsMock.mkdir.mockResolvedValue(undefined);
-      fsMock.access.mockResolvedValue(undefined);
-      fsMock.symlink.mockResolvedValue(undefined);
-      fsMock.copyFile.mockResolvedValue(undefined);
-      copyDirMock.mockResolvedValue(undefined);
-      // Mock readdir for _shared
-      fsMock.readdir.mockResolvedValue([
-        {
-          name: 'config.json',
-          isDirectory: () => false,
-          isFile: () => true,
-          isSymbolicLink: () => false,
-        },
-      ]);
-
-      // 空平台列表应该正常执行（只处理 _shared）
       await expect(
         linkLib('/project/3rdParty/libtest', '/store/libtest/abc123', [])
-      ).resolves.not.toThrow();
+      ).rejects.toThrow('平台库没有可链接的平台');
 
-      // 无平台，不创建平台符号链接（但 _shared 中的 .git 可能会创建）
-      // 仍然处理 _shared 文件
-      expect(fsMock.copyFile).toHaveBeenCalled();
+      expect(fsMock.rm).not.toHaveBeenCalled();
+      expect(fsMock.mkdir).not.toHaveBeenCalled();
+      expect(fsMock.symlink).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cleanupEmptyLocalDirectory', () => {
+    it('should remove empty regular directory', async () => {
+      const { cleanupEmptyLocalDirectory } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockResolvedValue({
+        isDirectory: () => true,
+        isSymbolicLink: () => false,
+      });
+      fsMock.readdir.mockResolvedValue([]);
+      fsMock.rm.mockResolvedValue(undefined);
+
+      await expect(cleanupEmptyLocalDirectory('/project/3rdParty/libtest')).resolves.toBe(true);
+
+      expect(fsMock.rm).toHaveBeenCalledWith('/project/3rdParty/libtest', {
+        recursive: true,
+        force: true,
+      });
+    });
+
+    it('should return false when path does not exist', async () => {
+      const { cleanupEmptyLocalDirectory } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockRejectedValue({ code: 'ENOENT' });
+
+      await expect(cleanupEmptyLocalDirectory('/project/3rdParty/libtest')).resolves.toBe(false);
+
+      expect(fsMock.readdir).not.toHaveBeenCalled();
+      expect(fsMock.rm).not.toHaveBeenCalled();
+    });
+
+    it('should keep non-empty regular directory', async () => {
+      const { cleanupEmptyLocalDirectory } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockResolvedValue({
+        isDirectory: () => true,
+        isSymbolicLink: () => false,
+      });
+      fsMock.readdir.mockResolvedValue(['android']);
+
+      await expect(cleanupEmptyLocalDirectory('/project/3rdParty/libtest')).resolves.toBe(false);
+
+      expect(fsMock.rm).not.toHaveBeenCalled();
+    });
+
+    it('should keep symbolic link', async () => {
+      const { cleanupEmptyLocalDirectory } = await import('../../src/core/linker.js');
+
+      fsMock.lstat.mockResolvedValue({
+        isDirectory: () => true,
+        isSymbolicLink: () => true,
+      });
+
+      await expect(cleanupEmptyLocalDirectory('/project/3rdParty/libtest')).resolves.toBe(false);
+
+      expect(fsMock.readdir).not.toHaveBeenCalled();
+      expect(fsMock.rm).not.toHaveBeenCalled();
     });
   });
 

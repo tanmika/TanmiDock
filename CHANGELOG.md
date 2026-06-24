@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-24
+
+### Fixed
+
+- 修复 `td link -p android --config inner -y` 在请求平台已被标记不可用时仍输出链接成功的问题。
+- 阻止平台库在没有任何可链接平台时创建空普通目录。
+- 清理历史版本遗留的空本地目录，避免 `td status` 持续显示空目录为未链接普通目录。
+
 ## [1.0.0] - 2026-06-18
 
 ### Changed
@@ -440,7 +448,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform support (macOS and Windows)
 - codepac integration for dependency download
 
-[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/tanmika/TanmiDock/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/tanmika/TanmiDock/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/tanmika/TanmiDock/compare/v0.10.0...v1.0.0
 [0.10.0]: https://github.com/tanmika/TanmiDock/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/tanmika/TanmiDock/compare/v0.9.2...v0.9.3

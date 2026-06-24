@@ -238,12 +238,16 @@ async function resolveRequestedStoreState(
     }
   }
 
-  return resolveRequestedPlatformsByActual(
+  const result = resolveRequestedPlatformsByActual(
     requestedPlatforms,
     dependency.sparse,
     resolvedExisting,
     vars
   );
+  debug(
+    `[link-store-state] ${dependency.libName}@${dependency.commit.slice(0, 7)} 请求平台=${requestedPlatforms.join(', ') || '空'}, Store候选=${candidatePlatforms.join(', ') || '空'}, 实际存在=${result.actualExisting.join(', ') || '无'}, 满足请求=${result.satisfiedRequested.join(', ') || '无'}, 缺失请求=${result.missingRequested.join(', ') || '无'}`
+  );
+  return result;
 }
 
 function getBlockedRequestedPlatforms(
@@ -259,7 +263,11 @@ function getBlockedRequestedPlatforms(
     const targets = getRequestedPlatformTargets(platform, dependency.sparse, vars);
     return targets.length === 1 && targets[0] === platform;
   });
-  return [...new Set([...manualBlocked, ...autoBlocked])];
+  const blocked = [...new Set([...manualBlocked, ...autoBlocked])];
+  debug(
+    `[link-platforms] ${dependency.libName}@${dependency.commit.slice(0, 7)} 请求平台=${requestedPlatforms.join(', ') || '空'}, 手动跳过=${manualBlocked.join(', ') || '无'}, 自动跳过=${autoBlocked.join(', ') || '无'}, 最终跳过=${blocked.join(', ') || '无'}`
+  );
+  return blocked;
 }
 
 function clearSatisfiedAutoUnavailablePlatforms(
@@ -1418,6 +1426,21 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               const requestedPlatforms = platforms.filter(
                 (platform) => !blockedPlatforms.includes(platform)
               );
+              if (requestedPlatforms.length === 0) {
+                pLog.warn(
+                  `${dependency.libName} 请求平台 [${platforms.join(', ')}] 均已按规则跳过，没有可链接产物`
+                );
+                if (await linker.cleanupEmptyLocalDirectory(localPath)) {
+                  pLog.warn(`${dependency.libName} 已清理历史遗留的空本地目录`);
+                }
+                return {
+                  success: false,
+                  name: dependency.libName,
+                  skipped: true,
+                  skippedPlatforms: blockedPlatforms,
+                  unsupported: true,
+                };
+              }
               const {
                 actualExisting: existing,
                 missingRequested: missing,
@@ -1426,6 +1449,20 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               clearSatisfiedAutoUnavailablePlatforms(registry, dependency, satisfiedRequested);
 
               if (missing.length === 0) {
+                if (existing.length === 0) {
+                  pLog.warn(
+                    `${dependency.libName} 请求平台 [${requestedPlatforms.join(', ')}] 在 Store 中没有可链接产物，已拒绝创建空目录`
+                  );
+                  if (await linker.cleanupEmptyLocalDirectory(localPath)) {
+                    pLog.warn(`${dependency.libName} 已清理历史遗留的空本地目录`);
+                  }
+                  return {
+                    success: false,
+                    name: dependency.libName,
+                    skipped: true,
+                    skippedPlatforms: requestedPlatforms,
+                  };
+                }
                 pLog.info(`${dependency.libName} 所有平台已存在，直接链接...`);
                 tx.recordOp('link', localPath, storeCommitPath);
                 await linker.linkLib(localPath, storeCommitPath, existing);
@@ -1451,6 +1488,9 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
               if (dlToDownload.length === 0) {
                 if (knownUnavailable.length > 0) {
                   pLog.warn(`${dependency.libName} 平台 [${knownUnavailable.join(', ')}] 已按规则跳过`);
+                }
+                if (await linker.cleanupEmptyLocalDirectory(localPath)) {
+                  pLog.warn(`${dependency.libName} 已清理历史遗留的空本地目录`);
                 }
                 return { success: false, name: dependency.libName, skipped: true, skippedPlatforms: missing, unsupported: true };
               }
@@ -1535,6 +1575,12 @@ async function linkScope(params: LinkScopeParams): Promise<LinkScopeResult> {
 
                 const linkPlatforms = [...existing, ...filteredDownloaded];
                 if (linkPlatforms.length === 0) {
+                  pLog.warn(
+                    `${dependency.libName} 下载后没有生成请求平台 [${requestedPlatforms.join(', ')}] 的可链接产物，已拒绝创建空目录`
+                  );
+                  if (await linker.cleanupEmptyLocalDirectory(localPath)) {
+                    pLog.warn(`${dependency.libName} 已清理历史遗留的空本地目录`);
+                  }
                   return {
                     success: false,
                     name: dependency.libName,

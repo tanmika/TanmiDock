@@ -199,7 +199,7 @@ describe('integration/linkLib', () => {
       await expect(fs.lstat(androidPath)).rejects.toThrow();
     });
 
-    it('should handle empty platforms array', async () => {
+    it('should reject empty platforms array for platform library', async () => {
       env = await createTestEnv();
 
       await createMockStoreData(env, 'libEmpty', 'stu901', ['macOS']);
@@ -207,18 +207,11 @@ describe('integration/linkLib', () => {
       const localPath = path.join(env.projectDir, '3rdParty', 'libEmpty');
       const storeCommitPath = path.join(env.storeDir, 'libEmpty', 'stu901');
 
-      // 空平台列表
-      await linkLib(localPath, storeCommitPath, []);
+      await expect(linkLib(localPath, storeCommitPath, [])).rejects.toThrow(
+        '平台库没有可链接的平台'
+      );
 
-      // 目录应该存在
-      await expect(fs.access(localPath)).resolves.toBeUndefined();
-
-      // 没有平台链接
-      const entries = await fs.readdir(localPath);
-      expect(entries).not.toContain('macOS');
-
-      // 但 _shared 内容应该被复制
-      expect(entries).toContain('codepac-dep.json');
+      await expect(fs.access(localPath)).rejects.toThrow();
     });
 
     it('should handle missing _shared directory', async () => {

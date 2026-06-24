@@ -396,8 +396,18 @@ export async function linkLib(
   storeCommitPath: string,
   platforms: string[]
 ): Promise<void> {
+  if (platforms.length === 0) {
+    throw new Error(
+      `${path.basename(localPath)}: 平台库没有可链接的平台，已拒绝创建空链接目录`
+    );
+  }
+
   // 0. 读取配置
   const sharedSymlinkFolders = (await config.get('sharedSymlinkFolders')) ?? true;
+
+  logger.debug(
+    `[link-lib] 开始链接平台库: localPath=${localPath}, storeCommitPath=${storeCommitPath}, platforms=${platforms.join(', ')}`
+  );
 
   // 1. 清理旧内容
   await fs.rm(localPath, { recursive: true, force: true });
@@ -406,6 +416,8 @@ export async function linkLib(
   await fs.mkdir(localPath, { recursive: true });
 
   try {
+    let linkedPlatformCount = 0;
+
     // 3. 链接平台目录
     for (const platform of platforms) {
       const storePlatformPath = path.join(storeCommitPath, platform);
@@ -415,12 +427,19 @@ export async function linkLib(
         await fs.access(storePlatformPath);
       } catch {
         // 平台目录不存在，跳过
+        logger.debug(`[link-lib] Store 平台目录不存在，跳过: ${storePlatformPath}`);
         continue;
       }
 
       const localPlatformPath = path.join(localPath, platform);
       const type = isWindows() ? 'junction' : 'dir';
       await fs.symlink(storePlatformPath, localPlatformPath, type);
+      linkedPlatformCount++;
+      logger.debug(`[link-lib] 已创建平台链接: ${localPlatformPath} -> ${storePlatformPath}`);
+    }
+
+    if (linkedPlatformCount === 0) {
+      throw new Error(`${path.basename(localPath)}: Store 中没有任何可链接的平台目录`);
     }
 
     // 4. 处理共享内容（_shared 目录）
@@ -482,6 +501,47 @@ export async function linkLib(
     // 链接失败时清理已创建的内容
     await fs.rm(localPath, { recursive: true, force: true });
     throw err;
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(localPath);
+  } catch {
+    entries = [];
+  }
+  if (entries.length === 0) {
+    await fs.rm(localPath, { recursive: true, force: true }).catch(() => {});
+    throw new Error(
+      `${path.basename(localPath)}: 链接后没有生成任何文件或目录，已清理空目录`
+    );
+  }
+
+  logger.debug(`[link-lib] 平台库链接完成: localPath=${localPath}, entries=${entries.join(', ')}`);
+}
+
+/**
+ * 清理历史版本遗留的空普通目录。
+ * 仅当 localPath 是空的普通目录时删除，避免误删符号链接、平台目录或用户本地文件。
+ *
+ * @returns true 表示已删除空目录，false 表示路径不存在或不是可安全删除的空目录。
+ */
+export async function cleanupEmptyLocalDirectory(localPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(localPath);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      return false;
+    }
+
+    const entries = await fs.readdir(localPath);
+    if (entries.length > 0) {
+      return false;
+    }
+
+    await fs.rm(localPath, { recursive: true, force: true });
+    logger.debug(`[link-lib] 已清理空本地目录: ${localPath}`);
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -1318,6 +1318,264 @@ describe('TC-017: link 命令测试', () => {
       expect(registry.projects[projectHash].dependencies).toHaveLength(2);
     });
 
+    it('should not create empty local directory when requested platform is marked unavailable', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libUnavailableOnly';
+      const commit = 'unavailable123456';
+      await createTestProject(env, [
+        {
+          libName,
+          commit,
+          createLocal: false,
+        },
+      ]);
+
+      const registryBefore = await loadRegistry(env);
+      registryBefore.libraries[`${libName}:${commit}`] = {
+        libName,
+        commit,
+        branch: 'main',
+        url: `https://github.com/test/${libName}.git`,
+        platforms: [],
+        size: 0,
+        isGeneral: false,
+        referencedBy: [],
+        unavailablePlatforms: ['android'],
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      await saveRegistry(env, registryBefore);
+
+      await runCommand('link', { platform: ['android'], yes: true, download: true }, env, env.projectDir);
+
+      const localPath = path.join(env.projectDir, '3rdparty', libName);
+      await expect(fs.access(localPath)).rejects.toThrow();
+
+      const registryAfter = await loadRegistry(env);
+      const projectHash = hashPath(env.projectDir);
+      expect(registryAfter.projects[projectHash]?.dependencies ?? []).toHaveLength(0);
+      expect(registryAfter.libraries[`${libName}:${commit}`].platforms).toEqual([]);
+      expect(registryAfter.libraries[`${libName}:${commit}`].unavailablePlatforms).toEqual(['android']);
+    });
+
+    it('should remove stale empty local directory when unavailable platform is skipped', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libPixCookStaleEmpty';
+      const commit = '89f579fd342937514121b03423d435072436d4f7';
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      const configPath = path.join(env.homeDir, 'config.json');
+      const cfg = JSON.parse(await fs.readFile(configPath, 'utf-8')) as Record<string, unknown>;
+      cfg.unverifiedLocalStrategy = 'download';
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+      await fs.mkdir(thirdPartyDir, { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          repos: {
+            common: [],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep-inner.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${libName}.git`,
+                commit,
+                branch: 'evoto_instant/cloud/feature710-instant',
+                dir: libName,
+                sparse: {
+                  android: ['android'],
+                  common: ['dependencies', 'resources'],
+                },
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      const localPath = path.join(thirdPartyDir, libName);
+      await fs.mkdir(localPath, { recursive: true });
+
+      const registryBefore = await loadRegistry(env);
+      registryBefore.libraries[`${libName}:${commit}`] = {
+        libName,
+        commit,
+        branch: 'main',
+        url: `https://github.com/test/${libName}.git`,
+        platforms: [],
+        size: 0,
+        isGeneral: false,
+        referencedBy: [],
+        unavailablePlatforms: ['android'],
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      await saveRegistry(env, registryBefore);
+
+      await runCommand(
+        'link',
+        { platform: ['android'], yes: true, download: true, config: ['inner'] },
+        env,
+        env.projectDir
+      );
+
+      await expect(fs.access(localPath)).rejects.toThrow();
+    });
+
+    it('should keep non-empty local directory when unavailable platform is skipped', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libPixCookLocalWork';
+      const commit = '89f579fd342937514121b03423d435072436d4f7';
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      const configPath = path.join(env.homeDir, 'config.json');
+      const cfg = JSON.parse(await fs.readFile(configPath, 'utf-8')) as Record<string, unknown>;
+      cfg.unverifiedLocalStrategy = 'download';
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), 'utf-8');
+      await fs.mkdir(thirdPartyDir, { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          repos: {
+            common: [],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep-inner.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${libName}.git`,
+                commit,
+                branch: 'evoto_instant/cloud/feature710-instant',
+                dir: libName,
+                sparse: {
+                  android: ['android'],
+                  common: ['dependencies', 'resources'],
+                },
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      const localPath = path.join(thirdPartyDir, libName);
+      await fs.mkdir(localPath, { recursive: true });
+      await fs.writeFile(path.join(localPath, 'README.txt'), 'local work', 'utf-8');
+
+      const registryBefore = await loadRegistry(env);
+      registryBefore.libraries[`${libName}:${commit}`] = {
+        libName,
+        commit,
+        branch: 'main',
+        url: `https://github.com/test/${libName}.git`,
+        platforms: [],
+        size: 0,
+        isGeneral: false,
+        referencedBy: [],
+        unavailablePlatforms: ['android'],
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      await saveRegistry(env, registryBefore);
+
+      await runCommand(
+        'link',
+        { platform: ['android'], yes: true, download: true, config: ['inner'] },
+        env,
+        env.projectDir
+      );
+
+      await expect(fs.access(path.join(localPath, 'README.txt'))).resolves.toBeUndefined();
+    });
+
+    it('should not create empty local directory for unavailable platform from selected inner config', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libPixCookLike';
+      const commit = '89f579fd342937514121b03423d435072436d4f7';
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await fs.mkdir(thirdPartyDir, { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          repos: {
+            common: [],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep-inner.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${libName}.git`,
+                commit,
+                branch: 'evoto_instant/cloud/feature710-instant',
+                dir: libName,
+                sparse: {
+                  android: ['android'],
+                  common: ['dependencies', 'resources'],
+                },
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      const registryBefore = await loadRegistry(env);
+      registryBefore.libraries[`${libName}:${commit}`] = {
+        libName,
+        commit,
+        branch: 'evoto_instant/cloud/feature710-instant',
+        url: `https://github.com/test/${libName}.git`,
+        platforms: [],
+        size: 0,
+        isGeneral: false,
+        referencedBy: [],
+        unavailablePlatforms: ['android'],
+        createdAt: new Date().toISOString(),
+        lastAccess: new Date().toISOString(),
+      };
+      await saveRegistry(env, registryBefore);
+
+      await runCommand(
+        'link',
+        { platform: ['android'], yes: true, download: true, config: ['inner'] },
+        env,
+        env.projectDir
+      );
+
+      const localPath = path.join(thirdPartyDir, libName);
+      await expect(fs.access(localPath)).rejects.toThrow();
+
+      const registryAfter = await loadRegistry(env);
+      const projectHash = hashPath(env.projectDir);
+      expect(registryAfter.projects[projectHash]?.dependencies ?? []).toHaveLength(0);
+      expect(registryAfter.libraries[`${libName}:${commit}`].platforms).toEqual([]);
+      expect(registryAfter.libraries[`${libName}:${commit}`].unavailablePlatforms).toEqual(['android']);
+    });
+
     it('should handle RELINK when link points to wrong commit', async () => {
       env = await createTestEnv();
 
