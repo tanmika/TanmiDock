@@ -3193,11 +3193,27 @@ async function linkNestedDependencies(
       if (resolveResult.action === 'absorbed' && !dryRun) {
         if (resolveResult.isGeneral) {
           isGeneral = true;
+        } else if (resolveResult.absorbResult) {
+          const absorbedPlatforms = resolveResult.absorbResult.platforms;
+          const absorbedPlatformSet = new Set(absorbedPlatforms);
+          const linkableAbsorbedPlatforms = [...new Set(
+            availablePlatforms.flatMap((platform) =>
+              getRequestedPlatformTargets(platform, dep.sparse, vars)
+                .filter((target) => absorbedPlatformSet.has(target))
+            )
+          )];
+          existingPlatforms = [...new Set([
+            ...existingPlatforms,
+            ...linkableAbsorbedPlatforms,
+          ])];
+          debug(
+            `${indent}  ${dep.libName} - 本地吸收后平台回填: requested=${availablePlatforms.join(', ') || '无'}, absorbed=${absorbedPlatforms.join(', ') || '无'}, linkable=${existingPlatforms.join(', ') || '无'}`
+          );
         }
         if (resolveResult.absorbResult?.nestedLibraries.length) {
           await registerNestedLibraries(resolveResult.absorbResult.nestedLibraries, projectHash);
         }
-        storeHas = true;
+        storeHas = isGeneral || existingPlatforms.length > 0;
 
         // 吸收为 General 后，检查是否实际需要平台内容
         // 本地可能只有部分文件（如只有 _shared 内容），被误分类为 General

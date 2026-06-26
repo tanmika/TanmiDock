@@ -153,6 +153,25 @@ async function verifyProjectRegistry(
   }
 }
 
+async function createLocalCodepacLibrary(
+  libDir: string,
+  commit: string,
+  platforms: string[]
+): Promise<void> {
+  await fs.mkdir(path.join(libDir, '.git'), { recursive: true });
+  await fs.writeFile(path.join(libDir, '.git', 'commit_hash'), commit, 'utf-8');
+
+  for (const platform of platforms) {
+    const platformDir = path.join(libDir, platform);
+    await fs.mkdir(path.join(platformDir, 'lib'), { recursive: true });
+    await fs.writeFile(
+      path.join(platformDir, 'lib', `lib${path.basename(libDir)}.a`),
+      `Local nested library for ${platform}`,
+      'utf-8'
+    );
+  }
+}
+
 describe('TC-017: link 命令测试', () => {
   let env: TestEnv | null = null;
 
@@ -847,6 +866,126 @@ describe('TC-017: link 命令测试', () => {
   });
 
   describe('S-2.2.5: action 嵌套依赖损坏 Store', () => {
+    it('should link nested local platform library after absorbing matched commit', async () => {
+      env = await createTestEnv();
+
+      const nestedLib = {
+        libName: 'libNestedLocalRocks',
+        commit: '174b25b12221de748fbb96c6aca6db6584fd482e',
+      };
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      const nestedConfigDir = path.join(thirdPartyDir, 'NestedLocalConfig');
+      const localLibDir = path.join(nestedConfigDir, nestedLib.libName);
+
+      await fs.mkdir(nestedConfigDir, { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: { common: [] },
+          actions: {
+            common: [
+              {
+                name: 'prepareNestedLocal',
+                command: 'codepac install libNestedLocalRocks --configdir NestedLocalConfig --targetdir NestedLocalConfig',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(nestedConfigDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${nestedLib.libName}.git`,
+                commit: nestedLib.commit,
+                branch: 'main',
+                dir: nestedLib.libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await createLocalCodepacLibrary(localLibDir, nestedLib.commit, ['iOS']);
+
+      await runCommand('link', { platform: ['iOS'], yes: true }, env, env.projectDir);
+
+      const storePlatformPath = path.join(env.storeDir, nestedLib.libName, nestedLib.commit, 'iOS');
+      await verifyDirectoryExists(storePlatformPath);
+      await verifySymlink(path.join(localLibDir, 'iOS'), storePlatformPath);
+
+      const registry = await loadRegistry(env);
+      const projectHash = hashPath(env.projectDir);
+      const storeKey = `${nestedLib.libName}:${nestedLib.commit}:iOS`;
+      expect(registry.stores[storeKey]).toBeDefined();
+      expect(registry.stores[storeKey].usedBy).toContain(projectHash);
+    });
+
+    it('should only link requested platform after absorbing nested local multi-platform library', async () => {
+      env = await createTestEnv();
+
+      const nestedLib = {
+        libName: 'libNestedLocalMulti',
+        commit: '274b25b12221de748fbb96c6aca6db6584fd482e',
+      };
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      const nestedConfigDir = path.join(thirdPartyDir, 'NestedLocalMultiConfig');
+      const localLibDir = path.join(nestedConfigDir, nestedLib.libName);
+
+      await fs.mkdir(nestedConfigDir, { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: { common: [] },
+          actions: {
+            common: [
+              {
+                name: 'prepareNestedLocalMulti',
+                command: 'codepac install libNestedLocalMulti --configdir NestedLocalMultiConfig --targetdir NestedLocalMultiConfig',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(nestedConfigDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '1.0.0',
+          vars: {},
+          repos: {
+            common: [
+              {
+                url: `https://github.com/test/${nestedLib.libName}.git`,
+                commit: nestedLib.commit,
+                branch: 'main',
+                dir: nestedLib.libName,
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await createLocalCodepacLibrary(localLibDir, nestedLib.commit, ['macOS', 'iOS']);
+
+      await runCommand('link', { platform: ['iOS'], yes: true }, env, env.projectDir);
+
+      const storeCommitPath = path.join(env.storeDir, nestedLib.libName, nestedLib.commit);
+      await verifyDirectoryExists(path.join(storeCommitPath, 'macOS'));
+      await verifyDirectoryExists(path.join(storeCommitPath, 'iOS'));
+      await verifySymlink(path.join(localLibDir, 'iOS'), path.join(storeCommitPath, 'iOS'));
+      await expect(fs.lstat(path.join(localLibDir, 'macOS'))).rejects.toThrow();
+    });
+
     it('should skip nested action by action name', async () => {
       env = await createTestEnv();
 

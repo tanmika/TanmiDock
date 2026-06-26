@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-06-26
+
+### Fixed
+
+- 修复 iOS 嵌套依赖本地吸收后未回填可链接平台的问题，避免 `td link -p ios` 在 `librocksdb` 等本地平台库上报空平台失败。
+- 限制嵌套本地多平台库只链接本次请求平台，避免只请求 iOS 时把 macOS 等本地已有平台链接回项目。
+
 ## [1.0.1] - 2026-06-24
 
 ### Fixed
