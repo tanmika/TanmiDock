@@ -199,8 +199,9 @@ async function collectTargetsFromConfigs(
   while (queue.length > 0) {
     const current = queue.shift()!;
     const currentConfig = current.configPath;
-    if (visited.has(currentConfig)) continue;
-    visited.add(currentConfig);
+    const visitKey = buildResetActionVisitKey(currentConfig, current.targetDir);
+    if (visited.has(visitKey)) continue;
+    visited.add(visitKey);
 
     let parsed;
     try {
@@ -252,6 +253,10 @@ async function collectTargetsFromConfigs(
   }
 
   return targets;
+}
+
+function buildResetActionVisitKey(configPath: string, targetDir: string): string {
+  return `${configPath}::${targetDir}`;
 }
 
 function dedupeTargets(targets: ResetTarget[]): ResetTarget[] {

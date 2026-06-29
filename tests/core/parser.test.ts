@@ -886,7 +886,7 @@ describe('parseActionCommand', () => {
 });
 
 describe('buildActionExecutionPlan', () => {
-  it('should resolve configdir from parent config and targetdir from parent target', () => {
+  it('should resolve configdir and targetdir from parent target', () => {
     const plan = buildActionExecutionPlan(
       {
         name: 'installNested',
@@ -900,10 +900,27 @@ describe('buildActionExecutionPlan', () => {
     );
 
     expect(plan.actionName).toBe('installNested');
-    expect(plan.nestedConfigPath).toBe('/project/3rdparty/options/childCfg/codepac-dep.json');
+    expect(plan.nestedConfigPath).toBe('/project/3rdparty/runtime/childCfg/codepac-dep.json');
     expect(plan.nestedTargetDir).toBe('/project/3rdparty/runtime/childTarget');
     expect(plan.effectiveCodepacPlatforms).toEqual(['mac']);
     expect(plan.libraries).toEqual(['libNested']);
+  });
+
+  it('should resolve nested action configdir from the previous action target directory', () => {
+    const plan = buildActionExecutionPlan(
+      {
+        command: 'codepac install libffmpeg --configdir libTSMediaCodecV2 --targetdir ./',
+      },
+      {
+        parentConfigPath: '/project/3rdparty/libPixPie/dependencies/libPixDonut/codepac-dep.json',
+        parentTargetDir: '/project/3rdparty/libPixPie/dependencies',
+        inheritedCodepacPlatforms: ['mac'],
+      }
+    );
+
+    expect(plan.nestedConfigPath).toBe('/project/3rdparty/libPixPie/dependencies/libTSMediaCodecV2/codepac-dep.json');
+    expect(plan.nestedTargetDir).toBe('/project/3rdparty/libPixPie/dependencies');
+    expect(plan.libraries).toEqual(['libffmpeg']);
   });
 
   it('should resolve empty targetdir like CodePac default targetdir', () => {

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-06-29
+
+### Fixed
+
+- 修复嵌套 action 中 `--configdir` 相对目录解析错误的问题，使 `td link -p mac` 能按 CodePac 行为从上一层目标目录继续查找二级配置，避免 `libffmpeg` 等二级依赖缺失。
+- 补齐 `link`、`status`、`reset` 对二级 action 目标目录的测试覆盖，保证链接、状态检查和重置清理使用一致的目录解析规则。
+
 ## [1.0.2] - 2026-06-26
 
 ### Fixed

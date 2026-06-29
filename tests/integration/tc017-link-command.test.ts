@@ -1212,7 +1212,7 @@ describe('TC-017: link 命令测试', () => {
 
       const thirdPartyDir = path.join(env.projectDir, '3rdparty');
       await fs.mkdir(path.join(thirdPartyDir, 'NestedLevelOne'), { recursive: true });
-      await fs.mkdir(path.join(thirdPartyDir, 'NestedLevelOne', 'NestedLevelTwo'), { recursive: true });
+      await fs.mkdir(path.join(thirdPartyDir, 'Generated', 'NestedLevelTwo'), { recursive: true });
       await fs.writeFile(
         path.join(thirdPartyDir, 'codepac-dep.json'),
         JSON.stringify({
@@ -1257,7 +1257,7 @@ describe('TC-017: link 命令测试', () => {
         'utf-8'
       );
       await fs.writeFile(
-        path.join(thirdPartyDir, 'NestedLevelOne', 'NestedLevelTwo', 'codepac-dep.json'),
+        path.join(thirdPartyDir, 'Generated', 'NestedLevelTwo', 'codepac-dep.json'),
         JSON.stringify({
           version: '1.0.0',
           vars: {},
@@ -1286,7 +1286,7 @@ describe('TC-017: link 命令测试', () => {
         path.join(env.storeDir, secondLib.libName, secondLib.commit, 'macOS')
       );
       await expect(fs.access(path.join(thirdPartyDir, 'NestedLevelOne', '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
-      await expect(fs.access(path.join(thirdPartyDir, 'NestedLevelOne', 'NestedLevelTwo', '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(thirdPartyDir, 'Generated', 'NestedLevelTwo', '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
     });
 
     it('should not relink nested action dependency when target Store platform is empty', async () => {

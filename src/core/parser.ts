@@ -59,7 +59,7 @@ export interface CodepacExtractOptions {
 export interface BuildActionExecutionPlanOptions {
   /** action 所在配置文件路径 */
   parentConfigPath: string;
-  /** 父级目标目录，targetdir 相对该目录解析 */
+  /** 父级目标目录，configdir 与 targetdir 都相对该目录解析 */
   parentTargetDir: string;
   /** 父级传入的 codepac 平台 key */
   inheritedCodepacPlatforms?: string[];
@@ -644,19 +644,18 @@ function tokenizeActionCommand(command: string): string[] {
 
 /**
  * 生成 action 递归执行计划
- * configdir 相对父配置目录解析，targetdir 相对父目标目录解析。
+ * 与 CodePac 保持一致：configdir 与 targetdir 都相对当前 action 的父级目标目录解析。
  */
 export function buildActionExecutionPlan(
   action: ActionConfig,
   options: BuildActionExecutionPlanOptions
 ): ActionExecutionPlan {
   const parsed = parseActionCommand(action.command);
-  const parentConfigDir = path.dirname(options.parentConfigPath);
   const inheritedPlatforms = options.inheritedCodepacPlatforms ?? [];
   const effectiveCodepacPlatforms = parsed.hasExplicitPlatform
     ? [...new Set(parsed.platforms)]
     : inheritedPlatforms;
-  const nestedConfigDir = path.resolve(parentConfigDir, parsed.configDir);
+  const nestedConfigDir = path.resolve(options.parentTargetDir, parsed.configDir);
   const nestedTargetDir = path.resolve(options.parentTargetDir, parsed.targetDir);
 
   return {

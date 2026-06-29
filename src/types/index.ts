@@ -292,9 +292,9 @@ export interface InitStatus {
 export interface ParsedAction {
   /** 需要安装的库名列表 */
   libraries: string[];
-  /** 配置目录（相对于当前 3rdparty 目录） */
+  /** 配置目录（相对于当前 action 的父级目标目录） */
   configDir: string;
-  /** 目标目录 */
+  /** 目标目录（相对于当前 action 的父级目标目录） */
   targetDir: string;
   /** 是否禁用嵌套 actions 的递归处理 */
   disableAction: boolean;

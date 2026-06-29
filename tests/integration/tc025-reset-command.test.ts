@@ -145,4 +145,72 @@ describe('tc025 reset command', () => {
     await expect(fs.lstat(path.join(env.projectDir, '3rdparty', libName))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.readFile(path.join(project2Dir, '3rdparty', libName, 'manual.txt'), 'utf-8')).resolves.toBe('keep');
   });
+
+  it('should reset project-scoped dependency discovered from second-level action targetdir', async () => {
+    const env = await createTestEnv();
+    cleanups.push(env.cleanup);
+
+    const libName = 'libResetLevelTwo';
+    const commit = 'resetleveltwo222222222222222222222222222';
+    await createMockStoreDataV2(env, { libName, commit, platforms: ['macOS'] });
+
+    const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+    await fs.mkdir(path.join(thirdPartyDir, 'LevelOneCfg'), { recursive: true });
+    await fs.mkdir(path.join(thirdPartyDir, 'GeneratedResetRoot', 'LevelTwoCfg'), { recursive: true });
+
+    await fs.writeFile(
+      path.join(thirdPartyDir, 'codepac-dep.json'),
+      JSON.stringify({
+        version: '1.0.0',
+        repos: {},
+        actions: {
+          common: [
+            {
+              command: 'codepac install libResetLevelOne --configdir LevelOneCfg --targetdir GeneratedResetRoot',
+            },
+          ],
+        },
+      }, null, 2),
+      'utf-8'
+    );
+    await fs.writeFile(
+      path.join(thirdPartyDir, 'LevelOneCfg', 'codepac-dep.json'),
+      JSON.stringify({
+        version: '1.0.0',
+        repos: {},
+        actions: {
+          common: [
+            {
+              command: 'codepac install libResetLevelTwo --configdir LevelTwoCfg --targetdir SecondResetRoot',
+            },
+          ],
+        },
+      }, null, 2),
+      'utf-8'
+    );
+    await fs.writeFile(
+      path.join(thirdPartyDir, 'GeneratedResetRoot', 'LevelTwoCfg', 'codepac-dep.json'),
+      JSON.stringify({
+        version: '1.0.0',
+        repos: {
+          common: [
+            {
+              url: `https://github.com/test/${libName}.git`,
+              commit,
+              branch: 'main',
+              dir: libName,
+            },
+          ],
+        },
+      }, null, 2),
+      'utf-8'
+    );
+
+    await runCommand('reset', { libName, yes: true }, env, env.projectDir);
+
+    const nextRegistry = await loadRegistry(env);
+    expect(nextRegistry.libraries[`${libName}:${commit}`]).toBeUndefined();
+    expect(nextRegistry.stores[`${libName}:${commit}:macOS`]).toBeUndefined();
+    await verifyDirectoryDeleted(path.join(env.storeDir, libName, commit));
+  });
 });

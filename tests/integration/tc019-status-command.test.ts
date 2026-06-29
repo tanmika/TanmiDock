@@ -436,6 +436,50 @@ describe('TC-019: status 命令测试', () => {
       expect(await isSymlink(path.join(env.projectDir, '3rdparty', 'GeneratedStatus', 'libStatusTargetDir', 'macOS'))).toBe(true);
     });
 
+    it('should resolve second-level action configdir from previous targetdir in project status', async () => {
+      env = await createTestEnv();
+
+      await createMockStoreDataV2(env, {
+        libName: 'libStatusLevelOne',
+        commit: 'statuslevelone1',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+      await createMockStoreDataV2(env, {
+        libName: 'libStatusLevelTwo',
+        commit: 'statusleveltwo2',
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await writeConfig(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        [],
+        [{ command: 'codepac install libStatusLevelOne --configdir StatusLevelOneCfg --targetdir GeneratedStatusRoot' }]
+      );
+      await writeConfig(
+        path.join(thirdPartyDir, 'StatusLevelOneCfg', 'codepac-dep.json'),
+        [{ libName: 'libStatusLevelOne', commit: 'statuslevelone1' }],
+        [{ command: 'codepac install libStatusLevelTwo --configdir StatusLevelTwoCfg --targetdir SecondStatusRoot' }]
+      );
+      await writeConfig(
+        path.join(thirdPartyDir, 'GeneratedStatusRoot', 'StatusLevelTwoCfg', 'codepac-dep.json'),
+        [{ libName: 'libStatusLevelTwo', commit: 'statusleveltwo2' }]
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const jsonOutput = (await runStatusAndGetJson(env)) as {
+        dependencies: { total: number; linked: number };
+      };
+
+      expect(jsonOutput.dependencies.total).toBe(2);
+      expect(jsonOutput.dependencies.linked).toBe(2);
+      expect(await isSymlink(path.join(thirdPartyDir, 'GeneratedStatusRoot', 'libStatusLevelOne', 'macOS'))).toBe(true);
+      expect(await isSymlink(path.join(thirdPartyDir, 'GeneratedStatusRoot', 'SecondStatusRoot', 'libStatusLevelTwo', 'macOS'))).toBe(true);
+    });
+
     it('should include actions from remembered optional configs', async () => {
       env = await createTestEnv();
 

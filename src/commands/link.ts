@@ -2942,7 +2942,7 @@ async function processAction(
   const libsDisplay = plan.libraries.length > 0 ? plan.libraries.join(', ') : '全部依赖';
   info(`${indent}处理嵌套 action: name=${plan.actionName ?? '(未命名)'}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}, libs=[${libsDisplay}]`);
   debug(
-    `${indent}CodePac action 执行计划: command=${plan.command}, parentConfig=${parentConfigPath}, parentTarget=${parentTargetDir}, inheritedPlatforms=${formatActionPlatforms(plan.inheritedPlatforms)}, effectivePlatforms=${formatActionPlatforms(plan.effectiveCodepacPlatforms)}, explicitPlatform=${plan.parsed.hasExplicitPlatform}, fullgit=${plan.parsed.hasExplicitFullGit}, unshallow=${plan.parsed.hasExplicitUnshallow}, disable_sparse=${plan.parsed.hasExplicitDisableSparse}`
+    `${indent}CodePac action 执行计划: command=${plan.command}, parentConfig=${parentConfigPath}, parentTarget=${parentTargetDir}, parsedConfigDir=${plan.configDir}, parsedTargetDir=${plan.targetDir}, resolvedConfig=${plan.nestedConfigPath}, resolvedTarget=${plan.nestedTargetDir}, inheritedPlatforms=${formatActionPlatforms(plan.inheritedPlatforms)}, effectivePlatforms=${formatActionPlatforms(plan.effectiveCodepacPlatforms)}, explicitPlatform=${plan.parsed.hasExplicitPlatform}, fullgit=${plan.parsed.hasExplicitFullGit}, unshallow=${plan.parsed.hasExplicitUnshallow}, disable_sparse=${plan.parsed.hasExplicitDisableSparse}`
   );
 
   // 2. 循环检测
