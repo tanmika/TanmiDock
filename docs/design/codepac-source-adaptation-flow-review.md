@@ -217,7 +217,7 @@ flowchart TD
 发布保护清单：
 
 - 保留 `gitLightweightDownload` 配置项、默认值、配置命令入口、README、CHANGELOG、测试和 `1.1.0` 到 `1.2.0` 的配置迁移。
-- 保持 `package.json`、`package-lock.json` 的软件包版本不变。
+- 软件包版本由发布任务统一维护，并保证 `package.json` 与 `package-lock.json` 一致。
 - 保持 `CURRENT_CONFIG_VERSION`、`MIN_SUPPORTED_VERSION`、配置迁移函数不变。
 - 不因对齐 CodePac 默认 minisize 行为而删除 TanmiDock 的 Git 非完整拉取入口。
 - 第六章只同步 README、CLI、CHANGELOG 与本计划文档，不修改下载、Store、clean、reset 的实际行为。
@@ -227,3 +227,21 @@ flowchart TD
 **警告：解析入口改动会扩大多个命令的行为范围。** 计划实施时需要同步更新测试，覆盖 `link`、`status`、`reset`、`unavailable` 和多配置文件场景，避免某个命令仍使用旧的 common-only 视图。
 
 **警告：这不是一次局部修补。** 如果只改 `.cache` 或只改 parser，嵌套 action、状态展示和 Store 注册仍可能看到不同依赖集合。更合理的执行方式是先建立统一解析入口，再让各命令逐步迁移到同一入口。
+
+## 七、1.0.7 紧急修复的源码依据
+
+本次修复以 715 项目声明的 CodePac `2.0.56` 为精确参照，对应源码提交为 `bea39dc`。该版本的 `ActionTask.run` 使用空格拆分 action 命令；当命令显式写入 `--targetdir ` 时，空参数会参与 `path.join(parentTargetDir, '')`，结果是当前父级目标目录。相关处理在 CodePac `2.0.59` 中保持一致。
+
+TanmiDock 对 action 目标目录保留三种状态：
+
+| action 输入 | 解析状态 | 目标目录结果 |
+|-------------|----------|--------------|
+| 省略 `--targetdir` | `omitted` | 使用 `--configdir`，保持 TanmiDock 原有默认行为 |
+| 显式空 `--targetdir ` | `empty` | 使用当前父级目标目录，依赖平铺在该层目录 |
+| 显式非空 `--targetdir Generated` | `explicit` | 使用父级目标目录下的指定目录 |
+
+715 的主配置通过 `--configdir libTSCoreBase --targetdir ` 读取 `libTSCoreBase/codepac-dep.json`，同时要求 `libMemoryPool`、`libopencv`、`libyuv` 生成到顶层 `3rdparty`。`libPixFileEncryption` 和 `virboxprotect` 使用相同的显式空目标目录语义。修复后的 `link`、`status`、`reset` 与项目依赖图收集均读取同一个 action 执行计划，避免目录判断出现差异。
+
+CodePac `2.0.56` 在完全省略 `--targetdir` 时会优先读取 `CODEPAC_SHARED_DIR`，环境变量不存在时才使用配置目录。TanmiDock 当前没有接入该环境变量，本次紧急修复保留原有省略参数行为，只处理 715 实际使用的显式空值语义。
+
+本次软件包版本为 `1.0.7-hotfix1`，从 `1.0.3` 建立。配置文件版本 `CURRENT_CONFIG_VERSION` 继续保持 `1.2.0`，配置迁移函数和命令入口不随软件包版本变化。

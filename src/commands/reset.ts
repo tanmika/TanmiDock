@@ -13,7 +13,7 @@ import { isSymlink } from '../core/linker.js';
 import { withGlobalLock } from '../utils/global-lock.js';
 import { findSubmoduleConfigs } from '../utils/git.js';
 import { confirmAction, PROMPT_CANCELLED } from '../utils/prompt.js';
-import { info, warn, success, error, hint, blank, separator } from '../utils/logger.js';
+import { info, warn, success, error, hint, blank, separator, debug } from '../utils/logger.js';
 import type { ProjectInfo } from '../types/index.js';
 
 interface ResetOptions {
@@ -206,9 +206,15 @@ async function collectTargetsFromConfigs(
     let parsed;
     try {
       parsed = await parseCodepacDep(currentConfig);
-    } catch {
+    } catch (err) {
+      debug(
+        `[reset] 配置解析失败: config=${currentConfig}, target=${current.targetDir}, message=${(err as Error).message}`
+      );
       continue;
     }
+    debug(
+      `[reset] 配置解析完成: config=${currentConfig}, target=${current.targetDir}, requestedLib=${libName}, platforms=${current.codepacPlatforms.join(',') || 'all'}`
+    );
 
     const extractOptions = { platforms: current.codepacPlatforms, configPath: currentConfig };
 
@@ -226,9 +232,15 @@ async function collectTargetsFromConfigs(
           parentTargetDir: current.targetDir,
           inheritedCodepacPlatforms: current.codepacPlatforms,
         });
-      } catch {
+      } catch (err) {
+        debug(
+          `[reset] action 执行计划解析失败: command=${action.command}, parentConfig=${currentConfig}, parentTarget=${current.targetDir}, message=${(err as Error).message}`
+        );
         continue;
       }
+      debug(
+        `[reset] action 执行计划: command=${plan.command}, parentConfig=${currentConfig}, parentTarget=${current.targetDir}, targetDirMode=${plan.parsed.targetDirMode}, parsedConfigDir=${plan.configDir}, parsedTargetDir=${plan.targetDir}, resolvedConfig=${plan.nestedConfigPath}, resolvedTarget=${plan.nestedTargetDir}`
+      );
       try {
         const nested = await extractNestedDependencies(plan.nestedConfigPath, plan.libraries, {
           platforms: plan.effectiveCodepacPlatforms,
@@ -237,6 +249,9 @@ async function collectTargetsFromConfigs(
         for (const dep of nested.dependencies) {
           if (dep.libName === libName) {
             targets.push({ libName: dep.libName, commit: dep.commit });
+            debug(
+              `[reset] action 依赖命中: requestedLib=${libName}, commit=${dep.commit}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}`
+            );
           }
         }
         if (!plan.parsed.disableAction) {
@@ -246,7 +261,10 @@ async function collectTargetsFromConfigs(
             codepacPlatforms: plan.effectiveCodepacPlatforms,
           });
         }
-      } catch {
+      } catch (err) {
+        debug(
+          `[reset] action 依赖解析失败: command=${plan.command}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}, message=${(err as Error).message}`
+        );
         continue;
       }
     }

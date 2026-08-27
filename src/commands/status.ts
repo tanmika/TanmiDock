@@ -20,7 +20,7 @@ import { getRegistry } from '../core/registry.js';
 import * as linker from '../core/linker.js';
 import { getBaseKeyForCodepac, resolvePath, shrinkHome } from '../core/platform.js';
 import { formatSize } from '../utils/disk.js';
-import { info, warn, success, hint, blank, separator, title, colorize, tree as printTree } from '../utils/logger.js';
+import { info, warn, success, hint, blank, separator, title, colorize, tree as printTree, debug } from '../utils/logger.js';
 import { selectWithCancel, PROMPT_CANCELLED } from '../utils/prompt.js';
 import { findSubmoduleConfigs } from '../utils/git.js';
 import type { TreeItem } from '../utils/logger.js';
@@ -635,9 +635,15 @@ async function collectActionStatusDependencies(params: {
         parentTargetDir: targetRootDir,
         inheritedCodepacPlatforms: codepacPlatforms,
       });
-    } catch {
+    } catch (err) {
+      debug(
+        `[status] action 执行计划解析失败: command=${action.command}, parentConfig=${parentConfigPath}, parentTarget=${targetRootDir}, message=${(err as Error).message}`
+      );
       continue;
     }
+    debug(
+      `[status] action 执行计划: command=${plan.command}, parentConfig=${parentConfigPath}, parentTarget=${targetRootDir}, targetDirMode=${plan.parsed.targetDirMode}, parsedConfigDir=${plan.configDir}, parsedTargetDir=${plan.targetDir}, resolvedConfig=${plan.nestedConfigPath}, resolvedTarget=${plan.nestedTargetDir}`
+    );
 
     const visitKey = buildStatusActionVisitKey(plan.nestedConfigPath, plan.nestedTargetDir);
     if (visitedActions.has(visitKey)) {
@@ -652,9 +658,15 @@ async function collectActionStatusDependencies(params: {
         platforms: plan.effectiveCodepacPlatforms,
         configPath: plan.nestedConfigPath,
       });
-    } catch {
+    } catch (err) {
+      debug(
+        `[status] action 依赖解析失败: command=${plan.command}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}, message=${(err as Error).message}`
+      );
       continue;
     }
+    debug(
+      `[status] action 依赖解析完成: command=${plan.command}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}, dependencies=${nested.dependencies.length}, nestedActions=${nested.nestedActions.length}`
+    );
 
     for (const dependency of nested.dependencies) {
       addStatusDependency(dependencies, seen, {
@@ -662,6 +674,9 @@ async function collectActionStatusDependencies(params: {
         commit: dependency.commit,
         localPath: path.join(plan.nestedTargetDir, dependency.libName),
       });
+      debug(
+        `[status] action 依赖状态目标: lib=${dependency.libName}, commit=${dependency.commit}, local=${path.join(plan.nestedTargetDir, dependency.libName)}`
+      );
     }
 
     if (!plan.parsed.disableAction && nested.nestedActions.length > 0) {

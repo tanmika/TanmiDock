@@ -213,4 +213,52 @@ describe('tc025 reset command', () => {
     expect(nextRegistry.stores[`${libName}:${commit}:macOS`]).toBeUndefined();
     await verifyDirectoryDeleted(path.join(env.storeDir, libName, commit));
   });
+
+  it('should reset a project dependency discovered through an explicitly empty targetdir action', async () => {
+    const env = await createTestEnv();
+    cleanups.push(env.cleanup);
+
+    const libName = 'libResetEmptyTargetDir';
+    const commit = 'resetemptytargetdir12345678901234567890';
+    await createMockStoreDataV2(env, { libName, commit, platforms: ['macOS'] });
+
+    const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+    const nestedConfigDir = path.join(thirdPartyDir, 'ResetEmptyTargetCfg');
+    await fs.mkdir(nestedConfigDir, { recursive: true });
+    await fs.writeFile(
+      path.join(thirdPartyDir, 'codepac-dep.json'),
+      JSON.stringify({
+        version: '2.0.56',
+        repos: {},
+        actions: {
+          common: [{
+            command: `codepac install ${libName} --configdir ResetEmptyTargetCfg --targetdir `,
+          }],
+        },
+      }, null, 2),
+      'utf-8'
+    );
+    await fs.writeFile(
+      path.join(nestedConfigDir, 'codepac-dep.json'),
+      JSON.stringify({
+        version: '2.0.56',
+        repos: {
+          common: [{
+            url: `https://github.com/test/${libName}.git`,
+            commit,
+            branch: 'main',
+            dir: libName,
+          }],
+        },
+      }, null, 2),
+      'utf-8'
+    );
+
+    await runCommand('reset', { libName, yes: true }, env, env.projectDir);
+
+    const nextRegistry = await loadRegistry(env);
+    expect(nextRegistry.libraries[`${libName}:${commit}`]).toBeUndefined();
+    expect(nextRegistry.stores[`${libName}:${commit}:macOS`]).toBeUndefined();
+    await verifyDirectoryDeleted(path.join(env.storeDir, libName, commit));
+  });
 });

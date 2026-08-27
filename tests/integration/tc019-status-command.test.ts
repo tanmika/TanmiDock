@@ -436,6 +436,40 @@ describe('TC-019: status 命令测试', () => {
       expect(await isSymlink(path.join(env.projectDir, '3rdparty', 'GeneratedStatus', 'libStatusTargetDir', 'macOS'))).toBe(true);
     });
 
+    it('should report an explicitly empty targetdir dependency from the parent target directory', async () => {
+      env = await createTestEnv();
+
+      const libName = 'libStatusEmptyTargetDir';
+      const commit = 'statusemptytarget1';
+      await createMockStoreDataV2(env, {
+        libName,
+        commit,
+        platforms: ['macOS'],
+        referencedBy: [],
+      });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      await writeConfig(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        [],
+        [{ command: `codepac install ${libName} --configdir StatusEmptyTargetCfg --targetdir ` }]
+      );
+      await writeConfig(
+        path.join(thirdPartyDir, 'StatusEmptyTargetCfg', 'codepac-dep.json'),
+        [{ libName, commit }]
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      const jsonOutput = (await runStatusAndGetJson(env)) as {
+        dependencies: { total: number; linked: number; broken: number; unlinked: number };
+      };
+
+      expect(jsonOutput.dependencies).toMatchObject({ total: 1, linked: 1, broken: 0, unlinked: 0 });
+      expect(await isSymlink(path.join(thirdPartyDir, libName, 'macOS'))).toBe(true);
+      await expect(fs.lstat(path.join(thirdPartyDir, 'StatusEmptyTargetCfg', libName))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
     it('should resolve second-level action configdir from previous targetdir in project status', async () => {
       env = await createTestEnv();
 

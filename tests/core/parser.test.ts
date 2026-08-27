@@ -743,6 +743,7 @@ describe('parseActionCommand', () => {
     expect(result.libraries).toEqual(['lib1', 'lib2']);
     expect(result.configDir).toBe('deps');
     expect(result.targetDir).toBe('.');
+    expect(result.targetDirMode).toBe('explicit');
     expect(result.disableAction).toBe(false);
   });
 
@@ -757,6 +758,7 @@ describe('parseActionCommand', () => {
     expect(result.libraries).toHaveLength(0);
     expect(result.configDir).toBe('deps');
     expect(result.targetDir).toBe('deps'); // 默认等于 configDir
+    expect(result.targetDirMode).toBe('omitted');
   });
 
   it('should detect --disable_action flag', () => {
@@ -778,6 +780,7 @@ describe('parseActionCommand', () => {
     expect(result.libraries).toEqual(['lib1']);
     expect(result.configDir).toBe('deps');
     expect(result.targetDir).toBe('out');
+    expect(result.targetDirMode).toBe('explicit');
     expect(result.disableAction).toBe(true);
   });
 
@@ -789,6 +792,7 @@ describe('parseActionCommand', () => {
     expect(result.libraries).toEqual(['lib1', 'lib2']);
     expect(result.configDir).toBe('dir with space');
     expect(result.targetDir).toBe('out dir');
+    expect(result.targetDirMode).toBe('explicit');
   });
 
   it('should parse short action option names', () => {
@@ -799,6 +803,7 @@ describe('parseActionCommand', () => {
     expect(result.libraries).toEqual(['lib1']);
     expect(result.configDir).toBe('deps');
     expect(result.targetDir).toBe('out');
+    expect(result.targetDirMode).toBe('explicit');
     expect(result.disableAction).toBe(true);
   });
 
@@ -856,16 +861,48 @@ describe('parseActionCommand', () => {
 
     // Then: targetDir 默认为 configDir
     expect(result.targetDir).toBe('myDeps');
+    expect(result.targetDirMode).toBe('omitted');
   });
 
-  it('should use configDir as default targetDir when targetdir has no value', () => {
+  it('should preserve an explicitly empty targetdir for parent target resolution', () => {
     const command = 'codepac install libMemoryPool --configdir libTSCoreBase --targetdir ';
 
     const result = parseActionCommand(command);
 
     expect(result.libraries).toEqual(['libMemoryPool']);
     expect(result.configDir).toBe('libTSCoreBase');
-    expect(result.targetDir).toBe('libTSCoreBase');
+    expect(result.targetDir).toBe('');
+    expect(result.targetDirMode).toBe('empty');
+  });
+
+  it.each(['""', "''"])('should preserve quoted empty targetdir %s and continue parsing libraries', (emptyValue) => {
+    const command = `codepac install lib1 --targetdir ${emptyValue} lib2 --configdir deps`;
+
+    const result = parseActionCommand(command);
+
+    expect(result.libraries).toEqual(['lib1', 'lib2']);
+    expect(result.configDir).toBe('deps');
+    expect(result.targetDir).toBe('');
+    expect(result.targetDirMode).toBe('empty');
+  });
+
+  it('should preserve an empty short targetdir before another option', () => {
+    const command = 'codepac install lib1 -td -dc -cd deps';
+
+    const result = parseActionCommand(command);
+
+    expect(result.targetDir).toBe('');
+    expect(result.targetDirMode).toBe('empty');
+    expect(result.disableAction).toBe(true);
+  });
+
+  it('should use the last targetdir occurrence including an explicit empty value', () => {
+    const command = 'codepac install lib1 --targetdir Generated --configdir deps --targetdir ';
+
+    const result = parseActionCommand(command);
+
+    expect(result.targetDir).toBe('');
+    expect(result.targetDirMode).toBe('empty');
   });
 
   it('should throw error when command does not start with codepac install', () => {
@@ -923,7 +960,7 @@ describe('buildActionExecutionPlan', () => {
     expect(plan.libraries).toEqual(['libffmpeg']);
   });
 
-  it('should resolve empty targetdir like CodePac default targetdir', () => {
+  it('should resolve an explicitly empty targetdir to the parent target directory', () => {
     const plan = buildActionExecutionPlan(
       {
         command: 'codepac install libMemoryPool --configdir libTSCoreBase --targetdir ',
@@ -936,7 +973,8 @@ describe('buildActionExecutionPlan', () => {
     );
 
     expect(plan.nestedConfigPath).toBe('/project/3rdparty/libTSCoreBase/codepac-dep.json');
-    expect(plan.nestedTargetDir).toBe('/project/3rdparty/libTSCoreBase');
+    expect(plan.nestedTargetDir).toBe('/project/3rdparty');
+    expect(plan.parsed.targetDirMode).toBe('empty');
     expect(plan.effectiveCodepacPlatforms).toEqual(['wasm']);
     expect(plan.libraries).toEqual(['libMemoryPool']);
   });
@@ -955,5 +993,7 @@ describe('buildActionExecutionPlan', () => {
 
     expect(plan.inheritedPlatforms).toEqual(['mac']);
     expect(plan.effectiveCodepacPlatforms).toEqual(['ios']);
+    expect(plan.nestedTargetDir).toBe('/project/3rdparty/childCfg');
+    expect(plan.parsed.targetDirMode).toBe('omitted');
   });
 });

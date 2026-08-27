@@ -14,6 +14,7 @@ import type {
   CodepacPlatformGroups,
   RepoConfigSource,
   ActionExecutionPlan,
+  ActionTargetDirMode,
 } from '../types/index.js';
 
 /**
@@ -470,6 +471,7 @@ export function parseActionCommand(command: string): ParsedAction {
   const libraries: string[] = [];
   let configDir: string | undefined;
   let targetDir: string | undefined;
+  let targetDirMode: ActionTargetDirMode = 'omitted';
   let disableAction = false;
   let hasExplicitPlatform = false;
   const platforms: string[] = [];
@@ -516,8 +518,11 @@ export function parseActionCommand(command: string): ParsedAction {
 
     if (token === '--targetdir' || token === '-td') {
       const { value, consumed } = readOptionalActionOptionValue(tokens, index);
+      targetDirMode = value === undefined || value === '' ? 'empty' : 'explicit';
       if (value !== undefined && value !== '') {
         targetDir = value;
+      } else {
+        targetDir = '';
       }
       if (consumed) index++;
       continue;
@@ -543,7 +548,8 @@ export function parseActionCommand(command: string): ParsedAction {
   return {
     libraries,
     configDir,
-    targetDir: targetDir ?? configDir,
+    targetDir: targetDirMode === 'omitted' ? configDir : targetDir ?? '',
+    targetDirMode,
     disableAction,
     hasExplicitPlatform,
     platforms,
@@ -563,7 +569,7 @@ function readActionOptionValue(tokens: string[], index: number, option: string, 
 
 function readOptionalActionOptionValue(tokens: string[], index: number): { value?: string; consumed: boolean } {
   const value = tokens[index + 1];
-  if (!value || value.startsWith('-')) {
+  if (value === undefined || value.startsWith('-')) {
     return { consumed: false };
   }
   return { value, consumed: true };
@@ -597,16 +603,19 @@ function tokenizeActionCommand(command: string): string[] {
   let current = '';
   let quote: '"' | "'" | null = null;
   let escaped = false;
+  let tokenStarted = false;
 
   for (const char of command) {
     if (escaped) {
       current += char;
       escaped = false;
+      tokenStarted = true;
       continue;
     }
 
     if (char === '\\') {
       escaped = true;
+      tokenStarted = true;
       continue;
     }
 
@@ -616,26 +625,30 @@ function tokenizeActionCommand(command: string): string[] {
       } else {
         current += char;
       }
+      tokenStarted = true;
       continue;
     }
 
     if (char === '"' || char === "'") {
       quote = char;
+      tokenStarted = true;
       continue;
     }
 
     if (/\s/.test(char)) {
-      if (current.length > 0) {
+      if (tokenStarted) {
         tokens.push(current);
         current = '';
+        tokenStarted = false;
       }
       continue;
     }
 
     current += char;
+    tokenStarted = true;
   }
 
-  if (current.length > 0) {
+  if (tokenStarted) {
     tokens.push(current);
   }
 

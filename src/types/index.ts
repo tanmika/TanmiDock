@@ -289,6 +289,8 @@ export interface InitStatus {
  * 解析后的 action 命令
  * 格式: codepac install lib1 lib2 --configdir xxx --targetdir . [--disable_action]
  */
+export type ActionTargetDirMode = 'omitted' | 'empty' | 'explicit';
+
 export interface ParsedAction {
   /** 需要安装的库名列表 */
   libraries: string[];
@@ -296,6 +298,8 @@ export interface ParsedAction {
   configDir: string;
   /** 目标目录（相对于当前 action 的父级目标目录） */
   targetDir: string;
+  /** targetdir 参数状态：省略、显式空值或显式非空值 */
+  targetDirMode: ActionTargetDirMode;
   /** 是否禁用嵌套 actions 的递归处理 */
   disableAction: boolean;
   /** action 命令是否显式传入 platform 参数 */

@@ -505,13 +505,23 @@ export async function collectProjectDependencyGraph(
 
   while (queue.length > 0) {
     const current = queue.shift()!;
-    if (visitedConfigs.has(current.configPath)) continue;
-    visitedConfigs.add(current.configPath);
+    const visitKey = `${current.configPath}::${current.targetDir}`;
+    if (visitedConfigs.has(visitKey)) {
+      debug(`[dependency-graph] 跳过已访问配置: config=${current.configPath}, target=${current.targetDir}`);
+      continue;
+    }
+    visitedConfigs.add(visitKey);
+    debug(
+      `[dependency-graph] 解析配置: config=${current.configPath}, target=${current.targetDir}, source=${current.source}, scope=${current.scope ?? ''}, platforms=${formatActionPlatforms(current.codepacPlatforms)}`
+    );
 
     let parsedConfig;
     try {
       parsedConfig = await parseCodepacDep(current.configPath);
-    } catch {
+    } catch (err) {
+      debug(
+        `[dependency-graph] 配置解析失败: config=${current.configPath}, target=${current.targetDir}, message=${(err as Error).message}`
+      );
       continue;
     }
 
@@ -533,9 +543,15 @@ export async function collectProjectDependencyGraph(
           parentTargetDir: current.targetDir,
           inheritedCodepacPlatforms: current.codepacPlatforms,
         });
-      } catch {
+      } catch (err) {
+        debug(
+          `[dependency-graph] action 执行计划解析失败: command=${action.command}, parentConfig=${current.configPath}, parentTarget=${current.targetDir}, message=${(err as Error).message}`
+        );
         continue;
       }
+      debug(
+        `[dependency-graph] action 执行计划: command=${plan.command}, targetDirMode=${plan.parsed.targetDirMode}, parsedConfigDir=${plan.configDir}, parsedTargetDir=${plan.targetDir}, resolvedConfig=${plan.nestedConfigPath}, resolvedTarget=${plan.nestedTargetDir}`
+      );
 
       let nested;
       try {
@@ -543,9 +559,15 @@ export async function collectProjectDependencyGraph(
           platforms: plan.effectiveCodepacPlatforms,
           configPath: plan.nestedConfigPath,
         });
-      } catch {
+      } catch (err) {
+        debug(
+          `[dependency-graph] action 依赖解析失败: command=${plan.command}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}, message=${(err as Error).message}`
+        );
         continue;
       }
+      debug(
+        `[dependency-graph] action 依赖解析完成: command=${plan.command}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}, dependencies=${nested.dependencies.length}, nestedActions=${nested.nestedActions.length}`
+      );
 
       for (const dependency of nested.dependencies) {
         const key = `${dependency.libName}:${dependency.commit}:${current.scope ?? ''}`;
@@ -566,6 +588,16 @@ export async function collectProjectDependencyGraph(
       }
     }
   }
+
+  const dependencyItems = results
+    .map(
+      (dependency) =>
+        `${dependency.libName}@${dependency.commit}:${dependency.source}:${dependency.scope ?? ''}`
+    )
+    .join(', ');
+  debug(
+    `[dependency-graph] 收集完成: project=${normalizedPath}, dependencies=${results.length}, visitedConfigs=${visitedConfigs.size}, items=[${dependencyItems}]`
+  );
 
   return results;
 }
@@ -2942,7 +2974,7 @@ async function processAction(
   const libsDisplay = plan.libraries.length > 0 ? plan.libraries.join(', ') : '全部依赖';
   info(`${indent}处理嵌套 action: name=${plan.actionName ?? '(未命名)'}, config=${plan.nestedConfigPath}, target=${plan.nestedTargetDir}, libs=[${libsDisplay}]`);
   debug(
-    `${indent}CodePac action 执行计划: command=${plan.command}, parentConfig=${parentConfigPath}, parentTarget=${parentTargetDir}, parsedConfigDir=${plan.configDir}, parsedTargetDir=${plan.targetDir}, resolvedConfig=${plan.nestedConfigPath}, resolvedTarget=${plan.nestedTargetDir}, inheritedPlatforms=${formatActionPlatforms(plan.inheritedPlatforms)}, effectivePlatforms=${formatActionPlatforms(plan.effectiveCodepacPlatforms)}, explicitPlatform=${plan.parsed.hasExplicitPlatform}, fullgit=${plan.parsed.hasExplicitFullGit}, unshallow=${plan.parsed.hasExplicitUnshallow}, disable_sparse=${plan.parsed.hasExplicitDisableSparse}`
+    `${indent}CodePac action 执行计划: command=${plan.command}, parentConfig=${parentConfigPath}, parentTarget=${parentTargetDir}, targetDirMode=${plan.parsed.targetDirMode}, parsedConfigDir=${plan.configDir}, parsedTargetDir=${plan.targetDir}, resolvedConfig=${plan.nestedConfigPath}, resolvedTarget=${plan.nestedTargetDir}, inheritedPlatforms=${formatActionPlatforms(plan.inheritedPlatforms)}, effectivePlatforms=${formatActionPlatforms(plan.effectiveCodepacPlatforms)}, explicitPlatform=${plan.parsed.hasExplicitPlatform}, fullgit=${plan.parsed.hasExplicitFullGit}, unshallow=${plan.parsed.hasExplicitUnshallow}, disable_sparse=${plan.parsed.hasExplicitDisableSparse}`
   );
 
   // 2. 循环检测

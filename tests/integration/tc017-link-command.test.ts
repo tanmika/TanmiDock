@@ -1194,6 +1194,203 @@ describe('TC-017: link 命令测试', () => {
       await expect(fs.access(path.join(thirdPartyDir, 'NestedTargetConfig', '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
     });
 
+    it('should flatten all 715 actions with explicitly empty targetdir and cache each nested config', async () => {
+      env = await createTestEnv();
+
+      const nestedLibraries = [
+        { libName: 'libMemoryPool', commit: 'memorypool71501' },
+        { libName: 'libopencv', commit: 'opencv715000001' },
+        { libName: 'libyuv', commit: 'libyuv715000001' },
+        { libName: 'libPixFileEncryption', commit: 'pixfile71500001' },
+        { libName: 'virboxprotect', commit: 'virbox715000001' },
+      ];
+      for (const nestedLibrary of nestedLibraries) {
+        const sharedFiles = nestedLibrary.libName === 'libPixFileEncryption'
+          ? {
+            'codepac-dep.json': JSON.stringify({
+              version: '2.0.56',
+              vars: {},
+              repos: {
+                common: [{
+                  url: 'https://github.com/test/virboxprotect.git',
+                  commit: 'virbox715000001',
+                  branch: 'main',
+                  dir: 'virboxprotect',
+                }],
+              },
+            }, null, 2),
+          }
+          : {};
+        await createMockStoreDataV2(env, {
+          ...nestedLibrary,
+          platforms: ['macOS'],
+          referencedBy: [],
+          sharedFiles,
+        });
+      }
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      const coreConfigDir = path.join(thirdPartyDir, 'libTSCoreBase');
+      const presetConfigDir = path.join(thirdPartyDir, 'libTSPresetManager');
+      await fs.mkdir(coreConfigDir, { recursive: true });
+      await fs.mkdir(presetConfigDir, { recursive: true });
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '2.0.56',
+          vars: {},
+          repos: { common: [] },
+          actions: {
+            common: [
+              {
+                command: 'codepac install libMemoryPool libopencv libyuv  --configdir libTSCoreBase --targetdir ',
+                dir: '',
+              },
+              {
+                command: 'codepac install libPixFileEncryption  --configdir libTSPresetManager --targetdir ',
+                dir: '',
+              },
+              {
+                command: 'codepac install virboxprotect  --configdir libPixFileEncryption --targetdir ',
+                dir: '',
+              },
+            ],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(coreConfigDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '2.0.56',
+          vars: {},
+          repos: {
+            common: nestedLibraries.slice(0, 3).map(({ libName, commit }) => ({
+              url: `https://github.com/test/${libName}.git`,
+              commit,
+              branch: 'main',
+              dir: libName,
+            })),
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(presetConfigDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '2.0.56',
+          vars: {},
+          repos: {
+            common: [{
+              url: 'https://github.com/test/libPixFileEncryption.git',
+              commit: 'pixfile71500001',
+              branch: 'main',
+              dir: 'libPixFileEncryption',
+            }],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      for (const nestedLibrary of nestedLibraries) {
+        await verifySymlink(
+          path.join(thirdPartyDir, nestedLibrary.libName, 'macOS'),
+          path.join(env.storeDir, nestedLibrary.libName, nestedLibrary.commit, 'macOS')
+        );
+      }
+      await expect(fs.lstat(path.join(coreConfigDir, 'libMemoryPool'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.lstat(path.join(coreConfigDir, 'libopencv'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.lstat(path.join(coreConfigDir, 'libyuv'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.lstat(path.join(presetConfigDir, 'libPixFileEncryption'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.lstat(path.join(thirdPartyDir, 'libPixFileEncryption', 'virboxprotect'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.access(path.join(coreConfigDir, '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(presetConfigDir, '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(thirdPartyDir, 'libPixFileEncryption', '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+    });
+
+    it('should resolve a child empty targetdir to the previous action target directory', async () => {
+      env = await createTestEnv();
+
+      const firstLib = { libName: 'libEmptyTargetLevelOne', commit: 'emptytargetlevel1' };
+      const secondLib = { libName: 'libEmptyTargetLevelTwo', commit: 'emptytargetlevel2' };
+      await createMockStoreDataV2(env, { ...firstLib, platforms: ['macOS'], referencedBy: [] });
+      await createMockStoreDataV2(env, { ...secondLib, platforms: ['macOS'], referencedBy: [] });
+
+      const thirdPartyDir = path.join(env.projectDir, '3rdparty');
+      const firstConfigDir = path.join(thirdPartyDir, 'EmptyTargetLevelOneCfg');
+      const firstTargetDir = path.join(thirdPartyDir, 'GeneratedEmptyTargetRoot');
+      const secondConfigDir = path.join(firstTargetDir, 'EmptyTargetLevelTwoCfg');
+      await fs.mkdir(firstConfigDir, { recursive: true });
+      await fs.mkdir(secondConfigDir, { recursive: true });
+
+      await fs.writeFile(
+        path.join(thirdPartyDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '2.0.56',
+          vars: {},
+          repos: { common: [] },
+          actions: {
+            common: [{
+              command: 'codepac install libEmptyTargetLevelOne --configdir EmptyTargetLevelOneCfg --targetdir GeneratedEmptyTargetRoot',
+            }],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(firstConfigDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '2.0.56',
+          vars: {},
+          repos: {
+            common: [{
+              url: `https://github.com/test/${firstLib.libName}.git`,
+              commit: firstLib.commit,
+              branch: 'main',
+              dir: firstLib.libName,
+            }],
+          },
+          actions: {
+            common: [{
+              command: 'codepac install libEmptyTargetLevelTwo --configdir EmptyTargetLevelTwoCfg --targetdir ',
+            }],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+      await fs.writeFile(
+        path.join(secondConfigDir, 'codepac-dep.json'),
+        JSON.stringify({
+          version: '2.0.56',
+          vars: {},
+          repos: {
+            common: [{
+              url: `https://github.com/test/${secondLib.libName}.git`,
+              commit: secondLib.commit,
+              branch: 'main',
+              dir: secondLib.libName,
+            }],
+          },
+        }, null, 2),
+        'utf-8'
+      );
+
+      await runCommand('link', { platform: ['macOS'], yes: true }, env, env.projectDir);
+
+      await verifySymlink(
+        path.join(firstTargetDir, firstLib.libName, 'macOS'),
+        path.join(env.storeDir, firstLib.libName, firstLib.commit, 'macOS')
+      );
+      await verifySymlink(
+        path.join(firstTargetDir, secondLib.libName, 'macOS'),
+        path.join(env.storeDir, secondLib.libName, secondLib.commit, 'macOS')
+      );
+      await expect(fs.access(path.join(firstConfigDir, '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(secondConfigDir, '.cache', 'codepac-dep.json'))).resolves.toBeUndefined();
+    });
+
     it('should resolve multi-level action configdir and targetdir from each parent', async () => {
       env = await createTestEnv();
 
